@@ -613,7 +613,7 @@ impl Gen<'_> {
                     },
                     _ => general.clone(),
                 };
-                if linkage.is_some_and(|l| l.jsb) || !links.is_empty() {
+                if linkage.as_ref().is_some_and(|l| l.jsb) || !links.is_empty() {
                     return Err("%xFLOAT actuals need the calling standard's linkage".into());
                 }
                 let t = match **target {
@@ -648,6 +648,7 @@ impl Gen<'_> {
                     target: t,
                     args: vals,
                     results,
+                    nopreserve: linkage.map(|l| l.nopreserve.clone()).unwrap_or_default(),
                 })));
                 // Where the results go, found after the call, as a
                 // linkage's output parameters are.
@@ -682,13 +683,16 @@ impl Gen<'_> {
                     ref t => self.value(t)?,
                 };
                 // A CALL without the count, by its linkage or the module's
-                // NOCOUNT, goes as a linkage call does.
+                // NOCOUNT, or whose callee may change registers the caller
+                // keeps, goes as a linkage call does.
                 let count = linkage
                     .as_ref()
                     .and_then(|l| l.count)
                     .unwrap_or(!self.m.nocount);
                 let linkage = match linkage {
-                    Some(l) if l.jsb || !links.is_empty() || !count => Some(l),
+                    Some(l) if l.jsb || !links.is_empty() || !count || !l.nopreserve.is_empty() => {
+                        Some(l)
+                    }
                     None if !count => Some(std::rc::Rc::new(crate::linkage::Linkage {
                         jsb: false,
                         interrupt: false,

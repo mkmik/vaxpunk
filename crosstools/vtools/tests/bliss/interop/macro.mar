@@ -24,6 +24,15 @@ MSCRATCH::
         CLRL    R5
         RSB
 
+; MCLOBBER x: a CALL routine that changes R2 and R3, which it doesn't
+; keep: R0 = 5.
+MCLOBBER::
+        .CALL_ENTRY SCRATCH=<R2, R3>
+        CLRL    R2
+        CLRL    R3
+        MOVL    #5, R0
+        RET
+
 ; MTRIPLE n: R0 = 3 * n.
         .ENTRY  MTRIPLE, ^M<>
         MULL3   #3, 4(AP), R0

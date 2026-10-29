@@ -506,6 +506,21 @@ impl<'a> Routine<'a> {
             };
             places.push(place);
         }
+        // The registers its linkage's NOPRESERVE lets it change, kept
+        // below the arguments.
+        let save: Vec<u8> = c
+            .nopreserve
+            .iter()
+            .filter(|&&r| r >= 2)
+            .map(|r| r + 17)
+            .collect();
+        let area = (8 * save.len() as u32).next_multiple_of(16);
+        if area > 0 {
+            self.sub_sp(area);
+        }
+        for (i, r) in save.iter().enumerate() {
+            self.line(format!("str     x{r}, [sp, #{}]", 8 * i));
+        }
         let stack = (8 * slots).next_multiple_of(16);
         if stack > 0 {
             self.sub_sp(stack);
@@ -537,6 +552,12 @@ impl<'a> Routine<'a> {
         }
         if stack > 0 {
             self.add_sp(stack);
+        }
+        for (i, r) in save.iter().enumerate() {
+            self.line(format!("ldr     x{r}, [sp, #{}]", 8 * i));
+        }
+        if area > 0 {
+            self.add_sp(area);
         }
         // Floating results' bits: S and T from v0 and v1, VAX ones from
         // x0 and x1.
@@ -1172,6 +1193,15 @@ impl<'a> Routine<'a> {
                     let (r, size) = if *to == Fl::L { ("w10", 4) } else { ("x10", 8) };
                     let m = self.mem(d, size);
                     self.line(format!("str     {r}, {m}"));
+                }
+                // A quadword to S or F in one rounding: by way of the
+                // double's 53 bits, it would round twice.
+                Fl::S | Fl::F if *from == Fl::Q => {
+                    let m = self.mem(a, 8);
+                    self.line(format!("ldr     x10, {m}"));
+                    self.line("scvtf   s16, x10");
+                    self.line("fcvt    d16, s16");
+                    self.fl_store(*to, d);
                 }
                 _ => {
                     self.fl_load(*from, a, "d16");

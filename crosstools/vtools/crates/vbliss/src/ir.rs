@@ -90,8 +90,9 @@ pub enum Ins {
     /// `dst = call target(args)`, by the calling standard.
     Call(Option<u32>, V, Vec<V>),
     /// `dst = jsb target(arg rN, ...) -> rN %t, ... nopreserve rN...`: a
-    /// call by a JSB linkage, or by a CALL linkage with registers in it
-    /// (`dst = call target(args; arg rN, ...) ...`): arguments in VAX
+    /// call by a JSB linkage, or by a CALL linkage with registers,
+    /// NOCOUNT or NOPRESERVE in it (`dst = call target(args; arg rN, ...)
+    /// ...`): arguments in VAX
     /// registers, standard ones for CALL, R0 the result, and registers
     /// read into temporaries after it; R0, R1, the output registers and
     /// those named after `nopreserve` aren't kept.
@@ -143,7 +144,7 @@ pub enum Ins {
     /// memory at dst; `r` rounds to the nearest, ties away, else an
     /// integer is truncated.
     FCvt(Fl, Fl, bool, V, V),
-    /// `dst = fcall target(args) -> results`: a call by the calling
+    /// `dst = fcall target(args) -> results nopreserve rN...`: a call by the calling
     /// standard with floating arguments or results (RN 2.10.4,
     /// DESIGN-0004): an argument `t:addr` is the value of that format at
     /// addr, S and T in v0-v7 with their class in x9, VAX ones general;
@@ -161,6 +162,8 @@ pub struct FCall {
     pub args: Vec<(V, Option<Fl>)>,
     /// Each result: its format and the temporary that gets its bits.
     pub results: Vec<(Fl, u32)>,
+    /// The VAX registers the callee may change, kept around the call.
+    pub nopreserve: Vec<u8>,
 }
 
 /// A floating point built-in's arithmetic.
@@ -430,6 +433,12 @@ impl fmt::Display for Ins {
                         if i == 0 { " ->" } else { "," },
                         fl.letter()
                     )?;
+                }
+                if !c.nopreserve.is_empty() {
+                    f.write_str(" nopreserve")?;
+                    for r in &c.nopreserve {
+                        write!(f, " r{r}")?;
+                    }
                 }
                 Ok(())
             }
