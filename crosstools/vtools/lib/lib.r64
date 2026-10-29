@@ -1254,7 +1254,8 @@ MACRO
         $$H = HEADER;
         $$A = ADDR;
         $$R = CALL(.$$H; $$E);
-        (.$$A)<0, 32> = .$$E;
+        ! Busy, the VAX stops before it writes ADDR.
+        IF .$$R GEQ 0 THEN (.$$A)<0, 32> = .$$E;
         IF .$$R LSS 0 THEN 1 ELSE IF .$$R EQL 0 THEN 3 ELSE IF .$$R EQL 1 THEN 0 ELSE 2
         END %,
 

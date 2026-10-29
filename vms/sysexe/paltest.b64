@@ -131,8 +131,8 @@ ROUTINE SETFEN =
 
 ! LIB's VAX built-ins (UM 4.64, 4.83): an insert 2 if the entry is the
 ! first, else 0; a remove 0, or 2 for the last entry, or 3 for none, the
-! entry's address in a longword; 1 if the interlock is set. 0 if all is
-! well, else the check that failed.
+! entry's address in a longword; 1 if the interlock is set, with no
+! address written. 0 if all is well, else the check that failed.
 ROUTINE VAXQUEUES =
     BEGIN
     BUILTIN
@@ -148,7 +148,8 @@ ROUTINE VAXQUEUES =
     CHECK(32, REMQHI(LH, VAXGOT) EQL 3 AND .VAXGOT[1] EQL 7);
     LH[0] = 1;
     CHECK(33, INSQTI(L1, LH) EQL 1);
-    CHECK(34, REMQTI(LH, VAXGOT) EQL 1);
+    VAXGOT[0] = 5;
+    CHECK(34, REMQTI(LH, VAXGOT) EQL 1 AND .VAXGOT[0] EQL 5);
     LH[0] = 0;
     0
     END;
