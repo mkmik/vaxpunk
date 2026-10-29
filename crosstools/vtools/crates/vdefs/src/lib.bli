@@ -67,11 +67,12 @@ MACRO
     CHMU = %IF %DECLARED($$VAX_CHMU) %THEN $CHMU %ELSE $$VAX_BUILTIN($$VAX_CHMU, PAL_CHMU) %FI %,
     CALLG = %IF %DECLARED($$VAX_CALLG) %THEN $CALLG %ELSE $$VAX_BUILTIN($$VAX_CALLG) %FI %;
 
-! What each does. A loop tests the length with IF, not AND: BLISS
-! evaluates both of AND's operands, and the byte past the end may be in
-! no page. No comma is outside brackets, LOCAL $$A; LOCAL $$B; and not
-! LOCAL $$A, $$B; so that one can be another macro's actual parameter,
-! CHECK(1, FFS(...)), whose commas end it (oracle MACA).
+! What each does. Each reads its operands once, in the order written,
+! as the VAX does, before it acts. A loop tests the length with IF, not
+! AND: BLISS evaluates both of AND's operands, and the byte past the end
+! may be in no page. No comma is outside brackets, LOCAL $$A; LOCAL $$B;
+! and not LOCAL $$A, $$B; so that one can be another macro's actual
+! parameter, CHECK(1, FFS(...)), whose commas end it (oracle MACA).
 MACRO
     ! FFS and FFC: the first bit set or clear in the field of .SIZA<0, 8>
     ! bits at bit .POSA of BASE; its position to DSTA, or the field's end;
@@ -80,24 +81,38 @@ MACRO
     $FFC(POSA, SIZA, BASE, DSTA) = $$VAX_FIND(0, POSA, SIZA, BASE, DSTA) %,
     $$VAX_FIND(STATE, POSA, SIZA, BASE, DSTA) =
         BEGIN
-        LOCAL $$B; LOCAL $$P; LOCAL $$E;
-        $$B = BASE;
+        LOCAL $$B; LOCAL $$P; LOCAL $$E; LOCAL $$D;
         $$P = .(POSA)<0, 32, 1>;
         $$E = .$$P + .(SIZA)<0, 8>;
+        $$B = BASE;
+        $$D = DSTA;
         WHILE (IF .$$P LSS .$$E THEN .(.$$B + .$$P ^ -3)<.$$P AND 7, 1> NEQ STATE ELSE 0) DO
             $$P = .$$P + 1;
-        (DSTA)<0, 32> = .$$P;
+        (.$$D)<0, 32> = .$$P;
         .$$P GEQ .$$E
         END %,
 
     ! The character string ones, by BLISS's CH$ functions: LOCC, SKPC and
     ! MATCHC 1 if they find what they look for, else 0.
-    $LOCC(CHARA, LENA, ADDR) =
-        CH$FAIL(CH$FIND_CH(.(LENA)<0, 16>, ADDR, .(CHARA)<0, 8>)) EQL 0 %,
-    $SKPC(CHARA, LENA, ADDR) =
-        CH$FAIL(CH$FIND_NOT_CH(.(LENA)<0, 16>, ADDR, .(CHARA)<0, 8>)) EQL 0 %,
+    $LOCC(CHARA, LENA, ADDR) = $$VAX_LOCATE(CH$FIND_CH, CHARA, LENA, ADDR) %,
+    $SKPC(CHARA, LENA, ADDR) = $$VAX_LOCATE(CH$FIND_NOT_CH, CHARA, LENA, ADDR) %,
+    $$VAX_LOCATE(FIND, CHARA, LENA, ADDR) =
+        BEGIN
+        LOCAL $$C; LOCAL $$N; LOCAL $$A;
+        $$C = .(CHARA)<0, 8>;
+        $$N = .(LENA)<0, 16>;
+        $$A = ADDR;
+        CH$FAIL(FIND(.$$N, .$$A, .$$C)) EQL 0
+        END %,
     $MATCHC(OBJLENA, OBJ, SRCLENA, SRC) =
-        CH$FAIL(CH$FIND_SUB(.(SRCLENA)<0, 16>, SRC, .(OBJLENA)<0, 16>, OBJ)) EQL 0 %,
+        BEGIN
+        LOCAL $$M; LOCAL $$O; LOCAL $$N; LOCAL $$S;
+        $$M = .(OBJLENA)<0, 16>;
+        $$O = OBJ;
+        $$N = .(SRCLENA)<0, 16>;
+        $$S = SRC;
+        CH$FAIL(CH$FIND_SUB(.$$N, .$$S, .$$M, .$$O)) EQL 0
+        END %,
     ! MOVC3 and MOVC5 move as if the operands and the source were all
     ! read first, so that the strings may overlap, which CH$MOVE's and
     ! CH$COPY's must not (LRM 20.2.5.1): backwards when the destination is
@@ -105,12 +120,14 @@ MACRO
     $MOVC3(LENA, SRC, DST) = $$VAX_MOVE(.(LENA)<0, 16>, SRC, DST) %,
     $MOVC5(SRCLENA, SRC, FILLA, DSTLENA, DST) =
         BEGIN
-        LOCAL $$N; LOCAL $$M; LOCAL $$D; LOCAL $$F;
+        LOCAL $$L; LOCAL $$S; LOCAL $$F; LOCAL $$N; LOCAL $$D; LOCAL $$M;
+        $$L = .(SRCLENA)<0, 16>;
+        $$S = SRC;
         $$F = .(FILLA)<0, 8>;
         $$N = .(DSTLENA)<0, 16>;
-        $$M = MINU(.(SRCLENA)<0, 16>, .$$N);
         $$D = DST;
-        $$VAX_MOVE(.$$M, SRC, .$$D);
+        $$M = MINU(.$$L, .$$N);
+        $$VAX_MOVE(.$$M, .$$S, .$$D);
         CH$FILL(.$$F, .$$N - .$$M, .$$D + .$$M);
         END %,
     $$VAX_MOVE(LEN, SRC, DST) =
@@ -124,7 +141,15 @@ MACRO
         ELSE CH$MOVE(.$$MN, .$$MS, .$$MD);
         END %,
     $MOVTC(SRCLENA, SRC, FILLA, TBL, DSTLENA, DST) =
-        CH$TRANSLATE(TBL, .(SRCLENA)<0, 16>, SRC, .(FILLA)<0, 8>, .(DSTLENA)<0, 16>, DST) %,
+        BEGIN
+        LOCAL $$L; LOCAL $$S; LOCAL $$F; LOCAL $$T; LOCAL $$N;
+        $$L = .(SRCLENA)<0, 16>;
+        $$S = SRC;
+        $$F = .(FILLA)<0, 8>;
+        $$T = TBL;
+        $$N = .(DSTLENA)<0, 16>;
+        CH$TRANSLATE(.$$T, .$$L, .$$S, .$$F, .$$N, DST)
+        END %,
     $CMPC3(LENA, SRC, DST) =
         BEGIN
         LOCAL $$N;
@@ -132,7 +157,14 @@ MACRO
         CH$COMPARE(.$$N, SRC, .$$N, DST)
         END %,
     $CMPC5(SRCLENA, SRC, FILLA, DSTLENA, DST) =
-        CH$COMPARE(.(SRCLENA)<0, 16>, SRC, .(DSTLENA)<0, 16>, DST, .(FILLA)<0, 8>) %,
+        BEGIN
+        LOCAL $$L; LOCAL $$S; LOCAL $$F; LOCAL $$N;
+        $$L = .(SRCLENA)<0, 16>;
+        $$S = SRC;
+        $$F = .(FILLA)<0, 8>;
+        $$N = .(DSTLENA)<0, 16>;
+        CH$COMPARE(.$$L, .$$S, .$$N, DST, .$$F)
+        END %,
 
     ! SCANC: the address of the first byte whose table entry AND the mask
     ! isn't 0, or 0; SPANC the first whose is.
@@ -141,8 +173,8 @@ MACRO
     $$VAX_SCAN(HIT, LENA, ADDR, TBL, MASKA) =
         BEGIN
         LOCAL $$A; LOCAL $$N; LOCAL $$T; LOCAL $$M;
-        $$A = ADDR;
         $$N = .(LENA)<0, 16>;
+        $$A = ADDR;
         $$T = TBL;
         $$M = .(MASKA)<0, 8>;
         WHILE (IF .$$N GTR 0 THEN ((.(.$$T + .(.$$A)<0, 8>)<0, 8> AND .$$M) NEQ 0) NEQ HIT ELSE 0) DO
@@ -155,11 +187,12 @@ MACRO
     $MOVTUC(SRCLENA, SRC, ESCA, TBL, DSTLENA, DST) =
         BEGIN
         LOCAL $$S; LOCAL $$D; LOCAL $$N; LOCAL $$T; LOCAL $$C; LOCAL $$E;
+        $$N = .(SRCLENA)<0, 16>;
         $$S = SRC;
         $$E = .(ESCA)<0, 8>;
-        $$D = DST;
         $$T = TBL;
-        $$N = MINU(.(SRCLENA)<0, 16>, .(DSTLENA)<0, 16>);
+        $$N = MINU(.$$N, .(DSTLENA)<0, 16>);
+        $$D = DST;
         WHILE (IF .$$N GTR 0 THEN ($$C = .(.$$T + .(.$$S)<0, 8>)<0, 8>) NEQ .$$E ELSE 0) DO
             ((.$$D)<0, 8> = .$$C; $$S = .$$S + 1; $$D = .$$D + 1; $$N = .$$N - 1);
         IF .$$N GTR 0 THEN .$$S ELSE 0
@@ -171,7 +204,12 @@ MACRO
     ! VAX's PSL, is 1 here.
     $EMUL(MULR, MULD, ADDA, PROD) =
         %IF %BPVAL EQL 64 %THEN
-            ((PROD)<0, 64> = .(MULR)<0, 32, 1> * .(MULD)<0, 32, 1> + .(ADDA)<0, 32, 1>; 1)
+            BEGIN
+            LOCAL $$P;
+            $$P = .(MULR)<0, 32, 1> * .(MULD)<0, 32, 1> + .(ADDA)<0, 32, 1>;
+            (PROD)<0, 64> = .$$P;
+            1
+            END
         %ELSE
             BEGIN EXTERNAL ROUTINE LIB$EMUL : BLISS; LIB$EMUL(MULR, MULD, ADDA, PROD); 1 END
         %FI %,
@@ -179,8 +217,8 @@ MACRO
         %IF %BPVAL EQL 64 %THEN
             BEGIN
             LOCAL $$Q; LOCAL $$D;
-            $$Q = .(DVD)<0, 64>;
             $$D = .(DIVR)<0, 32, 1>;
+            $$Q = .(DVD)<0, 64>;
             (QUO)<0, 32> = .$$Q / .$$D;
             (RMD)<0, 32> = .$$Q MOD .$$D;
             1
@@ -190,7 +228,13 @@ MACRO
         %FI %,
     $ASHQ(SHIFTA, SRC, DST) =
         %IF %BPVAL EQL 64 %THEN
-            ((DST)<0, 64> = .(SRC)<0, 64> ^ .(SHIFTA)<0, 8, 1>; 1)
+            BEGIN
+            LOCAL $$H; LOCAL $$V;
+            $$H = .(SHIFTA)<0, 8, 1>;
+            $$V = .(SRC)<0, 64>;
+            (DST)<0, 64> = .$$V ^ .$$H;
+            1
+            END
         %ELSE
             %ERROR('ASHQ needs BLISS-64: its quadwords are no BLISS-32 values')
         %FI %,
@@ -255,11 +299,16 @@ MACRO
     $INDEX(SUB, LOW, HIGH, SCALE, INA, OUTA) =
         BEGIN
         SWITCHES NOOVERFLOW;
-        LOCAL $$S;
+        LOCAL $$S; LOCAL $$L; LOCAL $$H; LOCAL $$K; LOCAL $$I; LOCAL $$O;
         $$S = .(SUB)<0, 32, 1>;
-        IF .$$S LSS .(LOW)<0, 32, 1> OR .$$S GTR .(HIGH)<0, 32, 1>
+        $$L = .(LOW)<0, 32, 1>;
+        $$H = .(HIGH)<0, 32, 1>;
+        $$K = .(SCALE)<0, 32, 1>;
+        $$I = .(INA)<0, 32, 1>;
+        $$O = OUTA;
+        IF .$$S LSS .$$L OR .$$S GTR .$$H
         THEN SIGNAL(1196);
-        (OUTA)<0, 32> = (.(INA)<0, 32, 1> + .$$S) * .(SCALE)<0, 32, 1>
+        (.$$O)<0, 32> = (.$$I + .$$S) * .$$K
         END %,
 
     ! The queues, by the PAL's calls, with the VAX's values (UM 4.64,
@@ -269,7 +318,12 @@ MACRO
     ! last, 3 if the queue was empty, with the entry's address to the
     ! longword ADDR. The interlocked ones are 1 if another CPU held the
     ! queue.
-    $INSQUE(ENTRY, PRED) = PAL_INSQUEL(PRED, ENTRY) %,
+    $INSQUE(ENTRY, PRED) =
+        BEGIN
+        LOCAL $$E;
+        $$E = ENTRY;
+        PAL_INSQUEL(PRED, .$$E)
+        END %,
     $REMQUE(ENTRY, ADDR) =
         BEGIN
         LOCAL $$R; LOCAL $$E;
@@ -277,15 +331,16 @@ MACRO
         (ADDR)<0, 32> = .$$E;
         IF .$$R LSS 0 THEN 3 ELSE IF .$$R EQL 0 THEN 2 ELSE 0
         END %,
-    $INSQHI(ENTRY, HEADER) = $$INSQI(PAL_INSQHIL(HEADER, ENTRY)) %,
-    $INSQTI(ENTRY, HEADER) = $$INSQI(PAL_INSQTIL(HEADER, ENTRY)) %,
+    $INSQHI(ENTRY, HEADER) = $$INSQI(PAL_INSQHIL, ENTRY, HEADER) %,
+    $INSQTI(ENTRY, HEADER) = $$INSQI(PAL_INSQTIL, ENTRY, HEADER) %,
     $REMQHI(HEADER, ADDR) = $$REMQI(PAL_REMQHIL, HEADER, ADDR) %,
     $REMQTI(HEADER, ADDR) = $$REMQI(PAL_REMQTIL, HEADER, ADDR) %,
     ! The PAL's -1, 0 and 1 for an insert.
-    $$INSQI(CALL) =
+    $$INSQI(CALL, ENTRY, HEADER) =
         BEGIN
-        LOCAL $$R;
-        $$R = CALL;
+        LOCAL $$R; LOCAL $$E;
+        $$E = ENTRY;
+        $$R = CALL(HEADER, .$$E);
         IF .$$R LSS 0 THEN 1 ELSE 2 * .$$R
         END %,
     ! The PAL's -1, 0, 1 and 2 for a remove.
@@ -298,10 +353,15 @@ MACRO
         END %,
 
     ! Probes, the PS, processor registers and the rest of the machine.
-    $PROBER(MODEA, LENA, BASE) =
-        PAL_PROBER(BASE, .(LENA)<0, 16>, .(MODEA)<0, 8>) %,
-    $PROBEW(MODEA, LENA, BASE) =
-        PAL_PROBEW(BASE, .(LENA)<0, 16>, .(MODEA)<0, 8>) %,
+    $PROBER(MODEA, LENA, BASE) = $$VAX_PROBE(PAL_PROBER, MODEA, LENA, BASE) %,
+    $PROBEW(MODEA, LENA, BASE) = $$VAX_PROBE(PAL_PROBEW, MODEA, LENA, BASE) %,
+    $$VAX_PROBE(CALL, MODEA, LENA, BASE) =
+        BEGIN
+        LOCAL $$M; LOCAL $$N;
+        $$M = .(MODEA)<0, 8>;
+        $$N = .(LENA)<0, 16>;
+        CALL(BASE, .$$N, .$$M)
+        END %,
     $MOVPSL(DSTA) = (DSTA)<0, 32> = PAL_RD_PS() %,
     ! The VAX's arithmetic trap enables: ARM64 has none to set.
     $BISPSW(MASKA) = (0) %,

@@ -7,7 +7,7 @@ REQUIRE 'PRINT';
 LIBRARY 'SYS$LIBRARY:LIB';
 BUILTIN
     FFS, FFC, LOCC, SKPC, MOVC3, MOVC5, CMPC3, CMPC5, MATCHC, SCANC, SPANC,
-    ADDM, SUBM, CMPM, INDEX, MOVTUC;
+    ADDM, SUBM, CMPM, INDEX, MOVTUC, MOVTC, EMUL, EDIV, ASHQ;
 OWN
     W : VECTOR[2] INITIAL(%X'00F00000', 0),
     POS,
@@ -19,6 +19,7 @@ OWN
     C : VECTOR[2],
     OVL : VECTOR[8, BYTE] INITIAL(BYTE('ABCDEF  ')),
     CALLS,
+    TR,
     ONE : INITIAL(1);
 MACRO
     ! Another macro, whose actual parameter ends at a comma.
@@ -52,6 +53,32 @@ ROUTINE OVF : NOVALUE =
     INDEX(NEXT(ONE), %REF(0), %REF(2), %REF(1), %REF(0), POS);
     PRINT(.CALLS);
     PRINT(.POS)
+    END;
+ROUTINE T (D, P) =
+    BEGIN
+    ! Operand number D read: its digit after those read before.
+    TR = .TR * 10 + .D;
+    .P
+    END;
+ROUTINE ORD : NOVALUE =
+    BEGIN
+    ! Each operand read once, in the order written, as the VAX reads them.
+    TR = 0; FFS(T(1, %REF(0)), T(2, %REF(32)), T(3, W), T(4, POS)); PRINT(.TR);
+    TR = 0; LOCC(T(1, %REF(%C',')), T(2, %REF(16)), T(3, STR)); PRINT(.TR);
+    TR = 0; SKPC(T(1, %REF(%C'H')), T(2, %REF(16)), T(3, STR)); PRINT(.TR);
+    TR = 0; MATCHC(T(1, %REF(5)), T(2, UPLIT('WORLD')), T(3, %REF(16)), T(4, STR)); PRINT(.TR);
+    TR = 0; MOVC3(T(1, %REF(5)), T(2, STR), T(3, DST)); PRINT(.TR);
+    TR = 0; MOVC5(T(1, %REF(2)), T(2, STR), T(3, %REF(%C'*')), T(4, %REF(4)), T(5, DST)); PRINT(.TR);
+    TR = 0; MOVTC(T(1, %REF(2)), T(2, STR), T(3, %REF(%C'*')), T(4, TBL), T(5, %REF(4)), T(6, DST)); PRINT(.TR);
+    TR = 0; CMPC3(T(1, %REF(5)), T(2, STR), T(3, DST)); PRINT(.TR);
+    TR = 0; CMPC5(T(1, %REF(5)), T(2, STR), T(3, %REF(%C' ')), T(4, %REF(5)), T(5, DST)); PRINT(.TR);
+    TR = 0; SCANC(T(1, %REF(16)), T(2, STR), T(3, TBL), T(4, %REF(1))); PRINT(.TR);
+    TR = 0; MOVTUC(T(1, %REF(5)), T(2, STR), T(3, %REF(%C'L')), T(4, TBL), T(5, %REF(5)), T(6, DST)); PRINT(.TR);
+    TR = 0; INDEX(T(1, ONE), T(2, %REF(0)), T(3, %REF(2)), T(4, %REF(1)), T(5, %REF(0)), T(6, POS)); PRINT(.TR);
+    TR = 0; CMPM(T(1, 2), T(2, A), T(3, B)); PRINT(.TR);
+    TR = 0; EMUL(T(1, %REF(3)), T(2, %REF(4)), T(3, %REF(5)), T(4, C)); PRINT(.TR);
+    TR = 0; EDIV(T(1, %REF(3)), T(2, %REF(17)), T(3, POS), T(4, C)); PRINT(.TR);
+    TR = 0; ASHQ(T(1, %REF(1)), T(2, %REF(3)), T(3, C)); PRINT(.TR)
     END;
 ROUTINE M =
     BEGIN
@@ -101,6 +128,7 @@ ROUTINE M =
     OVL[0] = %C'L';
     PRINT(MOVTUC(%REF(5), STR, OVL, TBL, %REF(5), OVL) EQL STR + 2);
     OVF();
+    ORD();
     1
     END;
 END
