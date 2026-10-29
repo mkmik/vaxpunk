@@ -422,6 +422,20 @@ fn libraries() {
         "{}",
         out.listing
     );
+    // Nor are the qualifiers': /ASSUME=NOQUAD_LITERALS on the command line.
+    let out = vbliss::translate(
+        &path,
+        &module("LIBRARY 'LD';\n%PRINT(%NUMBER(D2))", ""),
+        &vbliss::Options {
+            switches: vec![("QUAD_LITERALS".into(), false)],
+            ..vbliss::Options::default()
+        },
+    );
+    assert!(
+        out.listing.contains("%PRINT:\t4294967295\n"),
+        "{}",
+        out.listing
+    );
     // Each LIBRARY declares its own COMPILETIME names, with the library's
     // values, which %ASSIGN in one block doesn't change in another (oracle
     // LCTT).
@@ -474,15 +488,20 @@ fn floating_calls() {
         "R(1, %TFLOAT(T), %SFLOAT(SS), 2);\nG(%GFLOAT(X); %GFLOAT(Y));\nR(%TFLOAT(T); %TFLOAT(Y));",
     ));
     let (ir, asm) = (out.ir.unwrap(), out.asm.unwrap());
-    assert!(ir.contains("fcall $R(1, t:$T, s:$SS, 2)"), "{ir}");
-    assert!(ir.contains("fcall $G(g:$X) -> g:%"), "{ir}");
+    // Each value's bits read where its actual is (oracle FV).
+    assert!(
+        ir.contains("load8u $T\n") && ir.contains("load4u $SS\n"),
+        "{ir}"
+    );
+    assert!(ir.contains("fcall $R(1, t:%0, s:%1, 2)"), "{ir}");
+    assert!(ir.contains("fcall $G(g:%3) -> g:%"), "{ir}");
     // Four arguments, the second of class 2 (T), the third of class 1 (S).
     assert!(
         asm.contains(&format!("mov     x9, #{}", 4 | 2 << 10 | 1 << 12)),
         "{asm}"
     );
     assert!(
-        asm.contains("ldr     d0, [x16]") && asm.contains("ldr     s1, [x16]"),
+        asm.contains("fmov    d0, x") && asm.contains("fmov    s1, w"),
         "{asm}"
     );
     assert!(asm.contains("fmov    x") && asm.contains(", d0\n"), "{asm}");

@@ -526,15 +526,10 @@ impl<'a> Routine<'a> {
             self.sub_sp(stack);
         }
         // The stack's first, through x10, then the registers.
-        for ((v, fl), place) in c.args.iter().zip(&places) {
+        for (v, place) in c.args.iter().map(|a| &a.0).zip(&places) {
             if let Err(n) = place {
-                self.fl_arg(v, *fl, "x10", "d16");
-                let r = if matches!(fl, Some(Fl::S | Fl::T)) {
-                    "d16"
-                } else {
-                    "x10"
-                };
-                self.line(format!("str     {r}, [sp, #{}]", 8 * n));
+                self.load_into(v, "x10");
+                self.line(format!("str     x10, [sp, #{}]", 8 * n));
             }
         }
         for ((v, fl), place) in c.args.iter().zip(&places) {
@@ -578,19 +573,18 @@ impl<'a> Routine<'a> {
     }
 
     /// An argument into general register `x` or, S and T, double register
-    /// `d` (its S register for S): a value, or the floating value at an
-    /// address, a VAX one as its bits, a longword sign-extended.
+    /// `d` (its S register for S): a value, or a floating value's bits.
     fn fl_arg(&mut self, v: &V, fl: Option<Fl>, x: &str, d: &str) {
-        let Some(fl) = fl else {
-            return self.load_into(v, x);
-        };
-        let size = if matches!(fl, Fl::F | Fl::S) { 4 } else { 8 };
-        let m = self.mem(v, size);
         match fl {
-            Fl::S => self.line(format!("ldr     s{}, {m}", &d[1..])),
-            Fl::T => self.line(format!("ldr     {d}, {m}")),
-            Fl::F => self.line(format!("ldrsw   {x}, {m}")),
-            _ => self.line(format!("ldr     {x}, {m}")),
+            Some(Fl::S) => {
+                let r = self.src(v, "x10");
+                self.line(format!("fmov    s{}, w{}", &d[1..], &r[1..]));
+            }
+            Some(Fl::T) => {
+                let r = self.src(v, "x10");
+                self.line(format!("fmov    {d}, {r}"));
+            }
+            _ => self.load_into(v, x),
         }
     }
 

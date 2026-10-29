@@ -1824,11 +1824,14 @@ impl Parser<'_> {
             .map(|(n, id)| (n.clone(), *id))
             .collect();
         let outer = std::mem::replace(&mut self.scopes, vec![predeclared, HashMap::new()]);
+        // Nor the qualifiers' switches: its own command line set its.
+        let switches = std::mem::take(&mut self.opts.switches);
         let forward = std::mem::take(&mut self.forward_data);
         let outer_imports = std::mem::take(&mut self.library_imports);
         self.library_depth += 1;
         let r = self.library_declarations();
         self.library_depth -= 1;
+        self.opts.switches = switches;
         self.forward_data = forward;
         let imported = std::mem::replace(&mut self.library_imports, outer_imports);
         let mut scopes = std::mem::replace(&mut self.scopes, outer);

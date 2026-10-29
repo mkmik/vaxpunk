@@ -18,15 +18,16 @@ OWN
     B : VECTOR[2] INITIAL(1, 2),
     C : VECTOR[2],
     OVL : VECTOR[8, BYTE] INITIAL(BYTE('ABCDEF  ')),
-    CALLS;
+    CALLS,
+    ONE : INITIAL(1);
 MACRO
     ! Another macro, whose actual parameter ends at a comma.
     ID(X) = X %;
-ROUTINE NEXT =
+ROUTINE NEXT (P) =
     BEGIN
     ! The calls an operand makes, as if it advanced through buffers.
     CALLS = .CALLS + 1;
-    A
+    .P
     END;
 ROUTINE OVF : NOVALUE =
     BEGIN
@@ -45,9 +46,12 @@ ROUTINE OVF : NOVALUE =
     PRINT(.C[1]);
     ! Each operand evaluated once, however many fullwords.
     CALLS = 0;
-    ADDM(2, NEXT(), B, C);
-    CMPM(2, NEXT(), B);
-    PRINT(.CALLS)
+    ADDM(2, NEXT(A), B, C);
+    CMPM(2, NEXT(A), B);
+    CMPC3(NEXT(ONE), UPLIT('A'), UPLIT('A'));
+    INDEX(NEXT(ONE), %REF(0), %REF(2), %REF(1), %REF(0), POS);
+    PRINT(.CALLS);
+    PRINT(.POS)
     END;
 ROUTINE M =
     BEGIN

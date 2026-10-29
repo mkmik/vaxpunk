@@ -1,0 +1,20 @@
+MODULE FV (MAIN = M) =
+BEGIN
+! A floating actual passes the value it had when it was evaluated, though
+! a later actual changes it.
+REQUIRE 'PRINT';
+BUILTIN ACTUALPARAMETER;
+OWN
+    X,
+    Y : LONG;
+ROUTINE R1 = ACTUALPARAMETER(1);
+ROUTINE R2 = ACTUALPARAMETER(2);
+ROUTINE M =
+    BEGIN
+    PRINT(R1(%TFLOAT((X = %T'1.0'; X)), %TFLOAT((X = %T'2.0'; X))));
+    PRINT(R2(%TFLOAT((X = %T'1.0'; X)), %TFLOAT((X = %T'2.0'; X))));
+    PRINT(R1(%SFLOAT((Y = %S'1.0'; Y)), (Y = %S'2.0'; 0)));
+    1
+    END;
+END
+ELUDOM

@@ -146,8 +146,8 @@ pub enum Ins {
     FCvt(Fl, Fl, bool, V, V),
     /// `dst = fcall target(args) -> results nopreserve rN...`: a call by the calling
     /// standard with floating arguments or results (RN 2.10.4,
-    /// DESIGN-0004): an argument `t:addr` is the value of that format at
-    /// addr, S and T in v0-v7 with their class in x9, VAX ones general;
+    /// DESIGN-0004): an argument `t:v` is the bits of a value of that
+    /// format, S and T in v0-v7 with their class in x9, VAX ones general;
     /// a result `t:%n` is temporary n, the bits from v0 and v1 or x0 and
     /// x1, which the call's caller stores where it goes.
     FCall(Box<FCall>),
@@ -158,7 +158,7 @@ pub enum Ins {
 pub struct FCall {
     pub dst: u32,
     pub target: V,
-    /// Each argument: a value, or a floating value's format and address.
+    /// Each argument: a value, or a floating value's bits and format.
     pub args: Vec<(V, Option<Fl>)>,
     /// Each result: its format and the temporary that gets its bits.
     pub results: Vec<(Fl, u32)>,

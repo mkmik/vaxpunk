@@ -1026,7 +1026,11 @@ MACRO
     $MOVTC(SRCLENA, SRC, FILLA, TBL, DSTLENA, DST) =
         CH$TRANSLATE(TBL, .(SRCLENA)<0, 16>, SRC, .(FILLA)<0, 8>, .(DSTLENA)<0, 16>, DST) %,
     $CMPC3(LENA, SRC, DST) =
-        CH$COMPARE(.(LENA)<0, 16>, SRC, .(LENA)<0, 16>, DST) %,
+        BEGIN
+        LOCAL $$N;
+        $$N = .(LENA)<0, 16>;
+        CH$COMPARE(.$$N, SRC, .$$N, DST)
+        END %,
     $CMPC5(SRCLENA, SRC, FILLA, DSTLENA, DST) =
         CH$COMPARE(.(SRCLENA)<0, 16>, SRC, .(DSTLENA)<0, 16>, DST, .(FILLA)<0, 8>) %,
 
@@ -1146,12 +1150,16 @@ MACRO
         END %,
 
     ! INDEX: (.INA + .SUB) * .SCALE to OUTA, the subscript checked against
-    ! LOW and HIGH; out of range it signals SS$_SUBRNG, 1196.
+    ! LOW and HIGH; out of range it signals SS$_SUBRNG, 1196. Like the
+    ! VAX's, it never signals an overflow.
     $INDEX(SUB, LOW, HIGH, SCALE, INA, OUTA) =
         BEGIN
-        IF .(SUB)<0, 32, 1> LSS .(LOW)<0, 32, 1> OR .(SUB)<0, 32, 1> GTR .(HIGH)<0, 32, 1>
+        SWITCHES NOOVERFLOW;
+        LOCAL $$S;
+        $$S = .(SUB)<0, 32, 1>;
+        IF .$$S LSS .(LOW)<0, 32, 1> OR .$$S GTR .(HIGH)<0, 32, 1>
         THEN SIGNAL(1196);
-        (OUTA)<0, 32> = (.(INA)<0, 32, 1> + .(SUB)<0, 32, 1>) * .(SCALE)<0, 32, 1>
+        (OUTA)<0, 32> = (.(INA)<0, 32, 1> + .$$S) * .(SCALE)<0, 32, 1>
         END %,
 
     ! The queues, by the PAL's calls, with the VAX's values (UM 4.64,

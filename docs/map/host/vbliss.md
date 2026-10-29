@@ -144,7 +144,7 @@ note = "vbliss::read_source reads a byte a character, and a string's bytes are t
 id = "library-semantics"
 title = "LIBRARY as LRM 16.6 has it: lexical functions and switches fixed when the library is compiled, nested libraries' names kept out, /LIBRARY for sources of declarations only"
 status = "done"
-note = "LRM 16.6: a library's source is read in a context of its own, which sees the predeclared names and its own, not the module head's switches, with declarations only (message 200); the module gets the names it declares, not those its own libraries gave it nor its switches; a library read twice gives the same names. %VARIANT in a library is the module's until probe 15 says otherwise; the .L64 format is t8y:/lang/bliss#libraries"
+note = "LRM 16.6: a library's source is read in a context of its own, which sees the predeclared names and its own, not the module head's switches nor the command line's, with declarations only (message 200); the module gets the names it declares, not those its own libraries gave it nor its switches; a library read twice gives the same names. %VARIANT in a library is the module's until probe 15 says otherwise; the .L64 format is t8y:/lang/bliss#libraries"
 
 [[feature]]
 id = "switches"

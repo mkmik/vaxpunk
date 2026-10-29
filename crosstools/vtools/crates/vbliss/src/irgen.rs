@@ -608,8 +608,13 @@ impl Gen<'_> {
                 for a in args {
                     match a {
                         Expr::Special(Special::FloatIn(f), e) => {
-                            let v = self.value(&e[0])?;
-                            vals.push((self.fix(v), Some(*f)));
+                            // Its bits now, as a later actual may change
+                            // them (oracle FV).
+                            let a = self.value(&e[0])?;
+                            let long = matches!(f, ir::Fl::F | ir::Fl::S);
+                            let t = self.temp();
+                            self.emit(Ins::Load(t, a, if long { 4 } else { 8 }, *f == ir::Fl::F));
+                            vals.push((V::T(t), Some(*f)));
                         }
                         Expr::Special(Special::FloatOut(f), e) => {
                             let t = self.temp();
