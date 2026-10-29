@@ -742,18 +742,30 @@ impl Parser<'_> {
             // An OWN or GLOBAL name is its address in its own INITIAL, as a
             // queue head's (LRM 10.3): declared ahead, as FORWARD does.
             let known = self.scopes.last().unwrap().get(&name).copied();
-            if matches!(storage, Storage::Own | Storage::Global)
-                && !known.is_some_and(|id| self.forward_data.contains(&id))
-            {
-                let kind = Kind::Data {
-                    storage,
-                    bytes: 0,
-                    size: self.m.dialect.fullword(),
-                    signed: false,
-                    structure: None,
+            let forward = known.filter(|id| self.forward_data.contains(id));
+            // A FORWARD's structure, which this declaration's should match.
+            let mut was = None;
+            if matches!(storage, Storage::Own | Storage::Global) {
+                let id = match forward {
+                    Some(id) => {
+                        if let Kind::Data { structure, .. } = &self.m.syms[id].kind {
+                            was = Some(structure.clone());
+                        }
+                        id
+                    }
+                    None => {
+                        let kind = Kind::Data {
+                            storage,
+                            bytes: 0,
+                            size: self.m.dialect.fullword(),
+                            signed: false,
+                            structure: None,
+                        };
+                        let id = self.declare(name.clone(), kind)?;
+                        self.forward_data.push(id);
+                        id
+                    }
                 };
-                let id = self.declare(name.clone(), kind)?;
-                self.forward_data.push(id);
                 self.declaring = Some(id);
             }
             let mut a = if self.eat_punct(':') {
@@ -824,9 +836,22 @@ impl Parser<'_> {
             };
             let scalar = a.structure.is_none();
             let kind = self.data_kind(storage, &mut a)?;
-            let Kind::Data { bytes, storage, .. } = kind else {
+            let Kind::Data {
+                bytes,
+                storage,
+                ref structure,
+                ..
+            } = kind
+            else {
                 unreachable!()
             };
+            // BLISSA64 warns and goes by this one (oracle FQ).
+            if was.is_some_and(|w| w != *structure) {
+                let msg = format!(
+                    "The structure attribute contradicts corresponding FORWARD OWN/GLOBAL declaration of {name}"
+                );
+                self.diag('W', &at, msg);
+            }
             let id = self.declare(name, kind)?;
             if a.alias {
                 self.alias.push(id);

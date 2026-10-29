@@ -1,0 +1,14 @@
+MODULE FR (MAIN = M) =
+BEGIN
+! A FORWARD name's own INITIAL, the FORWARD with the same attributes.
+REQUIRE 'PRINT';
+FORWARD R : VECTOR[4];
+OWN R : VECTOR[4] INITIAL(%ALLOCATION(R), R[2]);
+ROUTINE M =
+    BEGIN
+    PRINT(.R[0]);
+    PRINT(.R[1] - R);
+    1
+    END;
+END
+ELUDOM
