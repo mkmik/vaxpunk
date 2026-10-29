@@ -633,17 +633,25 @@ impl<'a> Routine<'a> {
             }
             Fl::G => {
                 // s|e11|f52, 1.f * 2^(e - 1025): the double's exponent is
-                // e - 2.
-                // ponytail: G's two smallest exponents, below the double's
-                // normal range, read as zero; subnormals if anyone cares.
+                // e - 2. e = 1 and 2 are below the double's normal range:
+                // the bits read as a double are 4 times the value, so a
+                // quarter of that, a subnormal, which holds 1 or 2 bits
+                // fewer; G arithmetic keeps them with g_bits.
                 self.line(format!("ldr     x10, {m}"));
                 self.line("rev     x10, x10");
                 self.line("rev16   x10, x10");
                 self.line("ubfx    x11, x10, #52, #11");
                 self.line("movz    x13, #32, lsl #48");
                 self.line("sub     x12, x10, x13");
+                self.line("fmov    d18, x10");
+                self.line("movz    x13, #0x3fd0, lsl #48");
+                self.line("fmov    d19, x13");
+                self.line("fmul    d18, d18, d19");
+                self.line("fmov    x13, d18");
                 self.line("cmp     x11, #2");
-                self.line("csel    x12, xzr, x12, ls");
+                self.line("csel    x12, x13, x12, ls");
+                self.line("cmp     x11, #0");
+                self.line("csel    x12, xzr, x12, eq");
                 self.line(format!("fmov    {d}, x12"));
             }
             Fl::D => {
@@ -669,9 +677,24 @@ impl<'a> Routine<'a> {
         }
     }
 
+    /// Loads G's bits at `a` into `d` read as a double: 4 times G's
+    /// value, exact in G's two smallest exponents, where the double from
+    /// fl_load is a subnormal and holds fewer bits; G's largest is
+    /// infinity. e = 0 is zero.
+    fn g_bits(&mut self, a: &V, d: &str) {
+        let m = self.mem(a, 8);
+        self.line(format!("ldr     x10, {m}"));
+        self.line("rev     x10, x10");
+        self.line("rev16   x10, x10");
+        self.line("tst     x10, #0x7ff0000000000000");
+        self.line("csel    x10, x10, xzr, ne");
+        self.line(format!("fmov    {d}, x10"));
+    }
+
     /// Stores d16 at address `a` in floating format `f`, rounded to
     /// nearest; a VAX result out of its range is zero below it and the
-    /// largest magnitude above.
+    /// largest magnitude above. For G, d18 holds 4 times the result,
+    /// exact where d16 may not be: in G's two smallest exponents.
     fn fl_store(&mut self, f: Fl, a: &V) {
         let m = self.mem(a, if matches!(f, Fl::F | Fl::S) { 4 } else { 8 });
         match f {
@@ -706,7 +729,10 @@ impl<'a> Routine<'a> {
                 self.line(format!("str     w11, {m}"));
             }
             Fl::G => {
-                // Double's exponent E: G's is E + 2.
+                // d18, 4 times the result, has G's bits, those of G's
+                // two smallest exponents too; its exponent 0 is below
+                // G's range. Where it is infinite, G's largest exponent,
+                // d16's exponent E: G's is E + 2.
                 self.line("fmov    x10, d16");
                 self.line("ubfx    x11, x10, #52, #11");
                 self.line("movz    x13, #32, lsl #48");
@@ -716,6 +742,12 @@ impl<'a> Routine<'a> {
                 self.line("csel    x12, x13, x12, hi");
                 self.line("cmp     x11, #0");
                 self.line("csel    x12, xzr, x12, eq");
+                self.line("fmov    x13, d18");
+                self.line("ubfx    x14, x13, #52, #11");
+                self.line("cmp     x14, #0");
+                self.line("csel    x13, xzr, x13, eq");
+                self.line("cmp     x14, #2047");
+                self.line("csel    x12, x12, x13, eq");
                 self.line("rev16   x12, x12");
                 self.line("rev     x12, x12");
                 self.line(format!("str     x12, {m}"));
@@ -1168,17 +1200,68 @@ impl<'a> Routine<'a> {
                     FOp::Mul => ("fmul", 16, 17),
                     FOp::Div => ("fdiv", 17, 16),
                 };
+                if *f == Fl::G {
+                    // d18 = 4 times the result, from G's bits, which keep
+                    // G's two smallest exponents whole: a product of two
+                    // is 16 times, a quotient by d16 4 times, a quotient
+                    // by G's bits (a divisor that small) 1 time.
+                    // ponytail: a product of G's largest exponent and one
+                    // of its two smallest, or a quotient by one of them
+                    // into G's largest, is d16's, short of their lowest
+                    // bits.
+                    self.g_bits(b, "d19");
+                    self.g_bits(a, "d18");
+                    match op {
+                        "fmul" => {
+                            self.line("fmul    d18, d18, d19");
+                            self.line("movz    x13, #0x3fd0, lsl #48");
+                            self.line("fmov    d19, x13");
+                            self.line("fmul    d18, d18, d19");
+                        }
+                        "fdiv" => {
+                            self.line("ubfx    x11, x10, #52, #11");
+                            self.line("fmov    x12, d18");
+                            self.line("fmov    x13, d16");
+                            self.line("cmp     x11, #2");
+                            self.line("csel    x12, x12, x13, ls");
+                            self.line("fmov    d18, x12");
+                            self.line("fdiv    d18, d19, d18");
+                            self.line("movz    x13, #0x4010, lsl #48");
+                            self.line("fmov    d19, x13");
+                            self.line("fmul    d19, d18, d19");
+                            self.line("fmov    x12, d18");
+                            self.line("fmov    x13, d19");
+                            self.line("csel    x12, x13, x12, ls");
+                            self.line("fmov    d18, x12");
+                        }
+                        _ => self.line(format!("{op:<8}d18, d{}, d{}", x + 2, y + 2)),
+                    }
+                }
                 self.line(format!("{op:<8}d16, d{x}, d{y}"));
                 self.fl_store(*f, d);
             }
             Ins::FCmp(dst, f, a, b) => {
                 self.fl_load(*f, a, "d16");
                 self.fl_load(*f, b, "d17");
+                if *f == Fl::G {
+                    self.g_bits(a, "d18");
+                    self.g_bits(b, "d19");
+                }
                 let r = self.dst(*dst);
                 self.line("fcmp    d16, d17");
                 self.line("cset    x10, gt");
                 self.line("cset    x11, mi");
                 self.line(format!("sub     {r}, x10, x11"));
+                if *f == Fl::G {
+                    // Equal as doubles, G's two smallest exponents may
+                    // still differ in their lowest bits.
+                    self.line("fcmp    d18, d19");
+                    self.line("cset    x10, gt");
+                    self.line("cset    x11, mi");
+                    self.line("sub     x10, x10, x11");
+                    self.line(format!("cmp     {r}, #0"));
+                    self.line(format!("csel    {r}, x10, {r}, eq"));
+                }
                 self.done(*dst);
             }
             Ins::FCall(c) => self.fcall(c),
@@ -1204,6 +1287,12 @@ impl<'a> Routine<'a> {
                 }
                 _ => {
                     self.fl_load(*from, a, "d16");
+                    if *to == Fl::G {
+                        // d18 = 4 times d16, which fl_store reads.
+                        self.line("movz    x13, #0x4010, lsl #48");
+                        self.line("fmov    d18, x13");
+                        self.line("fmul    d18, d16, d18");
+                    }
                     self.fl_store(*to, d);
                 }
             },

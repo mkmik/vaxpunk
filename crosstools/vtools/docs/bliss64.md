@@ -533,7 +533,13 @@ vaxpunk: ARM64 has IEEE single and double only, so vbliss computes in
 double: S and T directly, VAX F and G converted, D converted with its
 fraction rounded to 53 bits, as Alpha did D through G. The results are
 rounded back to their format; one out of a VAX format's range is zero
-below it and its largest magnitude above. `SUBx` and `DIVx` take the
+below it and its largest magnitude above. G's two smallest exponents,
+2\*\*-1024 to 2\*\*-1022, are below double's normal range, where a double
+holds 1 or 2 fraction bits fewer: G arithmetic and `CMPG` there work on
+G's bits read as a double, 4 times the value, so they keep every bit
+(`tests/bliss/gsmall`), but for a product or quotient that mixes them
+with G's largest exponent.
+`SUBx` and `DIVx` take the
 subtrahend and the divisor first, the VAX's order. A literal's bits are
 BLISSA64's, `%D` at G's precision too, with its overflow and underflow
 warnings; BLISSA64 gives `%E'-1.5'` a stray low bit, vbliss the exact
