@@ -739,8 +739,8 @@ fn checks() {
             "Symbol X is declared LOCAL in an outer block"
         ]
     );
-    // An address in a shareable psect needs fixing up where the image
-    // is loaded, which makes its page the process's own.
+    // BLISSA64 gives no SHARE warning for an address in a shareable
+    // psect, PIC or not, nor for DEC's TPAMAC tables (oracle SH1-SH7).
     let share = msgs(
         "/CHECK=SHARE",
         &module(
@@ -748,7 +748,7 @@ fn checks() {
             "",
         ),
     );
-    assert_eq!(share, ["Non-shareable value in SHARE PSECT SHRD"]);
+    assert!(share.is_empty(), "{share:?}");
 }
 
 #[test]

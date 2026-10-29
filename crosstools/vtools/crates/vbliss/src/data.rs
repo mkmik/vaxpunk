@@ -864,13 +864,6 @@ impl Parser<'_> {
                     if scalar {
                         self.check_align(off, align, natural);
                     }
-                    if init
-                        .iter()
-                        .any(|i| matches!(i, Init::Val(e, _) if crate::parse::fold(e).is_none()))
-                    {
-                        let at = self.here();
-                        self.check_share(&psect, &at);
-                    }
                     self.m.statics.push(Static {
                         sym: id,
                         init,

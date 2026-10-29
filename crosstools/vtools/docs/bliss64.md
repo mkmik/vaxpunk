@@ -647,10 +647,11 @@ vaxpunk: vbliss makes every check, with BLISSA64's words and severities
   variable smaller than the `REF` structure a prototype's formal takes.
 - `REDECLARE`: a name an inner block declares again, and a linkage's
   `GLOBAL` register declared again.
-- `SHARE`: an address in the `INITIAL` of data in a `SHARE` psect, which
-  must be fixed up where the image lands. BLISSA64's GEM crashes on the
-  probe, so what it checks is vaxpunk's reading of the message, "Non-
-  shareable value in SHARE PSECT".
+- `SHARE`: no warning. BLISSA64 has the message "Non-shareable value in
+  SHARE PSECT", but gave it in no probe: not for a quadword or longword
+  address, an address difference or a vector holding an address in a
+  `SHARE` psect, `PIC` or not, nor for DEC's TPAMAC tables (oracle
+  SH1-SH7, `CHECK_SHARE` on by default and by `/CHECK=SHARE`).
 - `LANGUAGE` and `/LANGUAGE`: LRM appendix C's full checks under
   `COMMON` (or `BLISS36` with another), the BLISS-16/BLISS-32 subset's
   under `BLISS16, BLISS32`, and a warning if the list leaves out the

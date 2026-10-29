@@ -175,23 +175,6 @@ impl Parser<'_> {
         }
     }
 
-    /// CHECK_SHARE, at an INITIAL value that is an address, which the
-    /// image activator must fix up, in psect `psect` (RN 2.19.6).
-    pub(crate) fn check_share(&mut self, psect: &str, at: &Lexeme) {
-        let shared = self
-            .m
-            .psect_attrs
-            .iter()
-            .any(|(n, a)| n == psect && a.split(", ").any(|w| w == "SHR"));
-        if shared && self.switch_on("CHECK_SHARE") {
-            self.diag(
-                'W',
-                at,
-                format!("Non-shareable value in SHARE PSECT {psect}"),
-            );
-        }
-    }
-
     /// CHECK_REDECLARE, as `name` is declared in a block inside another
     /// that declares it (RN 2.30).
     pub(crate) fn check_redeclare(&mut self, name: &str) {

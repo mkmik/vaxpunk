@@ -574,29 +574,7 @@ impl Gen<'_> {
             }
             Expr::Assign(l, r) => {
                 let v = self.value(r)?;
-                if let Expr::Special(Special::Reg(r), _) = **l {
-                    let v = self.fix(v);
-                    self.emit(Ins::SetReg(r, v.clone()));
-                    return Ok(v);
-                }
-                if let Expr::Field(b, pos, size, ext) = &**l
-                    && let Expr::Special(Special::Reg(r), _) = **b
-                {
-                    let (pos, size, _) = self.reg_field(pos, size, ext)?;
-                    let v = self.fix(v);
-                    if size == V::C(0) {
-                        return Ok(v);
-                    }
-                    let d = self.temp();
-                    self.emit(Ins::RegArg(d, r));
-                    let n = self.temp();
-                    self.emit(Ins::Insert(n, V::T(d), v.clone(), pos, size));
-                    self.emit(Ins::SetReg(r, V::T(n)));
-                    return Ok(v);
-                }
-                let p = self.place(l)?;
-                self.store(p, v.clone());
-                v
+                self.assign(l, v)?
             }
             Expr::Call(target, args, links, general)
                 if args.iter().any(|a| {
@@ -740,9 +718,8 @@ impl Gen<'_> {
                         .collect();
                     for (k, (_, t)) in results.into_iter().zip(&outs) {
                         if let Some(place) = &k.output {
-                            let p = self.place(place)?;
                             let v = self.narrow(V::T(*t));
-                            self.store(p, v);
+                            self.assign(place, v)?;
                         }
                     }
                     return Ok(self.narrow(V::T(d)));
@@ -1238,8 +1215,7 @@ impl Gen<'_> {
                     V::T(c)
                 });
                 if old {
-                    let place = self.place(&args[args.len() - 1])?;
-                    self.store(place, V::T(was));
+                    self.assign(&args[args.len() - 1], V::T(was))?;
                 }
                 ok
             }
@@ -1331,8 +1307,7 @@ impl Gen<'_> {
                     V::T(c)
                 });
                 if flag {
-                    let place = self.place(&args[args.len() - 1])?;
-                    self.store(place, ok);
+                    self.assign(&args[args.len() - 1], ok)?;
                 }
                 match was_set {
                     true => V::T(was),
@@ -1431,8 +1406,7 @@ impl Gen<'_> {
                 }
                 let e = self.fix(e);
                 if addr {
-                    let place = self.place(&args[1])?;
-                    self.store(place, e.clone());
+                    self.assign(&args[1], e.clone())?;
                 }
                 let (s, p, r) = (self.temp(), self.temp(), self.temp());
                 self.emit(Ins::Load(s, e.clone(), n, n == 4));
@@ -1464,8 +1438,7 @@ impl Gen<'_> {
                 let (d, r1) = (self.temp(), self.temp());
                 self.emit(Ins::Pal(d, V::C(code.into()), vals));
                 self.emit(Ins::PalR1(r1));
-                let place = self.place(out)?;
-                self.store(place, V::T(r1));
+                self.assign(out, V::T(r1))?;
                 V::T(d)
             }
             _ => unreachable!(),
@@ -1587,6 +1560,35 @@ impl Gen<'_> {
 
     /// Where a fetch reads and an assignment writes: a name's own field, a
     /// field reference, or a fullword at the address an expression gives.
+    /// Stores v where `l` says, an assignment's left side or an output
+    /// parameter's actual: a place in memory, or a register built-in or
+    /// a field of one (LRM 12.1.2). Returns v.
+    fn assign(&mut self, l: &Expr, v: V) -> R<V> {
+        if let Expr::Special(Special::Reg(r), _) = *l {
+            let v = self.fix(v);
+            self.emit(Ins::SetReg(r, v.clone()));
+            return Ok(v);
+        }
+        if let Expr::Field(b, pos, size, ext) = l
+            && let Expr::Special(Special::Reg(r), _) = **b
+        {
+            let (pos, size, _) = self.reg_field(pos, size, ext)?;
+            let v = self.fix(v);
+            if size == V::C(0) {
+                return Ok(v);
+            }
+            let d = self.temp();
+            self.emit(Ins::RegArg(d, r));
+            let n = self.temp();
+            self.emit(Ins::Insert(n, V::T(d), v.clone(), pos, size));
+            self.emit(Ins::SetReg(r, V::T(n)));
+            return Ok(v);
+        }
+        let p = self.place(l)?;
+        self.store(p, v.clone());
+        Ok(v)
+    }
+
     fn place(&mut self, e: &Expr) -> R<Place> {
         Ok(match e {
             Expr::Name(id) => {
