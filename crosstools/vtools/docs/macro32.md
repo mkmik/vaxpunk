@@ -211,11 +211,13 @@ bytes each, every longword sign-extended, and their count in x9.
   to the highest it names at a fixed offset, `n(AP)` or `@n(AP)`; up to
   `MAX_ARGS`, 8 if not given, when it uses AP as a list (its address,
   indexed, offset by a variable or unaligned, or `CALLG (AP)`), or with
-  `HOME_ARGS=TRUE`. The count is the caller's, but at most that. A caller
-  that passes S or T values (BLISS-64's `%SFLOAT` and `%TFLOAT`) puts them
-  in v0-v7 and says so in x9's classes; the prologue then takes each
-  argument from the next register of its class, or the stack, so that
-  every one is in its place in the list. AP is x12,
+  `HOME_ARGS=TRUE`. The count is the caller's, but at most that. The
+  arguments come from x0-x7 and the stack whatever the rest of x9 holds:
+  C's callers don't set it ([DESIGN-0004](../../../docs/design/0004-calling-standard.md),
+  *C and Fortran*), so the C run-time library's jackets must not read
+  it. An S or T value BLISS-64 passes by `%SFLOAT` or `%TFLOAT` is in
+  v0-v7, not the list, and the general arguments after it move up one,
+  as AMACRO homed Alpha's R16-R21 and never F16-F21. AP is x12,
   FP + 32, in a routine that reads it, and AP in a JSB routine is its
   caller's list; vmacro doesn't take code that writes AP.
 - A JSB routine that reads AP, which no routine in the module calls, as a

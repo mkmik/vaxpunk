@@ -33,16 +33,8 @@ MCLOBBER::
         MOVL    #5, R0
         RET
 
-; MARG n, ...: R0 = argument n.
-MARG::
-        .CALL_ENTRY MAX_ARGS=11, HOME_ARGS=TRUE
-        MOVL    4(AP), R1
-        MOVL    (AP)[R1], R0
-        RET
-
-; MSARGB and MSARGQ: call BARG1 and MQARG as another language's caller
-; may, with an S argument whose register's upper half isn't 0: R0 =
-; what they return.
+; MSARGB: calls BARG1 as another language's caller may, with an S
+; argument whose register's upper half isn't 0: R0 = what it returns.
         .ENTRY  MSARGB, ^M<R2>
         .DISABLE FLAGGING
         movz    x16, #0x3F80, lsl #16
@@ -52,24 +44,6 @@ MARG::
         mov     x9, #257
         bl      BARG1
         .ENABLE FLAGGING
-        RET
-
-        .ENTRY  MSARGQ, ^M<R2>
-        .DISABLE FLAGGING
-        movz    x16, #0x3F80, lsl #16
-        movk    x16, #0xBEEF, lsl #32
-        movk    x16, #0xDEAD, lsl #48
-        fmov    d0, x16
-        mov     x9, #257
-        bl      MQARG
-        .ENABLE FLAGGING
-        RET
-
-; MQARG x: R0 = the high half of argument 1 in its list of quadwords.
-MQARG::
-        .CALL_ENTRY QUAD_ARGS=TRUE
-        MOVQ    4(AP), R0
-        MOVL    R1, R0
         RET
 
 ; MTRIPLE n: R0 = 3 * n.

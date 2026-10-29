@@ -544,8 +544,10 @@ as general arguments, as DESIGN-0004 says, each value read where its
 actual is evaluated (`tests/bliss/fv`). A routine that homes its
 arguments for `ACTUALPARAMETER` reads x9's classes to take each from
 x0-x7, v0-v7 or the stack; an S argument there is its 32 bits, as in
-BLISSA64, whatever the rest of its register or stack slot holds. A
-MACRO-32 routine's AP list is homed the same way (`tests/bliss/interop`). The `%xFLOAT` actuals are for routines in other languages (RN
+BLISSA64, whatever the rest of its register or stack slot holds
+(`tests/bliss/interop`). A MACRO-32 routine's AP list doesn't read the
+classes, as C's callers don't set them (`docs/macro32.md`): it is no
+place to pass S or T values to. The `%xFLOAT` actuals are for routines in other languages (RN
 2.10.4): a BLISS routine passed one reads its arguments with
 `ACTUALPARAMETER`, as its named formals are the general arguments in
 AAPCS64's order, where Alpha placed each by its position. (`tests/bliss/fltops`, `fltlit3`, `nz`, `ap`, `ap2`; oracle)
