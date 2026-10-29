@@ -532,7 +532,8 @@ impl Gen<'_> {
                         return Ok(V::C(0));
                     }
                     // A BLISS-32 fullword is kept sign-extended, as load()
-                    // keeps one from memory.
+                    // keeps one from memory; one of a size known only at
+                    // run time isn't, as in BLISSA64 (oracle RV32).
                     if self.m.dialect.a32 && size == V::C(32) {
                         signed = true;
                     }
@@ -1709,7 +1710,13 @@ impl Gen<'_> {
         }
         self.emit(Ins::Load(d, addr, width, false));
         let e = self.temp();
+        // So is one whose size is known only at run time, when it is 32
+        // bits (oracle RV32).
+        let fullword = self.m.dialect.a32 && !matches!(p.size, V::C(_));
         self.emit(Ins::Ext(e, V::T(d), bit, p.size, p.signed));
+        if fullword {
+            return self.narrow(V::T(e));
+        }
         V::T(e)
     }
 

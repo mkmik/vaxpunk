@@ -1,0 +1,24 @@
+MODULE RV32 (MAIN = M) =
+BEGIN
+! Under /A32 a field 32 bits wide at run time is a fullword too, in a
+! register or in memory.
+REQUIRE 'PRINT32';
+OWN X, S;
+ROUTINE F =
+    BEGIN
+    BUILTIN R0;
+    R0 = -1;
+    IF .R0<0, .S, 0> EQL -1 THEN 1 ELSE 2
+    END;
+ROUTINE M =
+    BEGIN
+    S = 32;
+    X = -1;
+    PRINT(IF .X<0, .S, 0> EQL -1 THEN 1 ELSE 2);
+    PRINT(F());
+    S = 8;
+    PRINT(.X<0, .S, 0>);
+    1
+    END;
+END
+ELUDOM

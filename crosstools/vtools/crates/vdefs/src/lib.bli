@@ -16,7 +16,9 @@
 
 MACRO
     ! In a BUILTIN declaration: the mark that the block declared it, and
-    ! the built-ins it is made of.
+    ! the built-ins it is made of. A block inside one that declared X
+    ! can't declare it again, as with DEC's LIB (oracle NESTB): it
+    ! needn't, X is declared there already.
     $$VAX_BUILTIN(MARK)[] =
         BARRIER; LITERAL MARK = 1; BUILTIN %REMAINING %IF %LENGTH GTR 1 %THEN , %FI BARRIER %;
 
@@ -198,11 +200,14 @@ MACRO
         ! Each fullword wraps into the carry, under the caller's OVERFLOW too.
         SWITCHES NOOVERFLOW;
         LOCAL $$C; LOCAL $$K; LOCAL $$A; LOCAL $$B; LOCAL $$S;
+        ! Each operand once, in order, as the VAX reads them.
+        LOCAL $$N; LOCAL $$P1; LOCAL $$P2; LOCAL $$PD;
+        $$N = SIZE; $$P1 = SRC1; $$P2 = SRC2; $$PD = DST;
         $$C = 0;
-        INCR $$I FROM 0 TO (SIZE) - 1 DO
+        INCR $$I FROM 0 TO .$$N - 1 DO
             BEGIN
-            $$A = .(SRC1 + %UPVAL * .$$I)<0, %BPVAL>;
-            $$B = .(SRC2 + %UPVAL * .$$I)<0, %BPVAL>;
+            $$A = .(.$$P1 + %UPVAL * .$$I)<0, %BPVAL>;
+            $$B = .(.$$P2 + %UPVAL * .$$I)<0, %BPVAL>;
             ! ADDM: .$$A + .$$B, SUBM: .$$B - .$$A, with the carry or borrow
             ! from the fullword before.
             %IF SIGN GTR 0 %THEN
@@ -216,21 +221,23 @@ MACRO
                 $$S = .$$S - .$$C;
                 $$C = .$$K;
             %FI
-            (DST + %UPVAL * .$$I)<0, %BPVAL> = .$$S
+            (.$$PD + %UPVAL * .$$I)<0, %BPVAL> = .$$S
             END
         END %,
     $CMPM(SIZE, SRC1, SRC2) =
         BEGIN
         LOCAL $$R; LOCAL $$A; LOCAL $$B;
+        LOCAL $$N; LOCAL $$P1; LOCAL $$P2;
+        $$N = SIZE; $$P1 = SRC1; $$P2 = SRC2;
         $$R = 0;
-        DECR $$I FROM (SIZE) - 1 TO 0 DO
+        DECR $$I FROM .$$N - 1 TO 0 DO
             BEGIN
-            $$A = .(SRC1 + %UPVAL * .$$I)<0, %BPVAL>;
-            $$B = .(SRC2 + %UPVAL * .$$I)<0, %BPVAL>;
+            $$A = .(.$$P1 + %UPVAL * .$$I)<0, %BPVAL>;
+            $$B = .(.$$P2 + %UPVAL * .$$I)<0, %BPVAL>;
             IF .$$A NEQ .$$B THEN
                 BEGIN
-                $$R = (IF (IF .$$I EQL (SIZE) - 1
-                        THEN .(SRC1 + %UPVAL * .$$I)<0, %BPVAL, 1> LSS .(SRC2 + %UPVAL * .$$I)<0, %BPVAL, 1>
+                $$R = (IF (IF .$$I EQL .$$N - 1
+                        THEN .(.$$P1 + %UPVAL * .$$I)<0, %BPVAL, 1> LSS .(.$$P2 + %UPVAL * .$$I)<0, %BPVAL, 1>
                         ELSE .$$A LSSU .$$B) THEN -1 ELSE 1);
                 EXITLOOP
                 END

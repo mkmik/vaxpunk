@@ -17,10 +17,17 @@ OWN
     A : VECTOR[2] INITIAL(-1, 1),
     B : VECTOR[2] INITIAL(1, 2),
     C : VECTOR[2],
-    OVL : VECTOR[8, BYTE] INITIAL(BYTE('ABCDEF  '));
+    OVL : VECTOR[8, BYTE] INITIAL(BYTE('ABCDEF  ')),
+    CALLS;
 MACRO
     ! Another macro, whose actual parameter ends at a comma.
     ID(X) = X %;
+ROUTINE NEXT =
+    BEGIN
+    ! The calls an operand makes, as if it advanced through buffers.
+    CALLS = .CALLS + 1;
+    A
+    END;
 ROUTINE OVF : NOVALUE =
     BEGIN
     ! Under OVERFLOW too, each fullword wraps into the carry or borrow:
@@ -35,7 +42,12 @@ ROUTINE OVF : NOVALUE =
     PRINT(.C[1]);
     SUBM(2, B, C, C);
     PRINT(.C[0]);
-    PRINT(.C[1])
+    PRINT(.C[1]);
+    ! Each operand evaluated once, however many fullwords.
+    CALLS = 0;
+    ADDM(2, NEXT(), B, C);
+    CMPM(2, NEXT(), B);
+    PRINT(.CALLS)
     END;
 ROUTINE M =
     BEGIN

@@ -344,7 +344,9 @@ KIT)
   fetches or assigns them or a field of them (`.R0<0, 8>`), as DEC's
   `RETURN (BUILTIN R0; .R0)` after a change mode expects; under `/A32`
   a fetch of either, or of a longword field of it, is a fullword,
-  sign-extended (`tests/bliss/rf32`). `BUILTIN R2` to `R11` declare the routine's own
+  sign-extended (`tests/bliss/rf32`). A field 32 bits wide only at run
+  time is a fullword in memory but zero-extended in a register, as
+  BLISSA64 has it (`tests/bliss/rv32`). `BUILTIN R2` to `R11` declare the routine's own
   register data, as `REGISTER R2 = 2` would: x19-x28 hold vbliss's
   temporaries, and values pass through registers by linkages. Declared
   outside the routine that uses it, R2 is an illegal up-level reference,
