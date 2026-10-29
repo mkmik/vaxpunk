@@ -50,7 +50,7 @@ impl PartialEq for Structure {
 
 /// A data segment's structure attribute: the structure, its allocation
 /// actuals (defaults filled in) and whether it is `REF`.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StructAttr {
     pub st: Rc<Structure>,
     pub alloc: Vec<Option<i64>>,
@@ -614,7 +614,7 @@ impl Parser<'_> {
                 }
                 "INITIAL" => {
                     self.pos += 1;
-                    self.size_ahead(&a);
+                    self.kind_ahead(&a);
                     let unit = match a.structure {
                         Some(_) => self.m.dialect.unit(),
                         None => a.unit.unwrap_or(self.m.dialect.unit()),
@@ -623,7 +623,7 @@ impl Parser<'_> {
                 }
                 "PRESET" => {
                     self.pos += 1;
-                    self.size_ahead(&a);
+                    self.kind_ahead(&a);
                     self.expect_punct('(')?;
                     let mut items = Vec::new();
                     loop {
@@ -666,18 +666,24 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// The size the attributes so far give the name being declared, for
-    /// %ALLOCATION in its own INITIAL or PRESET (oracle SA).
-    fn size_ahead(&mut self, a: &Attrs) {
+    /// The kind the attributes so far give the name being declared, for
+    /// its own INITIAL or PRESET: its %ALLOCATION (oracle SA) and its
+    /// elements (oracle SQ).
+    fn kind_ahead(&mut self, a: &Attrs) {
         let Some(id) = self.declaring.take() else {
             return;
         };
-        let n = match &a.structure {
-            Some(s) => self.struct_bytes(s),
-            None => Some(a.unit.unwrap_or(self.m.dialect.unit()).into()),
+        let Kind::Data { storage, .. } = self.m.syms[id].kind else {
+            return;
         };
-        if let (Some(n), Kind::Data { bytes, .. }) = (n, &mut self.m.syms[id].kind) {
-            *bytes = n as u32;
+        let mut so_far = Attrs {
+            unit: a.unit,
+            signed: a.signed,
+            structure: a.structure.clone(),
+            ..Attrs::default()
+        };
+        if let Ok(kind) = self.data_kind(storage, &mut so_far) {
+            self.m.syms[id].kind = kind;
         }
     }
 

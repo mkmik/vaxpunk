@@ -1,0 +1,14 @@
+MODULE SQ (MAIN = M) =
+BEGIN
+! A name's own elements in its INITIAL: their addresses.
+REQUIRE 'PRINT';
+OWN Q : VECTOR[4] INITIAL(Q[2], Q[3], Q, Q);
+ROUTINE M =
+    BEGIN
+    PRINT(.Q[0] - Q);
+    PRINT(.Q[1] - Q);
+    PRINT(.Q[2] - Q);
+    1
+    END;
+END
+ELUDOM
