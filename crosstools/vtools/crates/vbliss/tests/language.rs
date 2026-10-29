@@ -942,7 +942,7 @@ fn vax_builtin_macros() {
          INDEX(%REF(2), %REF(0), %REF(9), %REF(4), %REF(0), L);\n\
          MOVTUC(%REF(3), UPLIT('ABC'), %REF(%C'B'), T, %REF(3), Q);\n\
          SPANC(%REF(3), UPLIT('ABC'), T, %REF(1)); CALLG(Q, 0);\n\
-         IF 0 THEN (CHMU(%REF(3)); HALT);",
+         IF 0 THEN (CHMU(%REF(3)); HALT());",
     ));
     assert!(out.error().is_none(), "{:?}", out.error());
     let ir = out.ir.unwrap();
