@@ -1,0 +1,17 @@
+MODULE SA (MAIN = M) =
+BEGIN
+! %ALLOCATION of a name in its own INITIAL: the size its attributes give.
+REQUIRE 'PRINT';
+OWN
+    X : VECTOR[4] INITIAL(%ALLOCATION(X), %SIZE(VECTOR[4])),
+    Y : VECTOR[3, BYTE] INITIAL(BYTE(%ALLOCATION(Y), %ALLOCATION(X)));
+ROUTINE M =
+    BEGIN
+    PRINT(.X[0]);
+    PRINT(.X[1]);
+    PRINT(.Y[0]);
+    PRINT(.Y[1]);
+    1
+    END;
+END
+ELUDOM

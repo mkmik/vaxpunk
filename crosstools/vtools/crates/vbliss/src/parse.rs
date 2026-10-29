@@ -702,6 +702,9 @@ pub struct Parser<'a> {
     /// OWN and GLOBAL names declared ahead of their declaration: by
     /// FORWARD, or for their own INITIAL (LRM 10.3).
     pub(crate) forward_data: Vec<usize>,
+    /// The OWN or GLOBAL name declared ahead for its own INITIAL, until
+    /// the attributes before it give its size.
+    pub(crate) declaring: Option<usize>,
     /// Routines' input formals, where a declaration or prototype says how
     /// many, and whether they are VARIABLE: for the count check.
     pub(crate) formal_counts: HashMap<usize, (usize, bool)>,
@@ -787,6 +790,7 @@ pub fn parse(name: &str, text: &str, load: Loader, opts: &Options) -> Front {
         routine_count: 0,
         local_owner: HashMap::new(),
         forward_data: Vec::new(),
+        declaring: None,
         formal_counts: HashMap::new(),
         libraries: HashMap::new(),
         library_depth: 0,

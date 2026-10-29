@@ -15,6 +15,7 @@ EXTERNAL ROUTINE
     MSUM : JSB_R2_R3,
     MSCRATCH : JSB_R4_R5,
     MCLOBBER : CALL_R2_R3,
+    MARG,
     MTRIPLE,
     MCALLB,
     MSIG,
@@ -74,6 +75,9 @@ ROUTINE MAIN =
     ! And across CALLs that don't keep R2 and R3, with floating arguments too.
     PRINT(.A + .B + .C + MCLOBBER(1));
     PRINT(.A + .B + .C + MCLOBBER(%TFLOAT(T)));
+    ! MACRO-32 reads S and T arguments in their place in the list.
+    PRINT(MARG(3, %TFLOAT(T), 42));
+    PRINT(MARG(11, 2, 3, 4, 5, 6, 7, 8, %SFLOAT(T), %TFLOAT(T), 43));
     PRINT(MTRIPLE(14));
     PRINT(MCALLB(3, 4));
     PRINT(CAUGHT());

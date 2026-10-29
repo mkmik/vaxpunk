@@ -1,0 +1,81 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]SA.B64;1
+
+    0	      1 MODULE SA (MAIN = M) =
+    0	      2 BEGIN
+    1	      3 ! %ALLOCATION of a name in its own INITIAL: the size its attributes give.
+    1	      4 REQUIRE 'PRINT';
+ R  1	      5 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      6 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      7 ! here under vrun and on OpenVMS for the oracle.
+ R  1	      8 
+ R  1	      9 EXTERNAL ROUTINE
+ R  1	     10     LIB$PUT_OUTPUT;
+ R  1	     11 
+ R  1	     12 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     13     BEGIN
+ R  2	     14     LOCAL
+ R  2	     15         BUF : VECTOR[48, BYTE],
+ R  2	     16         DESC : VECTOR[2, LONG],
+ R  2	     17         X,
+ R  2	     18         I;
+ R  2	     19     I = 48;
+ R  2	     20     X = .V;
+ R  2	     21     INCR K FROM 1 TO 16 DO
+ R  2	     22         BEGIN
+ R  3	     23         LOCAL D;
+ R  3	     24         D = .X AND 15;
+ R  3	     25         I = .I - 1;
+ R  3	     26         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     27         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     28         END;
+ R  2	     29     I = .I - 1;
+ R  2	     30     BUF[.I] = %C' ';
+ R  2	     31     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     32     ! the most negative one prints too.
+ R  2	     33     X = .V;
+ R  2	     34     DO
+ R  2	     35         BEGIN
+ R  3	     36         LOCAL D;
+ R  3	     37         D = .X - (.X / 10) * 10;
+ R  3	     38         IF .D LSS 0 THEN D = -.D;
+ R  3	     39         I = .I - 1;
+ R  3	     40         BUF[.I] = %C'0' + .D;
+ R  3	     41         X = .X / 10
+ R  3	     42         END
+ R  3	     43     UNTIL .X EQL 0;
+ R  2	     44     IF .V LSS 0
+ R  2	     45     THEN
+ R  2	     46         BEGIN
+ R  3	     47         I = .I - 1;
+ R  3	     48         BUF[.I] = %C'-'
+ R  3	     49         END;
+ R  2	     50     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     51     DESC[1] = BUF[.I];
+ R  2	     52     LIB$PUT_OUTPUT(DESC)
+ R  2	     53     END;
+    1	     54 OWN
+    1	     55     X : VECTOR[4] INITIAL(%ALLOCATION(X), %SIZE(VECTOR[4])),
+    1	     56     Y : VECTOR[3, BYTE] INITIAL(BYTE(%ALLOCATION(Y), %ALLOCATION(X)));
+    1	     57 ROUTINE M =
+
+SA                              Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]SA.B64;1
+
+    1	     58     BEGIN
+    2	     59     PRINT(.X[0]);
+    2	     60     PRINT(.X[1]);
+    2	     61     PRINT(.Y[0]);
+    2	     62     PRINT(.Y[1]);
+    2	     63     1
+    2	     64     END;
+    1	     65 END
+    1	     66 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]SA.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE SA.B64

@@ -614,6 +614,7 @@ impl Parser<'_> {
                 }
                 "INITIAL" => {
                     self.pos += 1;
+                    self.size_ahead(&a);
                     let unit = match a.structure {
                         Some(_) => self.m.dialect.unit(),
                         None => a.unit.unwrap_or(self.m.dialect.unit()),
@@ -622,6 +623,7 @@ impl Parser<'_> {
                 }
                 "PRESET" => {
                     self.pos += 1;
+                    self.size_ahead(&a);
                     self.expect_punct('(')?;
                     let mut items = Vec::new();
                     loop {
@@ -662,6 +664,21 @@ impl Parser<'_> {
             }
         }
         Ok(())
+    }
+
+    /// The size the attributes so far give the name being declared, for
+    /// %ALLOCATION in its own INITIAL or PRESET (oracle SA).
+    fn size_ahead(&mut self, a: &Attrs) {
+        let Some(id) = self.declaring.take() else {
+            return;
+        };
+        let n = match &a.structure {
+            Some(s) => self.struct_bytes(s),
+            None => Some(a.unit.unwrap_or(self.m.dialect.unit()).into()),
+        };
+        if let (Some(n), Kind::Data { bytes, .. }) = (n, &mut self.m.syms[id].kind) {
+            *bytes = n as u32;
+        }
     }
 
     /// `('name')` after EXTERNAL_NAME: the name, upper case as vasm has
@@ -731,12 +748,14 @@ impl Parser<'_> {
                 };
                 let id = self.declare(name.clone(), kind)?;
                 self.forward_data.push(id);
+                self.declaring = Some(id);
             }
             let mut a = if self.eat_punct(':') {
                 self.attributes()?
             } else {
                 Attrs::default()
             };
+            self.declaring = None;
             // A name that is no attribute: BLISSA64 warns and goes on
             // (oracle DIAG1).
             if let Tok::Name(n) = self.peek().clone()

@@ -1172,8 +1172,8 @@ impl Macro32 {
                 let fdsc = format!("FDSC$${i}");
                 let f = frame(&saved, r.home, r.quad_args);
                 out.extend(descriptor(&fdsc, &names[0], &saved, &f, &self.psect));
-                self.labels += 2;
-                out.extend(call_prologue(&f, &fdsc, 90000 + self.labels - 1));
+                self.labels += 8;
+                out.extend(call_prologue(&f, &fdsc, 90000 + self.labels - 7));
             }
             Kind::Jsb | Kind::Jsb32 => {
                 out.extend(jsb_prologue(&saved, r.lr));
@@ -1525,8 +1525,10 @@ fn frame(saved: &[u8], home: Option<u32>, quad: bool) -> Frame {
 /// then FP, the argument list and the registers. The list is the count,
 /// from x9, at most what it has room for, then the arguments: the first
 /// eight from x0-x7, the rest from the caller's stack, as many as there
-/// are; longwords, or quadwords with QUAD_ARGS. Local labels from `label`
-/// on.
+/// are; longwords, or quadwords with QUAD_ARGS. If x9 has classes, S and T
+/// arguments came in v0-v7 (DESIGN-0004): each argument is taken in turn
+/// from the next register of its class or the stack. Local labels
+/// `label` to `label + 7`.
 fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
     let size = f.size;
     let mut out = if size <= 504 {
@@ -1554,6 +1556,11 @@ fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
         ]);
         let n = n as usize;
         let at = |i: usize| 32 + slot * (i + 1);
+        let [again, done, classes, next, fl, stack, store, end] =
+            std::array::from_fn(|i| format!("{}$", label + i as u32));
+        if n > 0 {
+            out.extend(["\tlsr x17, x9, #8".into(), format!("\tcbnz x17, {classes}")]);
+        }
         for i in (0..n.min(8)).step_by(2) {
             out.push(if i + 1 < n {
                 format!("\tstp {r}{i}, {r}{}, [x29, #{}]", i + 1, at(i))
@@ -1562,7 +1569,6 @@ fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
             });
         }
         if n > 8 {
-            let (again, done) = (format!("{label}$"), format!("{}$", label + 1));
             out.extend([
                 "\tsubs x16, x16, #8".into(),
                 format!("\tb.ls {done}"),
@@ -1572,6 +1578,45 @@ fn call_prologue(f: &Frame, fdsc: &str, label: u32) -> Vec<String> {
                 format!("\tstr {r}14, [x17], #{slot}"),
                 "\tsubs x16, x16, #1".into(),
                 format!("\tb.ne {again}"),
+            ]);
+        }
+        if n > 0 {
+            // x0-x7 and v0-v7 below SP, to take in turn: x13 counts the
+            // general ones taken, x14 the floating ones from 8, x17 holds
+            // the classes left.
+            out.extend([
+                format!("\tb {done}"),
+                format!("{classes}:"),
+                format!("\tadd x10, x29, #{}", at(0)),
+                format!("\tadd x11, x29, #{size}"),
+                "\tsub sp, sp, #128".into(),
+            ]);
+            for i in (0..8).step_by(2) {
+                out.push(format!("\tstp x{i}, x{}, [sp, #{}]", i + 1, 8 * i));
+                out.push(format!("\tstp d{i}, d{}, [sp, #{}]", i + 1, 64 + 8 * i));
+            }
+            out.extend([
+                "\tmov x13, #0".into(),
+                "\tmov x14, #8".into(),
+                format!("{next}:\tcbz x16, {end}"),
+                "\tand x15, x17, #3".into(),
+                "\tlsr x17, x17, #2".into(),
+                format!("\tcbnz x15, {fl}"),
+                "\tcmp x13, #8".into(),
+                format!("\tb.hs {stack}"),
+                "\tldr x15, [sp, x13, lsl #3]".into(),
+                "\tadd x13, x13, #1".into(),
+                format!("\tb {store}"),
+                format!("{fl}:\tcmp x14, #16"),
+                format!("\tb.hs {stack}"),
+                "\tldr x15, [sp, x14, lsl #3]".into(),
+                "\tadd x14, x14, #1".into(),
+                format!("\tb {store}"),
+                format!("{stack}:\tldr x15, [x11], #8"),
+                format!("{store}:\tstr {r}15, [x10], #{slot}"),
+                "\tsub x16, x16, #1".into(),
+                format!("\tb {next}"),
+                format!("{end}:\tadd sp, sp, #128"),
                 format!("{done}:"),
             ]);
         }

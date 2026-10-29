@@ -33,6 +33,13 @@ MCLOBBER::
         MOVL    #5, R0
         RET
 
+; MARG n, ...: R0 = argument n.
+MARG::
+        .CALL_ENTRY MAX_ARGS=11, HOME_ARGS=TRUE
+        MOVL    4(AP), R1
+        MOVL    (AP)[R1], R0
+        RET
+
 ; MTRIPLE n: R0 = 3 * n.
         .ENTRY  MTRIPLE, ^M<>
         MULL3   #3, 4(AP), R0
