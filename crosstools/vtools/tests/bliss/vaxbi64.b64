@@ -7,7 +7,7 @@ REQUIRE 'PRINT';
 LIBRARY 'SYS$LIBRARY:LIB';
 BUILTIN
     FFS, FFC, LOCC, SKPC, MOVC3, MOVC5, CMPC3, CMPC5, MATCHC, SCANC, SPANC,
-    ADDM, SUBM, CMPM, INDEX, MOVTUC, MOVTC, EMUL, EDIV, ASHQ;
+    ADDM, SUBM, CMPM, INDEX, MOVTUC, MOVTC, EMUL, EDIV, ASHQ, NOP, BISPSW, BICPSW;
 OWN
     W : VECTOR[2] INITIAL(%X'00F00000', 0),
     POS,
@@ -83,7 +83,10 @@ ROUTINE ORD : NOVALUE =
     ! though finding C[1] sets C[0] to 99.
     EDIV(%REF(3), %REF(7), C, (C[0] = 99; C[1]));
     PRINT(.C[0]);
-    PRINT(.C[1])
+    PRINT(.C[1]);
+    ! NOP() does nothing; BISPSW and BICPSW change nothing on ARM64 but
+    ! read their mask.
+    TR = 0; NOP(); BISPSW(T(1, %REF(0))); BICPSW(T(2, %REF(0))); PRINT(.TR)
     END;
 ROUTINE M =
     BEGIN

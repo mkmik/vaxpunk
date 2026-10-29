@@ -370,9 +370,10 @@ MACRO
         CALL(BASE, .$$N, .$$M)
         END %,
     $MOVPSL(DSTA) = (DSTA)<0, 32> = PAL_RD_PS() %,
-    ! The VAX's arithmetic trap enables: ARM64 has none to set.
-    $BISPSW(MASKA) = (0) %,
-    $BICPSW(MASKA) = (0) %,
+    ! The VAX's arithmetic trap enables: ARM64 has none to set, but the
+    ! mask is read, as the VAX reads it.
+    $BISPSW(MASKA) = (.(MASKA)<0, 16>; 0) %,
+    $BICPSW(MASKA) = (.(MASKA)<0, 16>; 0) %,
     $MTPR(SRCA, PROCREG) =
         %IF %IDENTICAL(PROCREG, PR$_IPL) %THEN PAL_MTPR_IPL(.(SRCA)<0, 32>)
         %ELSE %IF %IDENTICAL(PROCREG, PR$_SIRR) %THEN PAL_MTPR_SIRR(.(SRCA)<0, 32>)
@@ -386,9 +387,11 @@ MACRO
         %ELSE %IF %IDENTICAL(PROCREG, PR$_PCBB) %THEN (DSTA)<0, 32> = PAL_MFPR_PCBB()
         %ELSE %ERROR('MFPR: vaxpunk''s PAL has calls for PR$_IPL, PR$_SISR, PR$_SCBB and PR$_PCBB')
         %FI %FI %FI %FI %,
-    $HALT = PAL_HALT() %,
-    $BPT = PAL_BPT() %,
-    $NOP = (0) %,
+    ! No operands, but a call's (): X takes them, so that NOP() is no
+    ! call of 0.
+    $HALT(X) = PAL_HALT() %,
+    $BPT(X) = PAL_BPT() %,
+    $NOP(X) = (0) %,
     $BUGW(CODEA) = PAL_BUGCHK(.(CODEA)<0, 16>) %,
     $BUGL(CODEA) = PAL_BUGCHK(.(CODEA)<0, 32>) %,
     $CHME(CODEA) = PAL_CHME(.(CODEA)<0, 16, 1>) %,
