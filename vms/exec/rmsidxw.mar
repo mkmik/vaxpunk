@@ -52,6 +52,7 @@
         .EXTERNAL IDX$IXPTR, IDX$DESCEND, IDX$FINDKEY, IDX$SCAN, IDX$FETCH
         .EXTERNAL IDX$PTRNEXT, IDX$MATCHKEY, IDX$RDPLG, IDX$AB_PLG, IDX$NEXT
         .EXTERNAL IDX$DECODE, IDX$KEEP, IDX$SETCTX
+        .EXTERNAL RMS$LOCKREC, RMS$UNLOCKAUTO, RMS$RECHELD
 
 BLOCK = 512
 MAXBKS = 63                             ; the largest bucket, blocks
@@ -1773,11 +1774,14 @@ ALTKEY:
 ; IDX$PUT: R7 = an IFAB, R10 = a RAB. Puts the record RAB$L_RBF points
 ; at, RAB$W_RSZ bytes, in key order, and a pointer to it in each
 ; alternate key's index whose key it has; its RFA goes in RAB$W_RFA.
-; With RAB$C_SEQ its primary key must be above the last's put so. R0 =
-; RMS$_NORMAL, RMS$_OK_DUP if it has a key another record has, RMS$_DUP
-; if that key has no duplicates, but with RAB$M_UIF it updates the
-; record with its primary key, RMS$_FAC, RMS$_RSZ, RMS$_SEQ, RMS$_RAC,
-; SS$_ACCVIO, or a bucket's error. Uses R0-R6, R8, R9, R11.
+; With RAB$C_SEQ its primary key must be above the last's put so. If the
+; open locks records, the stream's lock on its current record goes, and
+; with RAB$M_ULK the new record stays locked. R0 = RMS$_NORMAL,
+; RMS$_OK_DUP if it has a key another record has, RMS$_DUP if that key
+; has no duplicates, but with RAB$M_UIF it updates the record with its
+; primary key, locking it first (RMS$_RLK), RMS$_FAC, RMS$_RSZ,
+; RMS$_SEQ, RMS$_RAC, SS$_ACCVIO, or a bucket's error. Uses R0-R6, R8,
+; R9, R11.
 IDX$PUT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
         MOVL    IFB$L_IDX(R7), R11
@@ -1787,6 +1791,7 @@ IDX$PUT::
 5$:     CLRL    X$L_CURVBN(R11)
         CLRL    RAB$L_RFA0(R10)
         CLRW    RAB$W_RFA4(R10)
+        BSBW    RMS$UNLOCKAUTO
         BSBW    RECARG
         BLBS    R0, 7$
         BRW     90$
@@ -1821,10 +1826,16 @@ IDX$PUT::
         BBS     #KEY$V_DUPKEYS, KEY$B_FLAGS(R9), 20$
         MOVL    #RMS$_DUP, R0
         BBC     #RAB$V_UIF, RAB$L_ROP(R10), 18$
-        MOVL    W$L_RRVVBN(R8), X$L_CURVBN(R11) ; RAB$M_UIF: an $UPDATE
-        MOVW    W$L_RRVID(R8), X$W_CURID(R11)
+        MOVL    W$L_RRVVBN(R8), X$L_CURVBN(R11) ; RAB$M_UIF: an $UPDATE,
+        MOVW    W$L_RRVID(R8), X$W_CURID(R11)   ; of the record locked
+        MOVL    X$L_CURVBN(R11), R0
+        MOVZWL  X$W_CURID(R11), R1
+        MOVL    #1, R2
+        BSBW    RMS$LOCKREC
+        BLBC    R0, 18$
         MOVQ    (SP), R1
         BSBW    UPDCORE
+        BSBW    RMS$UNLOCKAUTO
 18$:    BRW     88$
 20$:    MOVL    #1, R6                  ; the alternate keys' duplicates
 25$:    CMPL    R6, X$L_NKEYS(R11)
@@ -1872,7 +1883,13 @@ IDX$PUT::
         BRB     40$
 50$:    MOVL    X$L_RFAVBN(R11), RAB$L_RFA0(R10)
         MOVW    X$W_RFAID(R11), RAB$W_RFA4(R10)
-        CMPB    RAB$B_RAC(R10), #RAB$C_SEQ
+        BBC     #RAB$V_ULK, RAB$L_ROP(R10), 55$ ; locked, with RAB$M_ULK
+        MOVL    X$L_RFAVBN(R11), R0
+        MOVZWL  X$W_RFAID(R11), R1
+        MOVL    #1, R2
+        BSBW    RMS$LOCKREC
+        BLBC    R0, 88$
+55$:    CMPB    RAB$B_RAC(R10), #RAB$C_SEQ
         BNEQ    60$
         CLRL    R0
         BSBW    IDX$KEYDESC
@@ -1889,11 +1906,12 @@ IDX$PUT::
 
 ; IDX$UPDATE: R7 = an IFAB, R10 = a RAB. Rewrites the current record
 ; with the one RAB$L_RBF points at, RAB$W_RSZ bytes, keeping its RFA
-; (UPDCORE); then, as on VMS, there is no current record. R0 =
-; RMS$_NORMAL, RMS$_OK_DUP if a key it changed is another record's too,
-; RMS$_FAC, RMS$_CUR, RMS$_RSZ, RMS$_CHG,
-; RMS$_CHK, RMS$_DUP, SS$_ACCVIO, or a bucket's error. Uses R0-R6, R8,
-; R9, R11.
+; (UPDCORE); then, as on VMS, there is no current record, and the
+; stream's lock on it goes, unless RAB$M_ULK took it. If the open locks
+; records, the stream must hold it. R0 = RMS$_NORMAL, RMS$_OK_DUP if a
+; key it changed is another record's too, RMS$_FAC, RMS$_CUR, RMS$_RNL,
+; RMS$_RSZ, RMS$_CHG, RMS$_CHK, RMS$_DUP, SS$_ACCVIO, or a bucket's
+; error. Uses R0-R6, R8, R9, R11.
 IDX$UPDATE::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
         MOVL    IFB$L_IDX(R7), R11
@@ -1904,9 +1922,18 @@ IDX$UPDATE::
         MOVL    #RMS$_CUR, R0
         TSTL    X$L_CURVBN(R11)
         BEQL    90$
-        BICW2   #1@X$V_OKDUP, X$W_FLAGS(R11)
+        PUSHR   #^M<R1, R2>
+        MOVL    X$L_CURVBN(R11), R0     ; locked by the stream?
+        MOVZWL  X$W_CURID(R11), R1
+        BSBW    RMS$RECHELD
+        POPR    #^M<R1, R2>
+        BLBS    R0, 5$
+        MOVL    #RMS$_RNL, R0
+        BRB     7$
+5$:     BICW2   #1@X$V_OKDUP, X$W_FLAGS(R11)
         BSBW    UPDCORE
         BSBW    SYNC
+7$:     BSBW    RMS$UNLOCKAUTO
         CLRL    X$L_CURVBN(R11)         ; not current any more, as VMS's
         CMPL    R0, #RMS$_NORMAL        ; a new key another record has?
         BNEQ    90$
@@ -2132,8 +2159,10 @@ FETCHHOME:
 
 ; IDX$DELETE: R7 = an IFAB, R10 = a RAB. Deletes the current record: it,
 ; its SIDR pointers, and its RRV if it moved; the stream's next record is
-; the one after it, if it was the stream's. R0 = RMS$_NORMAL, RMS$_FAC,
-; RMS$_CUR, or a bucket's error. Uses R0-R6, R8, R9, R11.
+; the one after it, if it was the stream's. If the open locks records,
+; the stream must hold it, and its lock goes unless RAB$M_ULK took it.
+; R0 = RMS$_NORMAL, RMS$_FAC, RMS$_CUR, RMS$_RNL, or a bucket's error.
+; Uses R0-R6, R8, R9, R11.
 IDX$DELETE::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
         MOVL    IFB$L_IDX(R7), R11
@@ -2142,7 +2171,13 @@ IDX$DELETE::
         BRW     90$
 5$:     MOVL    #RMS$_CUR, R0
         TSTL    X$L_CURVBN(R11)
-        BNEQ    7$
+        BNEQ    6$
+        BRW     90$
+6$:     MOVL    X$L_CURVBN(R11), R0     ; locked by the stream?
+        MOVZWL  X$W_CURID(R11), R1
+        BSBW    RMS$RECHELD
+        BLBS    R0, 7$
+        MOVL    #RMS$_RNL, R0
         BRW     90$
 7$:     CMPB    X$B_STATE(R11), #X$C_AFTER      ; the stream's record? its next
         BLSSU   20$
@@ -2205,7 +2240,8 @@ IDX$DELETE::
 50$:    CLRL    X$L_CURVBN(R11)
         MOVL    #RMS$_NORMAL, R0
 88$:    TSTL    (SP)+
-90$:    BSBW    SYNC
+90$:    BSBW    RMS$UNLOCKAUTO
+        BSBW    SYNC
         RSB
 
 ; IDX$FLUSH: R7 = an IFAB. Every bucket is written when it changes;

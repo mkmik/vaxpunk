@@ -402,6 +402,142 @@ $ CLOSE/NOLOG O
     com
 }
 
+/// LOCK.COM, two and three streams of DCL's on one indexed file in one
+/// process: the commands, their messages and the records they read must
+/// be what OpenVMS said, in LOCK.LOG. Record locks belong to a stream, so
+/// two OPEN/SHARE of one file conflict as two processes would. Then a
+/// subprocess's READ/WAIT waits for the record a stream of the parent
+/// holds, and reads it as the parent's WRITE/UPDATE left it, and one
+/// that waits for its own process's is a deadlock. Last, RMSLOCK tries
+/// the record options DCL doesn't use.
+#[test]
+fn locking() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let fixtures = root.join("crosstools/ods/fixtures/rms");
+    let disk = root.join("out/lock-datadisk.img");
+    let _ = fs::remove_file(&disk);
+    let params = InitParams {
+        label: b"DATA".to_vec(),
+        max_files: 16,
+        ..Default::default()
+    };
+    let mut vol = Image::create(&disk, 4096, &params).unwrap();
+    let lkb = "$ OPEN/READ/WRITE/SHARE B L.IDX\n$ WRITE SYS$OUTPUT \"LKB: waiting\"\n\
+               $ READ/WAIT/KEY=\"K0000006\" B Y\n$ WRITE SYS$OUTPUT \"LKB: read \", Y\n$ CLOSE B\n";
+    for (name, data) in [
+        (
+            "IDX1.FDL",
+            fs::read(fixtures.join("make/idx1.fdl")).unwrap(),
+        ),
+        (
+            "DATA.TXT",
+            fs::read(fixtures.join("make/data.txt")).unwrap(),
+        ),
+        (
+            "LOCK.COM",
+            fs::read(fixtures.join("make/lock.com")).unwrap(),
+        ),
+        ("LKB.COM", lkb.as_bytes().to_vec()),
+    ] {
+        vol.copy_in(
+            &mut &data[..],
+            &format!("[000000]{name}"),
+            Conversion::LinesToRecords,
+            Some(data.len() as u64),
+            None,
+        )
+        .unwrap();
+    }
+    vol.flush().unwrap();
+    drop(vol);
+    let mut vax = Vax::boot(&disk, &root.join("out/lock.log"));
+    vax.command("SET DEFAULT DKB0:[000000]", "\n$ ");
+    // Not the => lines: DCL's $STATUS isn't VMS's yet, a number, and READ
+    // leaves RMS's, not %X00030001; and of OPEN's error, not the file's
+    // name, which VMS gives as its expanded string.
+    let line = |l: &str| match l.strip_prefix("%DCL-E-OPEN") {
+        Some(rest) => format!("%DCL-E-OPEN{}", rest.split(',').next().unwrap()),
+        None => l.to_string(),
+    };
+    let said = vax.command("@LOCK", "\n$ ");
+    let want = fs::read_to_string(fixtures.join("lock.log")).unwrap();
+    let got: Vec<_> = said
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.starts_with('$'))
+        .filter(|l| !l.starts_with("=> "))
+        .map(line)
+        .collect();
+    let want: Vec<_> = want
+        .lines()
+        .filter(|l| !l.starts_with("=> "))
+        .map(line)
+        .collect();
+    for (n, (w, g)) in want.iter().zip(&got).enumerate() {
+        assert_eq!(w, g, "LOCK.COM's line {} isn't OpenVMS's", n + 1);
+    }
+    assert_eq!(want.len(), got.len(), "LOCK.COM's lines");
+
+    vax.command("OPEN/READ/WRITE/SHARE A L.IDX", "\n$ ");
+    vax.command("READ/KEY=\"K0000006\" A X", "\n$ ");
+    let from = vax.text().len();
+    vax.command("SPAWN/NOWAIT @LKB", "\n$ ");
+    vax.wait_for("LKB: waiting", from, 60);
+    sleep(Duration::from_secs(3));
+    vax.command("WRITE/UPDATE A \"K0000006 ALPHA by A\"", "\n$ ");
+    vax.wait_for("LKB: read K0000006 ALPHA by A", from, 60);
+    vax.command("CLOSE A", "\n$ ");
+
+    // A stream that waits for another of its own process's is a deadlock,
+    // which the lock manager finds after DEADLOCK_WAIT, 10 seconds.
+    vax.command("OPEN/READ/WRITE/SHARE A L.IDX", "\n$ ");
+    vax.command("OPEN/READ/WRITE/SHARE B L.IDX", "\n$ ");
+    vax.command("READ/KEY=\"K0000012\" A X", "\n$ ");
+    let said = vax.command("READ/WAIT/KEY=\"K0000012\" B Y", "\n$ ");
+    assert!(
+        said.contains("%RMS-F-DEADLOCK, deadlock detected"),
+        "READ/WAIT: {said}"
+    );
+    vax.command("CLOSE A", "\n$ ");
+    vax.command("CLOSE B", "\n$ ");
+
+    let said = vax.command("RUN RMSLOCK", "\n$ ");
+    let got: Vec<_> = said
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.starts_with('$'))
+        .collect();
+    assert_eq!(got, RMSLOCK, "RMSLOCK");
+}
+
+/// What RMSLOCK must print: the steps and their statuses, RMS$_NORMAL,
+/// RLK, RNL, OK_ALK, OK_RLK and OK_RRL.
+const RMSLOCK: &[&str] = &[
+    "A GET K1 ULK 00010001",
+    "A GET K2 ULK 00010001",
+    "B GET K1 000182AA",
+    "B GET K2 000182AA",
+    "A RELEASE K1 00010001",
+    "B GET K1 00010001",
+    "A FREE 00010001",
+    "A FREE 000181A0",
+    "B GET K2 00010001",
+    "A FIND K3 00010001",
+    "A GET 00018039",
+    "A GET K4 RLK 00010001",
+    "B GET K4 NLK 00018021",
+    "B GET K4 RRL 00018029",
+    "B UPDATE 000181A0",
+    "A PUT K6 ULK 00010001",
+    "B GET K6 000182AA",
+    "A FREE 00010001",
+    "B GET K6 00010001",
+    "A GET K5 REA 00010001",
+    "B GET K5 REA 00010001",
+    "B UPDATE 000181A0",
+    "RMSLOCK done 00010001",
+];
+
 /// RMSRAND's file: its alternate keys' values. Key 2 follows key 0, so
 /// that an $UPDATE, which may not change it, keeps it.
 const ALT1: [&str; 6] = ["ALPHA", "BRAVO", "DELTA", "ECHO ", "GAMMA", "OMEGA"];

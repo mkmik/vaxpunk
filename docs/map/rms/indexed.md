@@ -67,9 +67,10 @@ note = "PRD-0008 non-goal: refused with RMS$_PLV; CONVERT on OpenVMS makes them 
 [[feature]]
 id = "shared"
 title = "Shared access with bucket and record locks"
-status = "todo"
+status = "done"
 needs = ["/rms/sharing#record-locks"]
-note = "PRD-0008 step 9"
+refs = ["docs/adr/0046-shared-indexed-files-and-record-locks.md"]
+note = "PRD-0008 step 9: writers in CW, record locks, the other opens kept in step"
 
 [[needs]]
 on = "/rms/core"

@@ -67,7 +67,7 @@ same commit; `todography lint` checks it.
 | [ADR-0033](adr/0033-pseudo-terminals-are-a-port-of-the-terminal-driver.md) | A pseudo terminal, FTAn, is a third port of the terminal driver, cloned from FTA0:, and the PTD$ routines are $QIO calls in the vector | Proposed; FTA0: and the unit numbers superseded by ADR-0044 |
 | [ADR-0034](adr/0034-forms-grammar-as-data-and-form-files-as-trees.md) | FORMS has IFDL's grammar as data, and a .FORM file is the tree it parses, with the names of its rules | Proposed |
 | [ADR-0035](adr/0035-deadlock-search-after-deadlock-wait.md) | A lock request is searched for a deadlock once it has waited DEADLOCK_WAIT seconds, as on VMS | Accepted |
-| [ADR-0036](adr/0036-file-access-arbitration-locks.md) | Each open of a file holds an access arbitration lock on the lock manager, and an open file that is deleted goes at its last close | Proposed |
+| [ADR-0036](adr/0036-file-access-arbitration-locks.md) | Each open of a file holds an access arbitration lock on the lock manager, and an open file that is deleted goes at its last close | Proposed; decision 2's PW for writers that share writing superseded by ADR-0046 for indexed files |
 | [ADR-0037](adr/0037-all-ram-and-address-spaces-filled-on-faults.md) | Every page of RAM is a PFN, address spaces are filled on faults as a TLB is, and a PTE is Alpha's quadword | Accepted |
 | [ADR-0038](adr/0038-io-quotas-charged-with-the-irp.md) | A $QIO's IRP is charged to its process's I/O quotas, and a request past them waits in $QIO and calls the FDT routine again | Proposed |
 | [ADR-0039](adr/0039-xqp-qio-functions.md) | A disk channel takes the XQP's IO$_ACCESS and IO$_MODIFY, which $QIO does in the process once IPL is back down | Proposed |
@@ -77,6 +77,7 @@ same commit; `todography lint` checks it.
 | [ADR-0043](adr/0043-volumes-the-size-of-their-disk.md) | A volume is the size of its disk, in VMS's clusters, with bitmaps of as many blocks as it needs, and the PAL tells the executive the disk's size | Proposed |
 | [ADR-0044](adr/0044-the-io-database.md) | The devices are VMS's I/O database: a DDB per controller on IOC$GL_DEVLIST, its units' UCBs by number, a dispatch table per driver, and units cloned from templates | Proposed |
 | [ADR-0045](adr/0045-spawn-passes-its-context-as-vms-does.md) | SPAWN's subprocess runs LOGINOUT, a known image with CMKRNL, which copies its owner's process logical names, and DCL passes the rest of the context in a mailbox that is the subprocess's SYS$ERROR | Proposed |
+| [ADR-0046](adr/0046-shared-indexed-files-and-record-locks.md) | Writers share an indexed file in CW mode, each open keeps the file's header and prologue in step under FIL$LOCK, and record locks are sublocks of the access arbitration lock | Proposed |
 
 ### PRDs
 

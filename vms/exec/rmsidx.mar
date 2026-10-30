@@ -53,6 +53,7 @@
         $XABALLDEF
 
         .EXTERNAL RMS$ALLOCBUF, RMS$READBKT, RMS$TAKEHDR, FIL$READVBN
+        .EXTERNAL RMS$LOCKREC, RMS$UNLOCKAUTO, RMS$UNLOCKALL
 
 BLOCK = 512
 MAXBKS = 63                             ; the largest bucket, blocks: the prologue's byte
@@ -300,11 +301,12 @@ IDX$KEYDESC::
 
 ; IDX$CONNECT, IDX$REWIND: R7 = an IFAB, R10 = a RAB. The stream goes
 ; before the first record along key RAB$B_KRF, or with RAB$M_EOF past the
-; last. R0 = RMS$_NORMAL, or RMS$_KRF for a key the file hasn't. Uses R0
-; and R11.
+; last, and gives up its record locks. R0 = RMS$_NORMAL, or RMS$_KRF for
+; a key the file hasn't. Uses R0 and R11.
 IDX$CONNECT::
 IDX$REWIND::
         .JSB_ENTRY  SCRATCH=<R11>
+        BSBW    RMS$UNLOCKALL
         MOVL    IFB$L_IDX(R7), R11
         MOVL    #RMS$_KRF, R0
         MOVZBL  RAB$B_KRF(R10), R1
@@ -930,9 +932,12 @@ IDX$DESCEND::
 ; whose key along RAB$B_KRF is RAB$L_KBF's, RAB$B_KSZ bytes of it, or
 ; greater or equal or greater with RAB$M_KGE or RAB$M_KGT, which makes
 ; that key the stream's, or the one at RAB$W_RFA. It becomes the current
-; record, its RFA goes in RAB$W_RFA, and the stream goes on after it.
-; R0 = RMS$_NORMAL, RMS$_RTB, RMS$_EOF, RMS$_RNF, RMS$_KRF, RMS$_KSZ,
-; RMS$_KBF, RMS$_RAC, RMS$_RFA, SS$_ACCVIO, or a bucket's error. IDX$FIND
+; record, locked for the stream if the open locks records (RMS$LOCKREC),
+; its RFA goes in RAB$W_RFA, and the stream goes on after it. R0 =
+; RMS$_NORMAL, an alternate success of the lock's, RMS$_RTB, RMS$_EOF,
+; RMS$_RNF, RMS$_KRF, RMS$_KSZ, RMS$_KBF, RMS$_RAC, RMS$_RFA, the lock's
+; error, SS$_ACCVIO, or a bucket's error; a record another stream's lock
+; refuses is no current record and moves the stream nowhere. IDX$FIND
 ; finds it without reading it, and a $GET by RAB$C_SEQ after reads it.
 ; Uses R0-R6, R8, R9, R11.
 IDX$FIND::
@@ -965,7 +970,7 @@ IDX$GET::
         CMPL    R0, R4
         BGTRU   20$
         MOVW    R0, RAB$W_RSZ(R10)
-        MOVL    #RMS$_NORMAL, R0
+        MOVL    X$L_LKSTS(R11), R0
         RSB
 20$:    MOVL    R0, RAB$L_STV(R10)
         MOVW    R4, RAB$W_RSZ(R10)
@@ -1015,11 +1020,15 @@ LOCATE:
 30$:    MOVL    #RMS$_RFA, R0           ; by RFA
         MOVL    RAB$L_RFA0(R10), R1
         BEQL    90$
-        MOVL    R1, X$L_CTXVBN(R11)
-        MOVW    RAB$W_RFA4(R10), X$W_CTXID(R11)
-        CLRL    X$L_CTXSVBN(R11)
-        BSBW    FETCHCTX
+        MOVZWL  RAB$W_RFA4(R10), R1
+        MOVL    RAB$L_RFA0(R10), R0
+        BSBW    IDX$FETCH
         BLBC    R0, 80$
+        BSBW    LOCKIT
+        BLBC    R0, 90$
+        MOVL    W$L_RRVVBN(R8), X$L_CTXVBN(R11)
+        MOVW    W$L_RRVID(R8), X$W_CTXID(R11)
+        CLRL    X$L_CTXSVBN(R11)
         BSBW    CTXKEY                  ; its key along the stream's key
         BLBC    R0, 90$
         BRB     70$
@@ -1036,10 +1045,14 @@ LOCATE:
         BRB     60$
 58$:    BSBW    FETCHCTX
         BLBC    R0, 80$
+        BSBW    LOCKIT
+        BLBC    R0, 90$
         BRB     70$
 59$:    MOVL    #RMS$_EOF, R0
         RSB
-60$:    CMPB    RAB$B_RAC(R10), #RAB$C_KEY      ; by key: the stream's key now
+60$:    BSBW    LOCKIT
+        BLBC    R0, 90$
+        CMPB    RAB$B_RAC(R10), #RAB$C_KEY      ; by key: the stream's key now
         BNEQ    65$
         MOVB    RAB$B_KRF(R10), X$B_KRF(R11)
 65$:    BSBW    IDX$SETCTX              ; the stream's record and key
@@ -1047,7 +1060,7 @@ LOCATE:
         MOVW    X$W_CTXID(R11), X$W_CURID(R11)
         MOVL    X$L_CTXVBN(R11), RAB$L_RFA0(R10)
         MOVW    X$W_CTXID(R11), RAB$W_RFA4(R10)
-        MOVL    #RMS$_NORMAL, R0
+        MOVL    X$L_LKSTS(R11), R0
         RSB
 80$:    CMPL    R0, #RMS$_EOF           ; past the last: there it stays,
         BNEQ    90$                     ; but a key not found moves nothing
@@ -1056,6 +1069,32 @@ LOCATE:
         MOVB    #X$C_EOF, X$B_STATE(R11)
         RSB
 85$:    MOVL    #RMS$_RNF, R0
+90$:    RSB
+
+; LOCKIT: R7 = an IFAB, R10 = its RAB, R11 = its state, R8 = the walk at
+; the record a $GET or $FIND found. Locks it for the stream (RMS$LOCKREC),
+; the lock's success in X$L_LKSTS; if that waited, without FIL$LOCK,
+; finds the record again by its RFA: R8 = walk 1 at it. R0 =
+; RMS$_NORMAL, the lock's error, or RMS$_RNF if the record went while it
+; waited. Uses R0-R4, R8.
+LOCKIT:
+        .JSB_ENTRY  OUTPUT=<R8>, SCRATCH=<R2, R3, R4>
+        MOVL    #RMS$_NORMAL, X$L_LKSTS(R11)
+        MOVL    W$L_RRVVBN(R8), R0
+        MOVZWL  W$L_RRVID(R8), R1
+        CLRL    R2
+        BSBW    RMS$LOCKREC
+        BLBC    R0, 90$
+        MOVL    R0, X$L_LKSTS(R11)
+        CMPL    R0, #RMS$_OK_WAT
+        BNEQ    80$
+        MOVL    W$L_RRVVBN(R8), R0      ; it waited: the record again
+        MOVZWL  W$L_RRVID(R8), R1
+        BSBW    IDX$FETCH
+        BLBS    R0, 80$
+        BSBW    RMS$UNLOCKAUTO          ; gone
+        RSB
+80$:    MOVL    #RMS$_NORMAL, R0
 90$:    RSB
 
 ; KEYARG: R10 = a RAB, R11 = an indexed file's state. Copies the key

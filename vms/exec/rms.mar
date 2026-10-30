@@ -47,13 +47,17 @@
 ; (docs/adr/0036-file-access-arbitration-locks.md): an open another's
 ; lock blocks fails with RMS$_FLK. $ERASE of a file that is open takes its
 ; directory entry and marks it for delete, and the last stream to close it
-; deletes it.
+; deletes it. Writers of an indexed file that share writing open it
+; together, and its records are locked as a stream reads them
+; (RMS$LOCKREC, docs/adr/0046-shared-indexed-files-and-record-locks.md);
+; a service that changes a file gives its other opens its header
+; (RMS$SYNC).
 ;
 ; ponytail: the services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
-; file, and one writer: no bucket or record locks; no concealed devices,
-; ASTs or completion routines. $SEARCH finds its place again from the resultant
+; file; one writer of any other file; no bucket locks, which FIL$LOCK
+; makes needless; no concealed devices, ASTs or completion routines. $SEARCH finds its place again from the resultant
 ; string it made last, as VMS's XQP does with FIB$L_WCC, so a wildcard
 ; $SEARCH needs one; VMS's RMS keeps its own copy.
 ;
@@ -84,7 +88,7 @@
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
         .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO, FIL$ACLINHERIT
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, LNM$EQUIV
-        .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX, LCK$ENQ, LCK$DEQ
+        .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX, LCK$ENQ, LCK$DEQ, LCK$ENQWK
         .EXTERNAL EXE$GQ_SYSTIME, RMS$XABOUT, RMS$FINDXAB
         .EXTERNAL SEQ$OPEN, SEQ$CONNECT, SEQ$GET, SEQ$FIND, SEQ$PUT, SEQ$UPDATE
         .EXTERNAL SEQ$TRUNCATE, SEQ$REWIND, SEQ$FLUSH
@@ -126,6 +130,7 @@ FH2$W_BACKLINK = 66
 FI2$W_REVISION = 20                     ; in the ident area
 FI2$Q_REVDATE = 30
 MAXXAB = 16                             ; XABs in a chain, at most
+RLKEFN = 30                             ; the event flag a wait for a record lock is on: one VMS keeps for itself
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 ; A specification split into its five parts, device, directory, name,
@@ -1984,6 +1989,7 @@ NEWIFAB:
         MOVC5   #0, (R7), #0, #IFB$AB_HDR, (R7)
         POPR    #^M<R4, R5>
         MOVL    #IFB$K_LENGTH, IFB$L_SIZE(R7)
+        CLRL    IFB$L_RLB(R7)
         MOVL    F11$GL_VCB, IFB$L_VCB(R7)
         MNEGL   #1, IFB$L_CUR(R7)
         MOVL    #RMS$_NORMAL, R0
@@ -2011,11 +2017,13 @@ RMS$ALLOCBUF::
         MOVL    #RMS$_DME, R0
         RSB
 
-; FREEIFAB: R7 = an IFAB. Gives back its access arbitration lock, and it
-; and its buffer to the pool, and R0 as it was. Uses R1-R3.
+; FREEIFAB: R7 = an IFAB. Gives back its record locks, its access
+; arbitration lock, and it and its buffer to the pool, and R0 as it was.
+; Uses R1-R3.
 FREEIFAB:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R0
+        BSBW    RMS$UNLOCKALL
         MOVL    IFB$L_LKID(R7), R1
         BSBW    UNLOCKFILE
         MOVL    IFB$L_BUF(R7), R0
@@ -2032,30 +2040,47 @@ FREEIFAB:
 ; F11$GL_VCB's volume, R10 = its FAB. Takes the file's access
 ; arbitration lock, in the mode that access and the sharing FAB$B_SHR
 ; allows others call for, as VMS's XQP does: EX with FAB$M_NIL, or for
-; writing that shares nothing; PW for writing that others may read; PR for
-; reading that others may only read, FAB$M_SHRGET or no sharing at all;
-; CR for reading that others may write. Its ID goes in IFB$L_LKID. R0 =
+; writing that shares nothing; CW for writing that others may write too;
+; PW for writing that others may only read; PR for reading that others
+; may only read, FAB$M_SHRGET or no sharing at all; CR for reading that
+; others may write. Its ID goes in IFB$L_LKID. Those that share with a
+; writer, CW, PW and CR, lock the records they read (IFB$V_RLK). R0 =
 ; RMS$_NORMAL, RMS$_FLK if another open of the file's lock blocks it, or
 ; RMS$_DME. Uses R0-R3.
-; ponytail: writing that others may write too is PW as well, not CW, and
-; so a second writer gets RMS$_FLK, until RMS has bucket and record locks
-; and the writers share the file's header (PRD-0008's step 9); no
-; FAB$M_UPI or FAB$M_MSE.
+; ponytail: CW and record locks for an indexed file's record I/O only:
+; another file's writer that shares writing is PW, so a second one gets
+; RMS$_FLK, until relative files keep their buckets in step as indexed
+; ones do (RMS$SYNC); no FAB$M_UPI or FAB$M_MSE.
 ARBLOCK:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVZBL  FAB$B_SHR(R10), R0
         MOVL    #LCK$K_EXMODE, R1
         BBS     #FAB$V_NIL, R0, 30$
-        BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, IFB$B_FAC(R7)
+        CLRL    R2                      ; R2 = 1 for an indexed file's record I/O
+        BICB3   #^X0F, IFB$AB_HDR+FAT$B_RTYPE(R7), R3
+        CMPB    R3, #FAB$C_IDX
+        BNEQ    5$
+        BITB    #FAB$M_BIO!FAB$M_BRO, IFB$B_FAC(R7)
+        BNEQ    5$
+        MOVL    #1, R2
+5$:     BITB    #FAB$M_PUT!FAB$M_DEL!FAB$M_UPD!FAB$M_TRN, IFB$B_FAC(R7)
         BEQL    10$
         BITB    #FAB$M_SHRGET!FAB$M_SHRPUT!FAB$M_SHRDEL!FAB$M_SHRUPD, R0
         BEQL    30$
         MOVL    #LCK$K_PWMODE, R1
-        BRB     30$
+        BITB    #FAB$M_SHRPUT!FAB$M_SHRDEL!FAB$M_SHRUPD, R0
+        BEQL    20$
+        TSTL    R2
+        BEQL    20$
+        MOVL    #LCK$K_CWMODE, R1
+        BRB     20$
 10$:    MOVL    #LCK$K_CRMODE, R1
         BITB    #FAB$M_SHRPUT!FAB$M_SHRDEL!FAB$M_SHRUPD, R0
-        BNEQ    30$
+        BNEQ    20$
         MOVL    #LCK$K_PRMODE, R1
+        BRB     30$
+20$:    BLBC    R2, 30$                 ; shared with a writer: record locks
+        BISL2   #1@IFB$V_RLK, IFB$L_FLAGS(R7)
 30$:    MOVAB   IFB$AB_HDR(R7), R2
         BSBW    LOCKFILE
         BLBC    R0, 90$
@@ -2127,6 +2152,270 @@ UNLOCKFILE:
         ENBINT
         POPR    #^M<R0, R1, R2, R3>
 90$:    RSB
+
+; RMS$LOCKREC: R7 = an IFAB, R10 = its RAB, R0 = a VBN and R1 = an ID: a
+; record's RFA, R2 = 0 for $GET and $FIND, 1 for $PUT. If the open locks
+; records (IFB$V_RLK), locks the record for the stream as RAB$L_ROP
+; says, as VMS's RMS: a $GET or $FIND drops the stream's lock on its last
+; record first, unless RAB$M_ULK took it; a writer's lock is EX, PW with
+; RAB$M_RLK, PR with RAB$M_REA; with RAB$M_NLK, or by a reader without
+; REA, a $GET or $FIND only asks whether the record may be read, PR then
+; CR, and holds nothing; another stream's lock refuses it, or with
+; RAB$M_RRL lets it read the record anyway, unlocked, or with RAB$M_WAT
+; it waits, without FIL$LOCK. A lock stays until the stream's next
+; operation, or with RAB$M_ULK until $FREE, $RELEASE, $REWIND,
+; $DISCONNECT or $CLOSE. The locks are kernel mode sublocks of the file's
+; access arbitration lock, named by the RFA (RLB$L_ID). R0 =
+; RMS$_NORMAL; RMS$_OK_ALK if the stream holds it already, RMS$_OK_RLK if
+; another holds it but lets it be read, RMS$_OK_WAT after a wait, which
+; may have changed the file; RMS$_RLK with SS$_NOTQUEUED in RAB$L_STV,
+; RMS$_OK_RRL, RMS$_DEADLOCK, RMS$_DME, or RMS$_ENQ with the lock
+; manager's error in RAB$L_STV. Uses R0-R3.
+; ponytail: no RAB$M_TMO: a wait lasts until the lock is granted, or the
+; deadlock search ends it; no RAB$W_ROP_2's NQL, NODLCKWT or NODLCKBLK.
+RMS$LOCKREC::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BBS     #IFB$V_RLK, IFB$L_FLAGS(R7), 5$
+        MOVL    #RMS$_NORMAL, R0
+        RSB
+5$:     PUSHR   #^M<R4, R5, R6>
+        MOVQ    R0, R4                  ; R4 = the VBN, R5 = the ID
+        MOVL    R2, R6                  ; R6 = 1 for $PUT
+        BSBW    FINDRLB
+        TSTL    R2
+        BEQL    10$
+        MOVL    #RMS$_OK_ALK, R0        ; held already
+        BRW     90$
+10$:    TSTL    R6
+        BNEQ    20$
+        BSBW    RMS$UNLOCKAUTO          ; the last record's goes
+        BBS     #RAB$V_NLK, RAB$L_ROP(R10), 50$
+        BBS     #IFB$V_WRITE, IFB$L_FLAGS(R7), 20$
+        BBC     #RAB$V_REA, RAB$L_ROP(R10), 50$ ; a reader asks
+20$:    MOVL    #LCK$K_EXMODE, R0       ; a lock: its mode
+        BBC     #RAB$V_RLK, RAB$L_ROP(R10), 22$
+        MOVL    #LCK$K_PWMODE, R0
+22$:    BBC     #RAB$V_REA, RAB$L_ROP(R10), 24$
+        MOVL    #LCK$K_PRMODE, R0
+24$:    PUSHL   R0
+        MOVQ    R4, R1
+        EXTZV   #RAB$V_WAT, #1, RAB$L_ROP(R10), R3
+        BSBW    RECENQ
+        MOVL    (SP)+, R3               ; R3 = the mode
+        CMPL    R0, #SS$_SYNCH
+        BEQL    30$
+        CMPL    R0, #SS$_NORMAL
+        BNEQ    70$
+        PUSHL   #RMS$_OK_WAT            ; granted after a wait
+        BRB     32$
+30$:    PUSHL   #RMS$_NORMAL
+32$:    MOVL    R1, R0                  ; an RLB for it, first in the list
+        MOVL    #RLB$K_LENGTH, R1
+        PUSHR   #^M<R0, R3>
+        BSBW    EXE$ALONONPAGED
+        POPR    #^M<R1, R3>
+        BLBS    R0, 35$
+        BSBW    UNLOCKFILE              ; no room: it goes
+        TSTL    (SP)+
+        MOVL    #RMS$_DME, R0
+        BRB     90$
+35$:    MOVL    R1, RLB$L_LKID(R2)
+        MOVL    R4, RLB$L_VBN(R2)
+        MOVL    R5, RLB$L_ID(R2)
+        MOVB    R3, RLB$B_MODE(R2)
+        CLRB    RLB$B_AUTO(R2)
+        BBS     #RAB$V_ULK, RAB$L_ROP(R10), 37$
+        MOVB    #1, RLB$B_AUTO(R2)
+37$:    MOVL    IFB$L_RLB(R7), RLB$L_NEXT(R2)
+        MOVL    R2, IFB$L_RLB(R7)
+        MOVL    (SP)+, R0
+        BRB     90$
+50$:    MOVL    #LCK$K_PRMODE, R0       ; asking: may it be read?
+        MOVQ    R4, R1
+        CLRL    R3
+        BSBW    RECENQ
+        CMPL    R0, #SS$_SYNCH
+        BNEQ    55$
+        BSBW    UNLOCKFILE
+        MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+55$:    CMPL    R0, #SS$_NOTQUEUED
+        BNEQ    70$
+        MOVL    #LCK$K_CRMODE, R0       ; locked: by an RLK lock?
+        MOVQ    R4, R1
+        EXTZV   #RAB$V_WAT, #1, RAB$L_ROP(R10), R3
+        BSBW    RECENQ
+        CMPL    R0, #SS$_SYNCH
+        BEQL    60$
+        CMPL    R0, #SS$_NORMAL
+        BNEQ    70$
+        BSBW    UNLOCKFILE
+        MOVL    #RMS$_OK_WAT, R0
+        BRB     90$
+60$:    BSBW    UNLOCKFILE
+        MOVL    #RMS$_OK_RLK, R0
+        BRB     90$
+70$:    MOVL    R0, RAB$L_STV(R10)      ; refused
+        CMPL    R0, #SS$_NOTQUEUED
+        BNEQ    75$
+        MOVL    #RMS$_RLK, R0
+        BBC     #RAB$V_RRL, RAB$L_ROP(R10), 90$
+        MOVL    #RMS$_OK_RRL, R0
+        CLRL    RAB$L_STV(R10)
+        BRB     90$
+75$:    CMPL    R0, #SS$_DEADLOCK
+        BNEQ    77$
+        MOVL    #RMS$_DEADLOCK, R0
+        BRB     90$
+77$:    MOVL    #RMS$_ENQ, R0
+90$:    POPR    #^M<R4, R5, R6>
+        RSB
+
+; RECENQ: R7 = an IFAB, R0 = a lock mode, R1 = a record's VBN, R2 = its
+; ID, R3 = 1 to wait. Asks for the record's lock, a kernel mode sublock
+; of the file's access arbitration lock: never queued, or with R3 = 1
+; queued if it must be, and waited for without FIL$LOCK (LCK$ENQWK). R0 =
+; SS$_SYNCH if it was granted now, SS$_NORMAL after a wait, or the lock
+; manager's refusal: SS$_NOTQUEUED, SS$_DEADLOCK...; R1 = its ID. Uses
+; R0-R3.
+RECENQ:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R4, R5, R6>
+        PUSHL   R1                      ; the name: the ID, then the VBN
+        MOVZWL  R2, -(SP)
+        MOVL    SP, R2
+        SUBL2   #8, SP                  ; the status block
+        MOVL    SP, R5
+        MOVL    R0, R6
+        MOVL    SCH$GL_CURPCB, R4
+        DSBINT  #IPL$_SYNCH
+        CLRL    -(SP)                   ; no blocking AST,
+        PUSHL   IFB$L_LKID(R7)          ; the file's lock its parent,
+        CLRL    -(SP)                   ; no ACB: it completes now or not at all
+        MNEGL   #1, -(SP)               ; the system's
+        CLRL    -(SP)                   ; kernel mode
+        PUSHL   R2
+        PUSHL   #8
+        PUSHL   #LCK$M_NOQUEUE
+        PUSHL   R5
+        PUSHL   R6
+        PUSHL   PCB$L_PID(R4)
+        CALLS   #11, G^LCK$ENQ
+        ENBINT
+        MOVL    4(R5), R1
+        CMPL    R0, #SS$_NOTQUEUED
+        BNEQ    90$
+        BLBC    R3, 90$
+        BSBW    FIL$UNLOCK              ; wait for it, letting the others work
+        MOVL    R6, R0
+        MOVL    #RLKEFN, R1
+        MOVL    #8, R3
+        MOVL    IFB$L_LKID(R7), R4
+        BSBW    LCK$ENQWK
+        BSBW    FIL$LOCK
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        BLBC    R0, 90$
+        MOVZWL  (R5), R0                ; how the wait ended
+        MOVL    4(R5), R1
+90$:    ADDL2   #16, SP
+        POPR    #^M<R4, R5, R6>
+        RSB
+
+; FINDRLB: R7 = an IFAB, R0 = a VBN, R1 = an ID. R2 = the RLB of the
+; stream's lock on that record, or 0, and R3 = the link to it. Keeps
+; every other register.
+FINDRLB:
+        .JSB_ENTRY  OUTPUT=<R2, R3>
+        MOVAL   IFB$L_RLB(R7), R3
+10$:    MOVL    (R3), R2
+        BEQL    90$
+        CMPL    RLB$L_VBN(R2), R0
+        BNEQ    20$
+        CMPL    RLB$L_ID(R2), R1
+        BEQL    90$
+20$:    MOVL    R2, R3                  ; RLB$L_NEXT is the first longword
+        BRB     10$
+90$:    RSB
+
+; FREERLB: R7 = an IFAB, R2 = an RLB of its stream's, R3 = the link to
+; it. Gives back the lock and the RLB. Keeps every register.
+FREERLB:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3>
+        MOVL    RLB$L_NEXT(R2), (R3)
+        MOVL    RLB$L_LKID(R2), R1
+        BSBW    UNLOCKFILE
+        MOVL    R2, R0
+        MOVL    #RLB$K_LENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+        POPR    #^M<R0, R1, R2, R3>
+        RSB
+
+; RMS$UNLOCKAUTO: R7 = an IFAB. Drops the stream's lock that its next
+; operation drops, the one RAB$M_ULK didn't take, if it has one. Keeps
+; every register.
+RMS$UNLOCKAUTO::
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3>
+        MOVAL   IFB$L_RLB(R7), R3
+10$:    MOVL    (R3), R2
+        BEQL    90$
+        TSTB    RLB$B_AUTO(R2)
+        BNEQ    20$
+        MOVL    R2, R3
+        BRB     10$
+20$:    BSBW    FREERLB
+90$:    POPR    #^M<R2, R3>
+        RSB
+
+; RMS$UNLOCKALL: R7 = an IFAB. Drops every record lock its stream holds,
+; as $FREE. R0 = RMS$_NORMAL, or RMS$_RNL if it held none. Keeps every
+; other register.
+RMS$UNLOCKALL::
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3>
+        MOVL    #RMS$_RNL, R0
+10$:    MOVAL   IFB$L_RLB(R7), R3
+        MOVL    (R3), R2
+        BEQL    90$
+        BSBW    FREERLB
+        MOVL    #RMS$_NORMAL, R0
+        BRB     10$
+90$:    POPR    #^M<R2, R3>
+        RSB
+
+; RMS$UNLOCKREC: R7 = an IFAB, R0 = a VBN, R1 = an ID: a record's RFA.
+; Drops the stream's lock on it, as $RELEASE. R0 = RMS$_NORMAL, or
+; RMS$_RNL if the stream doesn't hold one. Keeps every other register.
+RMS$UNLOCKREC::
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3>
+        BSBW    FINDRLB
+        MOVL    #RMS$_RNL, R0
+        TSTL    R2
+        BEQL    90$
+        BSBW    FREERLB
+        MOVL    #RMS$_NORMAL, R0
+90$:    POPR    #^M<R2, R3>
+        RSB
+
+; RMS$RECHELD: R7 = an IFAB, R0 = a VBN, R1 = an ID: a record's RFA. R0 =
+; 1 if the stream may change the record: the open locks no records, or
+; the stream holds its lock in PW or EX mode; else 0. Keeps every other
+; register.
+RMS$RECHELD::
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3>
+        BBC     #IFB$V_RLK, IFB$L_FLAGS(R7), 80$
+        BSBW    FINDRLB
+        CLRL    R0
+        TSTL    R2
+        BEQL    90$
+        CMPB    RLB$B_MODE(R2), #LCK$K_PWMODE
+        BLSSU   90$
+80$:    MOVL    #1, R0
+90$:    POPR    #^M<R2, R3>
+        RSB
 
 ; RMS$FILEBUSY: R2 = a file's header, on F11$GL_VCB's volume. R0 =
 ; RMS$_NORMAL if no stream has it open, RMS$_FLK if one has, or RMS$_DME.
@@ -2309,13 +2598,14 @@ GETIFAB:
         RSB
 
 ; CLOSEIFI: R8 = an IFI, R7 = its IFAB, R9 = the current PCB. Closes it:
-; a file opened for writing gets what its buffers hold and its header
-; written, with the revision date and count of a file that changed
-; (ORGFLUSH), and the last stream to close a file $ERASE marked for
-; delete deletes it (DELLAST). R0 = RMS$_NORMAL, or RMS$_WER if they
-; couldn't be. Holding FIL$LOCK. Uses R0 and R1.
+; its record locks go; a file opened for writing gets what its buffers
+; hold and its header written, with the revision date and count of a
+; file that changed (ORGFLUSH), and the last stream to close a file
+; $ERASE marked for delete deletes it (DELLAST). R0 = RMS$_NORMAL, or
+; RMS$_WER if they couldn't be. Holding FIL$LOCK. Uses R0 and R1.
 CLOSEIFI:
         .JSB_ENTRY
+        BSBW    RMS$UNLOCKALL
         PUSHL   #RMS$_NORMAL
         BBC     #IFB$V_WRITE, IFB$L_FLAGS(R7), 20$
         PUSHR   #^M<R2, R3, R4, R5, R6, R8, R9, R10, R11>
@@ -2514,11 +2804,12 @@ RABIFAB:
 90$:    RABDONE
 
 ; $DISCONNECT rab: disconnects the RAB from its file, writing what its
-; buffers hold that the file doesn't.
+; buffers hold that the file doesn't; its record locks go.
         .ENTRY  EXE$DISCONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    RABIFAB
         BLBC    R0, 90$
+        BSBW    RMS$UNLOCKALL
         PUSHL   R10
         BSBW    ORGFLUSH
         MOVL    (SP)+, R10
@@ -2599,10 +2890,13 @@ L2:     RABDONE
 ; the file's header.
         RECORD  FLUSH, FLUSH, FLUSH, FLUSH, BIO=FLUSH
 
-; $FREE rab, $RELEASE rab: give up the stream's record locks; there are
-; none yet: RMS$_RNL. $WAIT rab: every service is done when it returns.
-        RECORD  FREE, RNL, RNL, RNL, BIO=RNL
-        RECORD  RELEASE, RNL, RNL, RNL, BIO=RNL
+; $FREE rab: gives up every record lock the stream holds; RMS$_RNL if
+; it holds none (RMS$UNLOCKALL). $RELEASE rab: gives up its lock on the
+; record at RAB$W_RFA; RMS$_RNL if it doesn't hold that (RMS$UNLOCKREC).
+; Only an indexed file's records are locked. $WAIT rab: every service is
+; done when it returns.
+        RECORD  FREE, RNL, RNL, RECFREE, BIO=RNL
+        RECORD  RELEASE, RNL, RNL, RECRELEASE, BIO=RNL
         RECORD  WAIT, NORMAL, NORMAL, NORMAL, BIO=NORMAL
 
 ; $READ rab, $WRITE rab, $SPACE rab: block I/O (rmsseq.mar).
@@ -2610,8 +2904,21 @@ L2:     RABDONE
         BLOCKIO WRITE
         BLOCKIO SPACE
 
-; IOP, RNL, NORMAL, FLUSH: the record services' routines that only return
-; RMS$_IOP, RMS$_RNL or RMS$_NORMAL, or call ORGFLUSH.
+; IOP, RNL, NORMAL, FLUSH, RECFREE, RECRELEASE: the record services'
+; routines that only return RMS$_IOP, RMS$_RNL or RMS$_NORMAL, or call
+; ORGFLUSH, RMS$UNLOCKALL or RMS$UNLOCKREC.
+RECFREE:
+        .JSB_ENTRY
+        BSBW    RMS$UNLOCKALL
+        RSB
+
+RECRELEASE:
+        .JSB_ENTRY
+        MOVL    RAB$L_RFA0(R10), R0
+        MOVZWL  RAB$W_RFA4(R10), R1
+        BSBW    RMS$UNLOCKREC
+        RSB
+
 IOP:
         .JSB_ENTRY
         MOVL    #RMS$_IOP, R0

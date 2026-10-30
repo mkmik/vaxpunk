@@ -2,7 +2,9 @@
 
 Oct 14, 2026 · @Marko Mikulicic
 
-Proposed. Each RMS `$OPEN` and `$CREATE` takes a lock on its file
+Proposed; decision 2's PW for writers that share writing superseded by
+[ADR-0046](0046-shared-indexed-files-and-record-locks.md) for indexed
+files. Each RMS `$OPEN` and `$CREATE` takes a lock on its file
 through the lock manager, as VMS's XQP does: one kernel mode, system
 resource for each file, in a mode that the access the FAB asks for and
 the sharing it allows decide, never queued. When another open's lock

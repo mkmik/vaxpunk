@@ -598,7 +598,7 @@ MACRO
 
 ! $IFBDEF
 LITERAL
-    IFB$K_LENGTH = 596,  ! the fixed part
+    IFB$K_LENGTH = 600,  ! the fixed part
     IFB$V_WRITE = 0,  ! it may be written: $CREATE made it or $OPEN opened it for that
     IFB$V_DIRTY = 1,  ! the buffer holds what the file hasn't yet
     IFB$V_HDR = 2,  ! the header changed: its end of file
@@ -607,7 +607,9 @@ LITERAL
     IFB$V_PLG = 5,  ! relative: the prologue's end of file changed
     IFB$V_FOUND = 6,  ! the last record service was a $FIND: a sequential $GET reads the record it found
     IFB$V_DATA = 7,  ! indexed: a bucket was written, the end of file goes past the last block
-    IFB$V_MARKDEL = 8;  ! $ERASE deleted it while open: the last to close it deletes its header
+    IFB$V_MARKDEL = 8,  ! $ERASE deleted it while open: the last to close it deletes its header
+    IFB$V_RLK = 9,  ! record locking: others may write the file, or it is written and others may read it
+    RLB$K_LENGTH = 32;  ! a pool block, in 16-byte units
 MACRO
     IFB$L_POS = 0, 0, 32, 0 %,  ! sequential: the next byte; relative: the next record number
     IFB$L_EOF = 4, 0, 32, 0 %,  ! sequential: the bytes in the file; relative: the VBN after the last bucket
@@ -635,7 +637,14 @@ MACRO
     IFB$L_BUFSZ = 72, 0, 32, 0 %,  ! the buffer's size, to give it back
     IFB$L_LKID = 76, 0, 32, 0 %,  ! the file's access arbitration lock, or 0
     IFB$AB_HDR = 80, 0, 0, 0 %,  ! the file's header
-    IFB$W_VERLIMIT = 592, 0, 16, 0 %;  ! its name's version limit, in its directory
+    IFB$W_VERLIMIT = 592, 0, 16, 0 %,  ! its name's version limit, in its directory
+    IFB$L_RLB = 596, 0, 32, 0 %,  ! the record locks the stream holds: a list of RLBs, or 0
+    RLB$L_NEXT = 0, 0, 32, 0 %,  ! the next of the stream's, or 0
+    RLB$L_LKID = 4, 0, 32, 0 %,  ! the lock
+    RLB$L_ID = 8, 0, 32, 0 %,  ! the lock's name: the RFA's ID, a longword,
+    RLB$L_VBN = 12, 0, 32, 0 %,  ! and VBN
+    RLB$B_MODE = 16, 0, 8, 0 %,  ! the mode it is held in
+    RLB$B_AUTO = 17, 0, 8, 0 %;  ! 1 if the stream's next operation drops it, not RAB$M_ULK's
 
 ! $PLGDEF
 LITERAL
@@ -773,10 +782,10 @@ LITERAL
 ! $IDXDEF
 LITERAL
     W$K_LENGTH = 576,
-    X$K_WALK0 = 1928,  ! the walks
-    X$K_WALK1 = 2504,
-    X$K_WALK2 = 3080,
-    X$K_LENGTH = 3656,
+    X$K_WALK0 = 1932,  ! the walks
+    X$K_WALK1 = 2508,
+    X$K_WALK2 = 3084,
+    X$K_LENGTH = 3660,
     X$C_BOF = 0,  ! before the first record
     X$C_AFTER = 1,  ! after the stream's record
     X$C_AT = 2,  ! at it: a $FIND found it
@@ -848,6 +857,7 @@ MACRO
     X$L_SLOTS = 1916, 0, 32, 0 %,  ! their slots, S$K_LENGTH each
     X$L_TICK = 1920, 0, 32, 0 %,  ! uses of them so far, for the least recently used
     X$L_PLG = 1924, 0, 32, 0 %,  ! the prologue's version, 1, 2 or 3
+    X$L_LKSTS = 1928, 0, 32, 0 %,  ! what locking the record $GET or $FIND found said: RMS$_NORMAL or an alternate success
     S$L_VBN = 0, 0, 32, 0 %,  ! the bucket, 0 if the slot is empty
     S$L_SIZE = 4, 0, 32, 0 %,  ! its bytes
     S$L_USE = 8, 0, 32, 0 %,  ! X$L_TICK when it was last used

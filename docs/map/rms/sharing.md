@@ -6,7 +6,7 @@ kind = "core"
 intent = "goal"
 research = "outline"
 milestone = "m1"
-refs = ["docs/prd/0003-multi-user-vms.md", "docs/prd/0008-rms-record-and-indexed-files.md", "docs/adr/0030-lock-manager-in-the-executive.md", "docs/adr/0036-file-access-arbitration-locks.md", "vms/exec/rms.mar", "https://wasd.vsm.com.au/htbin/helpgate/HELP/SET/RMS_DEFAULT/QUALIFIERS"]
+refs = ["docs/prd/0003-multi-user-vms.md", "docs/prd/0008-rms-record-and-indexed-files.md", "docs/adr/0030-lock-manager-in-the-executive.md", "docs/adr/0036-file-access-arbitration-locks.md", "docs/adr/0046-shared-indexed-files-and-record-locks.md", "vms/exec/rms.mar", "crosstools/ods/fixtures/rms/make/lock.com", "https://wasd.vsm.com.au/htbin/helpgate/HELP/SET/RMS_DEFAULT/QUALIFIERS"]
 
 [[feature]]
 id = "file-sharing"
@@ -35,24 +35,33 @@ note = "PRD-0008 step 9; PRD-0003 tier 3 #23; rms.mar ponytail: one stream per f
 [[feature]]
 id = "record-locks"
 title = "Bucket and record locks; RMS$_RLK; RAB$V_WAT, NLK, RRL, ULK; $FREE and $RELEASE"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["/exec/lock-manager#enq-deq", "#file-sharing"]
-note = "PRD-0008 step 9, with two writers of one file, CW, which ADR-0036 makes PW; $FREE and $RELEASE return RMS$_RNL now"
+refs = ["docs/adr/0046-shared-indexed-files-and-record-locks.md"]
+note = "ADR-0046: record locks for indexed files, writers in CW; no bucket locks under FIL$LOCK; ponytail: no RAB$M_TMO"
+
+[[feature]]
+id = "wait-timeout"
+title = "RAB$M_TMO: a wait for a record lock that ends with RMS$_TMO"
+status = "todo"
+needs = ["#record-locks"]
+note = "ADR-0046 ponytail; RECENQ's wait has no timer"
 
 [[feature]]
 id = "buffer-coherence"
 title = "Each process's buffers kept current when another writes the bucket"
-status = "todo"
+status = "done"
 milestone = "m1"
 needs = ["#record-locks"]
-note = "Matters once buckets are kept between services (t8y:/rms/indexed's bucket-cache)"
+note = "RMS$SYNC: a service that wrote gives the other opens its header and descriptors, and they empty their slots"
 
 [[feature]]
 id = "query-locking"
 title = "Query locking and the contention policy, SET RMS_DEFAULT/QUERY_LOCK"
 status = "todo"
 needs = ["#record-locks"]
+note = "Readers and RAB$M_NLK query (RMS$LOCKREC); no NQL, FAB$M_NQL or SET RMS_DEFAULT/QUERY_LOCK"
 
 [[needs]]
 on = "/rms/core"
@@ -82,11 +91,13 @@ the same locks work across nodes.
 vaxpunk arbitrates opens as VMS does, through the lock manager
 ([ADR-0036](../../adr/0036-file-access-arbitration-locks.md)): readers
 share a file, a writer excludes the opens that don't allow it, and
-`$ERASE` of an open file deletes it at its last close. But one writer at
-a time: with one stream per file and no record locks, a writer that
-allows others to write still gets the file to itself. `$FREE` and
-`$RELEASE` exist and say there is no lock (`RMS$_RNL`). Record locks are
-PRD-0008's step 9: its test is two sessions updating different records
-of one file, and `%RMS-E-RLK` on the same record
-([PRD-0003](../../prd/0003-multi-user-vms.md),
-[PRD-0008](../../prd/0008-rms-record-and-indexed-files.md)).
+`$ERASE` of an open file deletes it at its last close. Writers of an
+indexed file that let others write share it, in CW, and its records are
+locked as VMS's RMS locks them, with `RMS$_RLK`, `RAB$M_WAT`, `NLK`,
+`RRL`, `RLK`, `REA` and `ULK`, `$FREE` and `$RELEASE`
+([ADR-0046](../../adr/0046-shared-indexed-files-and-record-locks.md)):
+the boot test runs OpenVMS's `LOCK.COM` and gets what it said, and a
+SPAWNed process's `READ/WAIT` waits for its parent's lock. Services
+still run one at a time under `FIL$LOCK`, so there are no bucket locks;
+a service that writes gives the file's other opens what changed. A
+relative file still has one writer at a time, and a wait no timeout.

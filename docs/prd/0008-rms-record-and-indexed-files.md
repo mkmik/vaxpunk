@@ -230,9 +230,12 @@ instead, `RAB$V_NLK` and `RAB$V_RRL` to read past it, `RAB$V_ULK` with
 
 Each step ends in something you can run or look at.
 
-Steps 1 to 8 are done; step 9 builds on PRD-0003's step 7, whose access
-arbitration lets one writer at a time open a file
-([ADR-0036](../adr/0036-file-access-arbitration-locks.md)).
+Steps 1 to 9 are done, step 9 for indexed files: writers that share
+writing open them together, in CW, with record locks
+([ADR-0046](../adr/0046-shared-indexed-files-and-record-locks.md)); a
+relative file still has one writer at a time
+([ADR-0036](../adr/0036-file-access-arbitration-locks.md)), and one
+stream per file.
 `boot/tests/rms.rs` checks each against the fixtures and a model, and
 the reports `ANALYZE/RMS_FILE` and `DIRECTORY/FULL` write matched the
 oracle's on every fixture. DCL's `OPEN`, `READ`, `WRITE` and `CLOSE`
