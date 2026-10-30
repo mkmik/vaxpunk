@@ -24,7 +24,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use ods_image::rms::fdl;
+use ods_image::rms::{self, fdl};
 use ods_image::{Conversion, Image, InitParams, Mode, Severity};
 
 /// The fixtures: file, its keys.
@@ -36,6 +36,25 @@ const FILES: &[(&str, usize)] = &[
     ("comp.idx", 1),
     ("idxm.idx", 2),
     ("uaf.idx", 4),
+    ("p1.idx", 2),
+    ("p2.idx", 2),
+    ("p2b.idx", 1),
+    ("p2i.idx", 3),
+    ("p2m.idx", 2),
+    ("col1c.idx", 2),
+    ("col6c.idx", 2),
+    ("col8.idx", 4),
+    ("col9.idx", 2),
+    ("rc1.idx", 3),
+    ("rc2.idx", 3),
+    ("rc4.idx", 3),
+    ("rcb1.idx", 3),
+    ("rcb2.idx", 3),
+    ("rcb3.idx", 3),
+    ("pd1.idx", 3),
+    ("pd2.idx", 2),
+    ("pd3.idx", 1),
+    ("pkn.idx", 8),
     ("rel.rel", 1),
     ("relf.rel", 1),
 ];
@@ -190,13 +209,45 @@ fn fixtures() {
 
 /// make.com's conversions: output, FDL, input, qualifiers, keys. Not
 /// REL.REL's, which DCL's READ/DELETE and WRITE/UPDATE change after.
+/// IDX63 is IDX1 in buckets of 63 blocks, the most a prologue allows,
+/// with IDX1's records; PD3N and PKNN have the packed decimal fixtures'
+/// records and keys, put in the order of their primary key.
 const CONVERSIONS: &[(&str, &str, &str, &str, usize)] = &[
     ("IDX1.IDX", "IDX1.FDL", "DATA.TXT", "", 2),
     ("IDXC.IDX", "IDXC.FDL", "DATA.TXT", "", 2),
     ("IDXF.IDX", "IDXF.FDL", "FIXD.TXT", "/PAD", 3),
     ("COMP.IDX", "COMP.FDL", "COMP.TXT", "", 1),
     ("RELF.REL", "RELF.FDL", "FIXD.TXT", "/PAD", 1),
+    ("IDX63.IDX", "IDX63.FDL", "DATA.TXT", "", 2),
+    ("PD3N.IDX", "PD3.FDL", "PD3.IDX", "", 1),
+    ("PKNN.IDX", "PKN.FDL", "PKN.IDX", "", 8),
+    ("P1N.IDX", "P1.FDL", "DATA.TXT", "", 2),
+    ("P2N.IDX", "P2.FDL", "DATA.TXT", "", 2),
+    ("P2BN.IDX", "P2B.FDL", "BIG.TXT", "", 1),
+    ("P2IN.IDX", "P2I.FDL", "P2I.IDX", "", 3),
 ];
+
+/// An FDL file or input of make's, or IDXn.FDL, IDX1.FDL with n-block
+/// buckets, or BIG.TXT, as MAKE.COM writes it.
+fn fdl_text(make: &Path, name: &str) -> Vec<u8> {
+    if name == "BIG.TXT" {
+        let ys = "y".repeat(50);
+        return (1..=3000)
+            .map(|i| format!("B{:07} {}\n", i * 2, &ys[..i % 50]))
+            .collect::<String>()
+            .into_bytes();
+    }
+    let blocks = name
+        .strip_prefix("IDX")
+        .and_then(|n| n.strip_suffix(".FDL"));
+    if let Some(blocks) = blocks.filter(|n| n.parse::<u8>().is_ok()) {
+        let idx1 = fs::read_to_string(make.join("idx1.fdl")).unwrap();
+        return idx1
+            .replace("BUCKET_SIZE\t1", &format!("BUCKET_SIZE\t{blocks}"))
+            .into_bytes();
+    }
+    fs::read(make.join(name.to_lowercase())).unwrap()
+}
 
 #[test]
 fn convert() {
@@ -216,7 +267,23 @@ fn convert() {
             if vol.lookup(&spec).is_ok() {
                 continue;
             }
-            let data = fs::read(fixtures.join("make").join(file.to_lowercase())).unwrap();
+            if file.ends_with(".IDX") {
+                // A fixture, with its FDL's attributes.
+                let name = file.to_lowercase();
+                let data = fs::read(fixtures.join(&name)).unwrap();
+                let text = fs::read_to_string(fixtures.join(name.replace(".idx", ".fdl"))).unwrap();
+                let attrs = fdl::parse(&text).unwrap().record_attrs();
+                vol.copy_in(
+                    &mut &data[..],
+                    &spec,
+                    Conversion::Binary,
+                    Some(data.len() as u64),
+                    Some(attrs),
+                )
+                .unwrap();
+                continue;
+            }
+            let data = fdl_text(&fixtures.join("make"), file);
             vol.copy_in(
                 &mut &data[..],
                 &spec,
@@ -227,6 +294,112 @@ fn convert() {
             .unwrap();
         }
     }
+    // COL8, collated keys, and its records, which CONVERT/MERGE puts again.
+    for (name, conv) in [
+        ("COL8.IDX", Conversion::Binary),
+        ("COLDATA.TXT", Conversion::LinesToRecords),
+    ] {
+        let data = fs::read(fixtures.join(if conv == Conversion::Binary {
+            "col8.idx"
+        } else {
+            "make/coldata.txt"
+        }))
+        .unwrap();
+        let attrs = (conv == Conversion::Binary).then(|| {
+            fdl::parse(&fs::read_to_string(fixtures.join("col8.fdl")).unwrap())
+                .unwrap()
+                .record_attrs()
+        });
+        vol.copy_in(
+            &mut &data[..],
+            &format!("[000000]{name}"),
+            conv,
+            Some(data.len() as u64),
+            attrs,
+        )
+        .unwrap();
+    }
+    // RC1 and RCB1, OpenVMS's files with deleted records, for RECLAIM;
+    // P2W, P2 to be written as MAKE.COM's P2M was.
+    for (name, file) in [("rc1", "RC1"), ("rcb1", "RCB1"), ("p2", "P2W")] {
+        let data = fs::read(fixtures.join(format!("{name}.idx"))).unwrap();
+        let text = fs::read_to_string(fixtures.join(format!("{name}.fdl"))).unwrap();
+        vol.copy_in(
+            &mut &data[..],
+            &format!("[000000]{file}.IDX"),
+            Conversion::Binary,
+            Some(data.len() as u64),
+            Some(fdl::parse(&text).unwrap().record_attrs()),
+        )
+        .unwrap();
+    }
+    // IDS.IDX: a bucket with three records, which has given IDs up to
+    // 65532 (BKT$W_NXTRECID patched): its last IDs, then splits.
+    let spec = fdl::parse(IDS_FDL).unwrap().spec;
+    let recs: Vec<_> = [10, 20, 30].map(|k| format!("B{k:07} ids")).to_vec();
+    let mut data = rms::build(&spec, &recs).unwrap();
+    let ldvbn = u32::from_le_bytes(data[84..88].try_into().unwrap()) as usize;
+    data[(ldvbn - 1) * 512 + 6..][..2].copy_from_slice(&65533u16.to_le_bytes());
+    vol.copy_in(
+        &mut &data[..],
+        "[000000]IDS.IDX",
+        Conversion::Binary,
+        Some(data.len() as u64),
+        Some(spec.record_attrs((data.len() / 512) as u32)),
+    )
+    .unwrap();
+    // DATAX.TXT: DATA.TXT's records, each with a ! after it.
+    let datax: String = fs::read_to_string(fixtures.join("make/data.txt"))
+        .unwrap()
+        .lines()
+        .map(|l| format!("{l}!\n"))
+        .collect();
+    vol.copy_in(
+        &mut datax.as_bytes(),
+        "[000000]DATAX.TXT",
+        Conversion::LinesToRecords,
+        Some(datax.len() as u64),
+        None,
+    )
+    .unwrap();
+    // SPL.FDL: prologue 1, 8-byte FIX records, 8-block buckets, which run
+    // out of byte IDs before room.
+    let fdl = "FILE\n\tORGANIZATION\tindexed\nRECORD\n\tFORMAT\tfixed\n\tSIZE\t8\nAREA 0\n\tBUCKET_SIZE\t8\nKEY 0\n\tPROLOG\t1\n\tSEG0_LENGTH\t8\n\tSEG0_POSITION\t0\n\tTYPE\tstring\n";
+    vol.copy_in(
+        &mut fdl.as_bytes(),
+        "[000000]SPL.FDL",
+        Conversion::LinesToRecords,
+        Some(fdl.len() as u64),
+        None,
+    )
+    .unwrap();
+    let fdl = fdl_text(&fixtures.join("make"), "IDX10.FDL");
+    vol.copy_in(
+        &mut &fdl[..],
+        "[000000]IDX10.FDL",
+        Conversion::LinesToRecords,
+        Some(fdl.len() as u64),
+        None,
+    )
+    .unwrap();
+    let com = p2w_com();
+    vol.copy_in(
+        &mut com.as_bytes(),
+        "[000000]P2W.COM",
+        Conversion::LinesToRecords,
+        Some(com.len() as u64),
+        None,
+    )
+    .unwrap();
+    let com = reclaim_com();
+    vol.copy_in(
+        &mut com.as_bytes(),
+        "[000000]RECLAIM.COM",
+        Conversion::LinesToRecords,
+        Some(com.len() as u64),
+        None,
+    )
+    .unwrap();
     let com = idxm_com();
     vol.copy_in(
         &mut com.as_bytes(),
@@ -248,7 +421,13 @@ fn convert() {
             if said.contains("-F-") {
                 failed.push(format!("CONVERT {out}: {said}"));
             }
-            let stem = out.split('.').next().unwrap().to_lowercase();
+            let stem = match out.split('.').next().unwrap() {
+                "IDX63" => "idx1".to_string(),
+                stem if stem.starts_with('P') && stem.ends_with('N') => {
+                    stem[..stem.len() - 1].to_lowercase()
+                }
+                stem => stem.to_lowercase(),
+            };
             for key in 0..*keys {
                 let got = vax.command(&format!("RMSDUMP {out} {key}"), "\n$ ");
                 let got: Vec<_> = got
@@ -270,6 +449,173 @@ fn convert() {
             if !report.contains("The analysis uncovered NO errors.") {
                 failed.push(format!("ANALYZE/RMS_FILE {out}: {report}"));
             }
+        }
+        // COL8 converted, its collating tables made again from $DISPLAY's;
+        // and each record again, after its copy, along every collated key.
+        vax.command("COPY COL8.IDX COL8M.IDX", "\n$ ");
+        for cmd in [
+            "CONVERT COL8.IDX COL8C.IDX",
+            "CONVERT/MERGE COLDATA.TXT COL8M.IDX",
+        ] {
+            let said = vax.command(cmd, "\n$ ");
+            if said.contains("-F-") || said.contains("-E-") {
+                failed.push(format!("{cmd}: {said}"));
+            }
+        }
+        for (out, times) in [("COL8C.IDX", 1), ("COL8M.IDX", 2)] {
+            for key in 0..4 {
+                let got = vax.command(&format!("RMSDUMP {out} {key}"), "\n$ ");
+                let got: Vec<_> = got
+                    .lines()
+                    .skip(1)
+                    .take_while(|l| !l.starts_with("RMSDUMP: "))
+                    .collect();
+                let want =
+                    fs::read_to_string(fixtures.join(format!("col8_key{key}.dump"))).unwrap();
+                let want: Vec<_> = want
+                    .lines()
+                    .flat_map(|l| std::iter::repeat_n(l, times))
+                    .collect();
+                if got != want {
+                    failed.push(format!(
+                        "{out} key {key}: {} records of {}",
+                        got.len(),
+                        want.len()
+                    ));
+                }
+            }
+        }
+        // CONVERT/RECLAIM frees the buckets OpenVMS's does, counts them
+        // as it does, and the records put back go into them.
+        for (file, counts) in [
+            ("RC1.IDX", ["27", "10", "0", "10"]),
+            ("RCB1.IDX", ["105", "46", "1", "47"]),
+        ] {
+            let said = vax.command(&format!("CONVERT/RECLAIM/STATISTICS {file}"), "\n$ ");
+            let want: Vec<String> = [
+                "Total Data Bkts Scanned:",
+                "Data Buckets Reclaimed:",
+                "Index Buckets Reclaimed:",
+                "Total Buckets Reclaimed:",
+            ]
+            .iter()
+            .zip(counts)
+            .map(|(label, n)| format!("{label}{n:>w$}", w = 36 - label.len()))
+            .collect();
+            let got: Vec<String> = said
+                .lines()
+                .filter(|l| l.contains("Bkts") || l.contains("Buckets"))
+                .map(|l| l.chars().take(36).collect())
+                .collect();
+            if got != want {
+                failed.push(format!("CONVERT/RECLAIM {file}: {said}"));
+            }
+            vax.command(&format!("COPY {file} {}", file.replace('1', "1R")), "\n$ ");
+        }
+        vax.command("@RECLAIM", "\n$ ");
+        // Prologue 1 and 2 files written: P2W as OpenVMS's P2M, and P1N
+        // after a record put and deleted 400 times, its bucket's byte IDs
+        // given again and its stubs taken out when it fills.
+        let said = vax.command("@P2W", "\n$ ");
+        if !said.contains("P2W done") {
+            failed.push(format!("@P2W: {said}"));
+        }
+        let got = vax.command("RMSDUMP SPL.IDX 0", "\n$ ");
+        let got: Vec<_> = got
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.starts_with("RMSDUMP: "))
+            .collect();
+        let want: Vec<_> = (1..=300).map(|i| format!("{i:08}")).collect();
+        if got != want {
+            failed.push(format!("SPL.IDX: {} records", got.len()));
+        }
+        let report = vax.command("ANALYZE/RMS_FILE SPL.IDX", "\n$ ");
+        if !report.contains("The analysis uncovered NO errors.") {
+            failed.push(format!("ANALYZE/RMS_FILE SPL.IDX: {report}"));
+        }
+        for (file, stem, keys) in [("P2W.IDX", "p2m", 2), ("P1N.IDX", "p1", 2)] {
+            for key in 0..keys {
+                let got = vax.command(&format!("RMSDUMP {file} {key}"), "\n$ ");
+                let got: Vec<_> = got
+                    .lines()
+                    .skip(1)
+                    .take_while(|l| !l.starts_with("RMSDUMP: "))
+                    .collect();
+                let want =
+                    fs::read_to_string(fixtures.join(format!("{stem}_key{key}.dump"))).unwrap();
+                if got != want.lines().collect::<Vec<_>>() {
+                    failed.push(format!("{file} key {key}: {} records", got.len()));
+                }
+            }
+            let report = vax.command(&format!("ANALYZE/RMS_FILE {file}"), "\n$ ");
+            if !report.contains("The analysis uncovered NO errors.") {
+                failed.push(format!("ANALYZE/RMS_FILE {file}: {report}"));
+            }
+        }
+        // IDS.IDX: IDs 65533 to 65535, then a split for each new record,
+        // that goes first in the new bucket, but before them all.
+        vax.command("OPEN/READ/WRITE F IDS.IDX", "\n$ ");
+        for k in [40, 50, 60, 70, 25, 5] {
+            let said = vax.command(&format!("WRITE F \"B{k:07} ids\""), "\n$ ");
+            if said.contains('%') {
+                failed.push(format!("IDS.IDX: B{k:07}: {said}"));
+            }
+        }
+        vax.command("CLOSE F", "\n$ ");
+        let got = vax.command("RMSDUMP IDS.IDX 0", "\n$ ");
+        let got: Vec<_> = got
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.starts_with("RMSDUMP: "))
+            .collect();
+        let want: Vec<_> = [5, 10, 20, 25, 30, 40, 50, 60, 70]
+            .iter()
+            .map(|k| format!("B{k:07} ids"))
+            .collect();
+        if got != want {
+            failed.push(format!("IDS.IDX: {got:?}"));
+        }
+        let report = vax.command("ANALYZE/RMS_FILE IDS.IDX", "\n$ ");
+        if !report.contains("The analysis uncovered NO errors.") {
+            failed.push(format!("ANALYZE/RMS_FILE IDS.IDX: {report}"));
+        }
+        for (file, stem) in [("RC1.IDX", "rc4"), ("RCB1.IDX", "rcb3")] {
+            for key in 0..3 {
+                let got = vax.command(&format!("RMSDUMP {file} {key}"), "\n$ ");
+                let got: Vec<_> = got
+                    .lines()
+                    .skip(1)
+                    .take_while(|l| !l.starts_with("RMSDUMP: "))
+                    .collect();
+                let want =
+                    fs::read_to_string(fixtures.join(format!("{stem}_key{key}.dump"))).unwrap();
+                if got != want.lines().collect::<Vec<_>>() {
+                    failed.push(format!("{file} key {key} put back: {} records", got.len()));
+                }
+            }
+            let report = vax.command(&format!("ANALYZE/RMS_FILE {file}"), "\n$ ");
+            if !report.contains("The analysis uncovered NO errors.") {
+                failed.push(format!("ANALYZE/RMS_FILE {file}: {report}"));
+            }
+        }
+        // A file read after another of its layout, in the pool the other
+        // gave back, more than one MOVC5 clears: its own records.
+        for cmd in [
+            "CONVERT/FDL=IDX10.FDL DATA.TXT A10.IDX",
+            "CONVERT/FDL=IDX10.FDL DATAX.TXT B10.IDX",
+            "OPEN/READ F A10.IDX",
+            "READ/KEY=\"K0000003\" F R",
+            "CLOSE F",
+            "OPEN/READ F B10.IDX",
+            "READ/KEY=\"K0000003\" F R",
+            "CLOSE F",
+        ] {
+            vax.command(cmd, "\n$ ");
+        }
+        let said = vax.command("WRITE SYS$OUTPUT \"B10: \", R", "\n$ ");
+        if !said.contains("B10: K0000003 BETA x!") {
+            failed.push(format!("B10.IDX read A10.IDX's record: {said}"));
         }
         // COPY copies an indexed file block by block, records and keys.
         vax.command("COPY IDXF.IDX COPY.IDX", "\n$ ");
@@ -319,7 +665,16 @@ fn convert() {
     for out in CONVERSIONS
         .iter()
         .map(|c| c.0)
-        .chain(["COPY.IDX", "IDXM.IDX"])
+        .chain(["COPY.IDX", "IDXM.IDX", "COL8C.IDX", "COL8M.IDX"])
+        .chain([
+            "RC1.IDX",
+            "RC1R.IDX",
+            "RCB1.IDX",
+            "RCB1R.IDX",
+            "IDS.IDX",
+            "P2W.IDX",
+            "SPL.IDX",
+        ])
     {
         let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
         let report = vol.check_file(fid).unwrap();
@@ -327,7 +682,148 @@ fn convert() {
             failed.push(format!("{out}: {:?}", report.findings));
         }
     }
+    // The prologue each CONVERT/FDL made: 1 for string keys, as OpenVMS's.
+    for (out, version) in [
+        ("P1N.IDX", 1),
+        ("P2N.IDX", 1),
+        ("P2BN.IDX", 1),
+        ("P2IN.IDX", 2),
+    ] {
+        let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
+        let mut got = Vec::new();
+        vol.copy_out(fid, &mut got, Conversion::Binary).unwrap();
+        if u16::from_le_bytes([got[0x74], got[0x75]]) != version {
+            failed.push(format!("{out}: not prologue {version}"));
+        }
+    }
+    // What RECLAIM freed is what OpenVMS's did: the same first buckets,
+    // and the same available buckets in the same order.
+    for (out, vms) in [("RC1R.IDX", "rc2.idx"), ("RCB1R.IDX", "rcb2.idx")] {
+        let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
+        let mut got = Vec::new();
+        vol.copy_out(fid, &mut got, Conversion::Binary).unwrap();
+        let want = fs::read(fixtures.join(vms)).unwrap();
+        if freed(&got) != freed(&want) {
+            failed.push(format!(
+                "{out}: {:?}, OpenVMS's {vms} {:?}",
+                freed(&got),
+                freed(&want)
+            ));
+        }
+    }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// An indexed file's keys' first data buckets, and each area's available
+/// buckets, from AREA$L_AVAIL along their BKT$L_NXTBKT.
+fn freed(file: &[u8]) -> (Vec<u32>, Vec<Vec<u32>>) {
+    let long = |at: usize| u32::from_le_bytes(file[at..at + 4].try_into().unwrap());
+    let (mut ldvbn, mut vbn, mut off) = (Vec::new(), 1usize, 0usize);
+    loop {
+        let at = (vbn - 1) * 512 + off;
+        ldvbn.push(long(at + 84));
+        vbn = long(at) as usize;
+        off = u16::from_le_bytes(file[at + 4..at + 6].try_into().unwrap()) as usize;
+        if vbn == 0 {
+            break;
+        }
+    }
+    let (avbn, amax) = (file[0x66] as usize, file[0x67] as usize);
+    let avail = (0..amax)
+        .map(|a| {
+            let at = (avbn - 1 + a / 8) * 512 + a % 8 * 64;
+            let mut list = Vec::new();
+            let mut v = long(at + 8);
+            while v != 0 && list.len() < 1000 {
+                list.push(v);
+                v = long((v as usize - 1) * 512 + 8);
+            }
+            list
+        })
+        .collect();
+    (ldvbn, avail)
+}
+
+/// IDS.IDX's FDL: one key, nothing compressed, one-block buckets.
+const IDS_FDL: &str = "FILE
+\tORGANIZATION\tindexed
+RECORD
+\tFORMAT\tvariable
+\tSIZE\t100
+AREA 0
+\tBUCKET_SIZE\t1
+KEY 0
+\tSEG0_LENGTH\t8
+\tSEG0_POSITION\t0
+\tTYPE\tstring
+\tDATA_KEY_COMPRESSION\tno
+\tDATA_RECORD_COMPRESSION\tno
+\tINDEX_COMPRESSION\tno
+";
+
+/// P2W.COM: MAKE.COM's P2M operations on P2W.IDX, then a record of
+/// P1N.IDX's put and deleted 400 times, and 300 records put into SPL.IDX,
+/// each first in its bucket, which runs out of byte IDs.
+fn p2w_com() -> String {
+    let mut com = String::from("$ OPEN/READ/WRITE F P2W.IDX\n");
+    for i in 1..=60 {
+        com += &format!("$ WRITE F \"K{:07} ZETA added record {i}\"\n", i * 3 + 1);
+    }
+    com += r#"$ READ/KEY="K0000009"/DELETE F R
+$ READ/KEY="K0000012"/DELETE F R
+$ READ/KEY="K0000300"/DELETE F R
+$ READ/KEY="K0000015" F R
+$ WRITE/UPDATE F "K0000015 OMEGA updated, longer than it was before by a lot"
+$ READ/KEY="K0000018" F R
+$ WRITE/UPDATE F "K0000018 ALPHA"
+$ READ/KEY="K0000600" F R
+$ WRITE/UPDATE F "K0000600 BETA changed"
+$ CLOSE F
+$ OPEN/READ/WRITE F P1N.IDX
+$ I = 0
+$ C1:
+$ WRITE F "K0000001 churn"
+$ READ/KEY="K0000001"/DELETE F R
+$ I = I + 1
+$ IF I .LT. 400 THEN GOTO C1
+$ CLOSE F
+$ CREATE/FDL=SPL.FDL SPL.IDX
+$ OPEN/READ/WRITE F SPL.IDX
+$ I = 300
+$ S1:
+$ WRITE F F$FAO("!8ZL", I)
+$ I = I - 1
+$ IF I .GT. 0 THEN GOTO S1
+$ CLOSE F
+$ WRITE SYS$OUTPUT "P2W done"
+"#;
+    com
+}
+
+/// RECLAIM.COM: make/reclaim.com's records put back into RC1.IDX and
+/// RCB1.IDX after RECLAIM.
+fn reclaim_com() -> String {
+    r#"$ OPEN/READ/WRITE F RC1.IDX
+$ I = 300
+$ P1:
+$ WRITE F F$FAO("K!7ZL OMEGA new record number !UL", I, I)
+$ I = I + 1
+$ IF I .LT. 360 THEN GOTO P1
+$ I = 700
+$ P2:
+$ WRITE F F$FAO("K!7ZL OMEGA new record number !UL", I, I)
+$ I = I + 1
+$ IF I .LT. 760 THEN GOTO P2
+$ CLOSE F
+$ OPEN/READ/WRITE F RCB1.IDX
+$ I = 50
+$ T3:
+$ WRITE F F$FAO("!30AS!30AS!30AS!10AS", F$FAO("K!7ZL", I), F$FAO("S!7ZL", I), F$FAO("D!7ZL", I/10), "again")
+$ I = I + 1
+$ IF I .LE. 120 THEN GOTO T3
+$ CLOSE F
+"#
+    .to_string()
 }
 
 /// IDXM.COM: MAKE.COM's IDXM, without its lexical functions, then a
@@ -379,6 +875,153 @@ $ CLOSE/NOLOG O
 "#;
     com
 }
+
+/// LOCK.COM, two and three streams of DCL's on one indexed file in one
+/// process: the commands, their messages and the records they read must
+/// be what OpenVMS said, in LOCK.LOG. Record locks belong to a stream, so
+/// two OPEN/SHARE of one file conflict as two processes would. Then a
+/// subprocess's READ/WAIT waits for the record a stream of the parent
+/// holds, and reads it as the parent's WRITE/UPDATE left it, and one
+/// that waits for its own process's is a deadlock. Last, RMSLOCK tries
+/// the record options DCL doesn't use.
+#[test]
+fn locking() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let fixtures = root.join("crosstools/ods/fixtures/rms");
+    let disk = root.join("out/lock-datadisk.img");
+    let _ = fs::remove_file(&disk);
+    let params = InitParams {
+        label: b"DATA".to_vec(),
+        max_files: 16,
+        ..Default::default()
+    };
+    let mut vol = Image::create(&disk, 4096, &params).unwrap();
+    let lkb = "$ OPEN/READ/WRITE/SHARE B L.IDX\n$ WRITE SYS$OUTPUT \"LKB: waiting\"\n\
+               $ READ/WAIT/KEY=\"K0000006\" B Y\n$ WRITE SYS$OUTPUT \"LKB: read \", Y\n$ CLOSE B\n";
+    for (name, data) in [
+        (
+            "IDX1.FDL",
+            fs::read(fixtures.join("make/idx1.fdl")).unwrap(),
+        ),
+        (
+            "DATA.TXT",
+            fs::read(fixtures.join("make/data.txt")).unwrap(),
+        ),
+        (
+            "LOCK.COM",
+            fs::read(fixtures.join("make/lock.com")).unwrap(),
+        ),
+        ("LKB.COM", lkb.as_bytes().to_vec()),
+    ] {
+        vol.copy_in(
+            &mut &data[..],
+            &format!("[000000]{name}"),
+            Conversion::LinesToRecords,
+            Some(data.len() as u64),
+            None,
+        )
+        .unwrap();
+    }
+    vol.flush().unwrap();
+    drop(vol);
+    let mut vax = Vax::boot(&disk, &root.join("out/lock.log"));
+    vax.command("SET DEFAULT DKB0:[000000]", "\n$ ");
+    // Not the => lines: DCL's $STATUS isn't VMS's yet, a number, and READ
+    // leaves RMS's, not %X00030001; and of OPEN's error, not the file's
+    // name, which VMS gives as its expanded string.
+    let line = |l: &str| match l.strip_prefix("%DCL-E-OPEN") {
+        Some(rest) => format!("%DCL-E-OPEN{}", rest.split(',').next().unwrap()),
+        None => l.to_string(),
+    };
+    let said = vax.command("@LOCK", "\n$ ");
+    let want = fs::read_to_string(fixtures.join("lock.log")).unwrap();
+    let got: Vec<_> = said
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.starts_with('$'))
+        .filter(|l| !l.starts_with("=> "))
+        .map(line)
+        .collect();
+    let want: Vec<_> = want
+        .lines()
+        .filter(|l| !l.starts_with("=> "))
+        .map(line)
+        .collect();
+    for (n, (w, g)) in want.iter().zip(&got).enumerate() {
+        assert_eq!(w, g, "LOCK.COM's line {} isn't OpenVMS's", n + 1);
+    }
+    assert_eq!(want.len(), got.len(), "LOCK.COM's lines");
+
+    vax.command("OPEN/READ/WRITE/SHARE A L.IDX", "\n$ ");
+    vax.command("READ/KEY=\"K0000006\" A X", "\n$ ");
+    let from = vax.text().len();
+    vax.command("SPAWN/NOWAIT @LKB", "\n$ ");
+    vax.wait_for("LKB: waiting", from, 60);
+    sleep(Duration::from_secs(3));
+    vax.command("WRITE/UPDATE A \"K0000006 ALPHA by A\"", "\n$ ");
+    vax.wait_for("LKB: read K0000006 ALPHA by A", from, 60);
+    vax.command("CLOSE A", "\n$ ");
+
+    // A stream that waits for another of its own process's is a deadlock,
+    // which the lock manager finds after DEADLOCK_WAIT, 10 seconds.
+    vax.command("OPEN/READ/WRITE/SHARE A L.IDX", "\n$ ");
+    vax.command("OPEN/READ/WRITE/SHARE B L.IDX", "\n$ ");
+    vax.command("READ/KEY=\"K0000012\" A X", "\n$ ");
+    let said = vax.command("READ/WAIT/KEY=\"K0000012\" B Y", "\n$ ");
+    assert!(
+        said.contains("%RMS-F-DEADLOCK, deadlock detected"),
+        "READ/WAIT: {said}"
+    );
+    vax.command("CLOSE A", "\n$ ");
+    vax.command("CLOSE B", "\n$ ");
+
+    let said = vax.command("RUN RMSLOCK", "\n$ ");
+    let got: Vec<_> = said
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.starts_with('$'))
+        .collect();
+    assert_eq!(got, RMSLOCK, "RMSLOCK");
+}
+
+/// What RMSLOCK must print: the steps and their statuses, RMS$_NORMAL,
+/// RLK, RNL, OK_ALK, OK_RLK and OK_RRL.
+const RMSLOCK: &[&str] = &[
+    "A GET K1 ULK 00010001",
+    "A GET K2 ULK 00010001",
+    "B GET K1 000182AA",
+    "B GET K2 000182AA",
+    "A RELEASE K1 00010001",
+    "B GET K1 00010001",
+    "A FREE 00010001",
+    "A FREE 000181A0",
+    "B GET K2 00010001",
+    "A FIND K3 00010001",
+    "A GET 00018039",
+    "A GET K4 RLK 00010001",
+    "B GET K4 NLK 00018021",
+    "B GET K4 RRL 00018029",
+    "B UPDATE 000181A0",
+    "A PUT K6 ULK 00010001",
+    "B GET K6 000182AA",
+    "A FREE 00010001",
+    "B GET K6 00010001",
+    "A GET K5 REA 00010001",
+    "B GET K5 REA 00010001",
+    "B UPDATE 000181A0",
+    "A GET K6 00010001",
+    "A GET K7 000182B2",
+    "B GET K6 00010001",
+    "A GET K1 ULK 00010001",
+    "A GET K2 00010001",
+    "A GET K1 00018039",
+    "B GET K2 00010001",
+    "A FREE 00010001",
+    "B GET K3 00010001",
+    "A PUT K3 UIF RRL 000182AA",
+    "C GET K1 after D wrote it 00000001",
+    "RMSLOCK done 00010001",
+];
 
 /// RMSRAND's file: its alternate keys' values. Key 2 follows key 0, so
 /// that an $UPDATE, which may not change it, keeps it.
@@ -484,8 +1127,6 @@ fn script(seed: u64, n: usize) -> (String, Vec<String>) {
 
 #[test]
 fn random() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let disk = root.join("out/rmsrand-datadisk.img");
     // RMSRAND_SEED and RMSRAND_OPS run another script; out/rmsrand.want is
     // what it must print, to compare with OpenVMS's.
     let env = |name, default| {
@@ -494,11 +1135,35 @@ fn random() {
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
     };
-    let (text, want) = script(
+    rmsrand(
+        "rmsrand",
+        None,
         env("RMSRAND_SEED", 0x5eed_0008),
         env("RMSRAND_OPS", 6000) as usize,
     );
-    fs::write(root.join("out/rmsrand.want"), want.join("\n") + "\n").unwrap();
+}
+
+/// The same on a prologue 1 file, whose record IDs are bytes, given again.
+#[test]
+fn random_prologue1() {
+    rmsrand("rmsrand1", Some(1), 0x5eed_0101, 4000);
+}
+
+/// Runs RMSRAND on a script of `ops` operations from `seed`, its file of
+/// `prologue` if one is given, and checks what it printed against the
+/// model's, and the file. `name` names the disk and logs in out/.
+fn rmsrand(name: &str, prologue: Option<u8>, seed: u64, ops: usize) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let disk = root.join(format!("out/{name}-datadisk.img"));
+    let (mut text, want) = script(seed, ops);
+    if let Some(p) = prologue {
+        text = format!("V {p}\n{text}");
+    }
+    fs::write(
+        root.join(format!("out/{name}.want")),
+        want.join("\n") + "\n",
+    )
+    .unwrap();
     let _ = fs::remove_file(&disk);
     let params = InitParams {
         label: b"DATA".to_vec(),
@@ -517,7 +1182,7 @@ fn random() {
     vol.flush().unwrap();
     drop(vol);
     let got = {
-        let mut vax = Vax::boot(&disk, &root.join("out/rmsrand.log"));
+        let mut vax = Vax::boot(&disk, &root.join(format!("out/{name}.log")));
         vax.command("SET DEFAULT DKB0:[000000]", "\n$ ");
         vax.command("RMSRAND :== $RMSRAND", "\n$ ");
         vax.command("RMSRAND", "\n$ ")
@@ -536,6 +1201,10 @@ fn random() {
     let fid = vol.lookup("[000000]RAND.IDX").unwrap();
     let report = vol.check_file(fid).unwrap();
     assert!(report.is_sound(), "RAND.IDX: {:?}", report.findings);
+    let mut file = Vec::new();
+    vol.copy_out(fid, &mut file, Conversion::Binary).unwrap();
+    let version = u16::from_le_bytes([file[0x74], file[0x75]]);
+    assert_eq!(version, prologue.unwrap_or(3) as u16, "RAND.IDX's prologue");
 }
 
 /// A volume of 100,000 blocks, three a cluster, which ods makes with 4,100

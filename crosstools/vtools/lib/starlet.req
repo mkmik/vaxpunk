@@ -1097,7 +1097,7 @@ MACRO
     XAB$B_DBS = 13, 0, 8, 0 %,  ! data bucket size
     XAB$L_RVB = 14, 0, 32, 0 %,  ! root VBN
     XAB$B_FLG = 18, 0, 8, 0 %,  ! XAB$M_ flags
-    XAB$B_DTP = 19, 0, 8, 0 %,  ! data type: XAB$C_STG to XAB$C_DBN8
+    XAB$B_DTP = 19, 0, 8, 0 %,  ! data type: XAB$C_STG to XAB$C_DCOL
     XAB$B_NSG = 20, 0, 8, 0 %,  ! segments
     XAB$B_NUL = 21, 0, 8, 0 %,  ! null value
     XAB$B_TKS = 22, 0, 8, 0 %,  ! total key size
@@ -1113,7 +1113,10 @@ MACRO
     XAB$L_DVB = 60, 0, 32, 0 %,  ! first data bucket's VBN
     XAB$B_TYP = 64, 0, 8, 0 %,  ! segment types, 8 bytes
     XAB$B_TYP0 = 64, 0, 8, 0 %,
-    XAB$B_PROLOG = 72, 0, 8, 0 %;  ! prologue level: XAB$C_PRG3
+    XAB$B_PROLOG = 72, 0, 8, 0 %,  ! prologue level: XAB$C_PRG3
+    XAB$L_COLTBL = 76, 0, 32, 0 %,  ! a collated key's table, NCS's, or 0
+    XAB$L_COLSIZ = 80, 0, 32, 0 %,  ! its size
+    XAB$L_COLNAM = 84, 0, 32, 0 %;  ! its name, .ASCIC, 32 bytes, which $DISPLAY gives
 
 ! $XABALLDEF
 LITERAL

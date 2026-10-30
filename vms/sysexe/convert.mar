@@ -16,13 +16,22 @@
 ; to a sequential output, /MERGE to an indexed one. /STATISTICS reports
 ; the records as VMS's does. Returns SS$_NORMAL, or %CONV-F-OPENIN, -OPENOUT
 ; or %CONVERT-F-CREA_ERR with RMS's reason, or the error a $PUT got.
+; CONVERT/RECLAIM file frees the buckets of an indexed file that hold no
+; record, for RMS to use again (RECLAIM).
 ; ponytail: records up to RECSIZE bytes; /STATISTICS's I/O counts, page
 ; faults and CPU time are 0, which the executive doesn't count; its
 ; elapsed time wraps at 429 seconds.
 ;
+        .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
         $SSDEF
+        $SYIDEF
+        $PLGDEF
+        $KEYDEF
+        $AREADEF
+        $BKTDEF
+        $IRCDEF
         $RMSDEF
         $FABDEF
         $RABDEF
@@ -38,10 +47,16 @@
 RECSIZE = 8192
 MAXKEYS = 16
 MAXAREAS = 16
+COLMAX = 1080                           ; a collating table's bytes, at most
+BLOCK = 512
+MAXLVL = 16                             ; RECLAIM: index levels
+MAXID = 61440                           ; RECLAIM: a bucket that gave more IDs stays
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
 CONV$_OPENIN = ^X00B2109C               ; error opening !AS as input
 CONV$_OPENOUT = ^X00B210A4              ; error opening !AS as output
 CONVERT$_CREA_ERR = ^X00B28074          ; error creating work file !AS
+CONV$_NOTIDX = ^X00B280E2               ; file is not an indexed file
+CONV$_PLV = ^X00B2812A                  ; unsupported prolog version
 FDL$_WARNING = ^X00B48058
 
         .PSECT  DATA, NOEXE, WRT, LONG
@@ -72,6 +87,8 @@ SUM:    $XABSUM                         ; an indexed input's keys and areas
 KEYS:   .BLKB   MAXKEYS*XAB$C_KEYLEN    ; their XABs
 AREAS:  .BLKB   MAXAREAS*XAB$C_ALLLEN
 KNAMES: .BLKB   MAXKEYS*32
+COLTBLS:
+        .BLKB   MAXKEYS*COLMAX          ; and collating tables
 REC:    .BLKB   RECSIZE                 ; a record
 PADDED: .BLKB   RECSIZE                 ; one padded
         .ALIGN  LONG
@@ -90,6 +107,7 @@ F_TRUNC = 2                             ; /TRUNCATE
 F_SORT = 3                              ; records through the work file
 F_EXC = 4                               ; an exceptions file is open
 F_FDL = 5                               ; /FDL made the output
+F_KEYS = 6                              ; RECLAIM /KEY: only KEYSEL's keys
 
 M_OPENIN:
         .ASCIC  "%CONV-F-OPENIN, error opening "
@@ -121,10 +139,62 @@ M_DIO:  .ASCIC  <9>"Direct I/O Count: "<9>
 M_PF:   .ASCIC  <9>"Page Faults: "<9><9>
 M_CPU:  .ASCIC  <9>"CPU Time:"
 
+; CONVERT/RECLAIM's
+RFAB:   $FAB    FAC=<BIO,GET,PUT>, NAM=INNAM
+RRAB:   $RAB    FAB=RFAB
+RPLG:   .BLKB   512                     ; a prologue block
+RKD:    .BLKB   KEY$K_BLN               ; the key being reclaimed
+RKVBN:  .LONG   0                       ; where its descriptor is: VBN,
+RKOFF:  .LONG   0                       ; and offset
+RKEY:   .LONG   0                       ; its number
+AVBN:   .LONG   0                       ; the first area descriptor's VBN
+DSZ:    .LONG   0                       ; the key's data buckets' bytes,
+ISZ:    .LONG   0                       ; and index buckets'
+KEYSEL: .BLKB   32                      ; /KEY's keys, a bit each
+CUR:    .LONG   0                       ; buffers: the level 0 bucket looked at,
+PREV:   .LONG   0                       ; the one kept before it,
+TMP:    .LONG   0                       ; another,
+LVLBUF: .BLKL   MAXLVL+1                ; and one for each index level
+VRANGE: .BLKQ   1                       ; their pages, $EXPREG's
+PAGSIZ: .LONG   0
+SYIITEMS:
+        .WORD   4, SYI$_PAGE_SIZE
+        .ADDRESS PAGSIZ
+        .LONG   0
+        .LONG   0
+NSCAN:  .LONG   0                       ; /STATISTICS's counts
+NDATA:  .LONG   0
+NINDEX: .LONG   0
+KA:     .BLKB   256                     ; keys, whole
+KB:     .BLKB   256
+KENC:   .BLKB   260                     ; one compressed
+M_NOTIDX:
+        .ASCIC  "%CONVERT-E-NOTIDX, output file is not an indexed file"
+M_PLV:  .ASCIC  "%CONVERT-E-PLV, unsupported prolog version"
+M_RSTATS:
+        .ASCIC  " RECLAIM Statistics"
+M_RFOR: .ASCIC  "RECLAIM Statistics for key "
+M_RSCAN:
+        .ASCIC  "Total Data Bkts Scanned:"
+M_RDATA:
+        .ASCIC  "Data Buckets Reclaimed:"
+M_RINDEX:
+        .ASCIC  "Index Buckets Reclaimed:"
+M_RTOTAL:
+        .ASCIC  "Total Buckets Reclaimed:"
+M_RBIO: .ASCIC  "    Buffered I/O Count:"
+M_RDIO: .ASCIC  "    Direct I/O Count:"
+M_RPF:  .ASCIC  "    Page Faults:"
+M_RCPU: .ASCIC  "    CPU Time:"
+
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         $GETTIM_S TIMADR=T0
-        BSBW    OPTIONS
+        PRESENT "RECLAIM"
+        BLBC    R0, 5$
+        BSBW    RECLAIM
+        RET
+5$:     BSBW    OPTIONS
         GETVALUE "OUTPUT", OUTSPEC, OUTSPEC
         MOVL    #255, SPEC
         GETVALUE "INPUT", SPEC, SPEC
@@ -456,6 +526,8 @@ LIKEIN:
         MOVB    R0, XAB$B_REF(R1)
         MULL3   #32, R0, R2
         MOVAB   KNAMES(R2), XAB$L_KNM(R1)
+        MULL3   #COLMAX, R0, R2
+        MOVAB   COLTBLS(R2), XAB$L_COLTBL(R1)
         MOVL    R1, (R3)
         MOVAB   XAB$L_NXT(R1), R3
         INCL    R0
@@ -490,7 +562,11 @@ WORKFILE:
         MOVL    (SP), R1
         MOVC3   #8, XAB$B_SIZ0(R1), WKEY+XAB$B_SIZ0
         MOVL    (SP)+, R1
-        MOVB    FAB$B_RFM(R6), WFAB+FAB$B_RFM
+        CLRQ    WKEY+XAB$L_COLTBL       ; collated: its table and size
+        CMPB    XAB$B_BLN(R1), #XAB$C_KEYLEN
+        BLSSU   50$
+        MOVQ    XAB$L_COLTBL(R1), WKEY+XAB$L_COLTBL
+50$:    MOVB    FAB$B_RFM(R6), WFAB+FAB$B_RFM
         MOVW    FAB$W_MRS(R6), WFAB+FAB$W_MRS
         $CREATE FAB=WFAB
         BLBC    R0, 80$
@@ -736,6 +812,856 @@ TWO:
         ADDL3   #^A/0/, (SP)+, R1
         BSBW    LIN$CHAR
         POPR    #^M<R0, R2>
+        RSB
+
+; RECLAIM: CONVERT/RECLAIM file, as VMS's: for each key of an indexed
+; file, or /KEY's, takes out of the index and of its chain each level 0
+; bucket but the last that holds no record, only deleted ones, or no
+; SIDR, and puts it on its area's list of available buckets, AREA$L_AVAIL,
+; which RMS's $PUT takes buckets from before the area's extent (NEWBKT,
+; rmsidxw.mar); an index bucket left without entries goes the same way.
+; Records stay where they are, so every RFA still finds its record.
+; /STATISTICS reports the buckets scanned and freed, once or per /KEY's
+; key. The file must be prologue 3, and RECLAIM's alone. Returns
+; SS$_NORMAL, %CONV-F-OPENIN, %CONVERT-E-NOTIDX or -PLV, or a read's or
+; write's error. Uses R0-R11.
+; ponytail: a bucket whose entry is the last of several in its index
+; bucket stays, as VMS's does; so does one that gave more than MAXID
+; record IDs, which VMS's frees, lest a $PUT that splits into it run out.
+RECLAIM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7>
+        PRESENT "STATISTICS"
+        BLBC    R0, 5$
+        BBSS    #F_STATS, FLAGS, 5$
+5$:     PRESENT "KEY"
+        BLBC    R0, 10$
+        BBSS    #F_KEYS, FLAGS, 7$
+7$:     MOVL    #255, SPEC
+        GETVALUE "KEY", SPEC, SPEC
+        BLBC    R0, 10$
+        BSBW    DECIMAL
+        CMPL    R1, #255
+        BGTRU   7$
+        BBSS    R1, KEYSEL, 7$
+        BRB     7$
+10$:    MOVL    #255, SPEC
+        GETVALUE "INPUT", SPEC, SPEC
+        MOVAB   SPECBUF, RFAB+FAB$L_FNA
+        MOVB    SPEC, RFAB+FAB$B_FNS
+        $OPEN   FAB=RFAB
+        BLBC    R0, 15$
+        $CONNECT RAB=RRAB
+        BLBS    R0, 20$
+15$:    MOVAB   RFAB, R1
+        MOVAB   M_OPENIN, R2
+        MOVAB   M_ASIN, R3
+        BSBW    OPENERR
+        MOVL    #CONV$_OPENIN!INHIB, R0
+        RSB
+20$:    MOVL    #CONV$_NOTIDX!INHIB, R6
+        MOVAB   M_NOTIDX, R7
+        CMPB    RFAB+FAB$B_ORG, #FAB$C_IDX
+        BNEQ    80$
+        MOVL    #1, R0
+        BSBW    RDPLG
+        BLBC    R0, 85$
+        MOVL    #CONV$_PLV!INHIB, R6
+        MOVAB   M_PLV, R7
+        CMPW    RPLG+PLG$W_VER_NO, #PLG$C_VER_3
+        BNEQ    80$
+        MOVZBL  RPLG+PLG$B_AVBN, AVBN
+        $GETSYIW_S ITMLST=SYIITEMS      ; buffers of the largest bucket
+        MOVZBL  RFAB+FAB$B_BKS, R6
+        BNEQ    25$
+        MOVL    #63, R6
+25$:    MULL2   #BLOCK, R6              ; R6 = their bytes
+        MULL3   #MAXLVL+4, R6, R0
+        ADDL2   PAGSIZ, R0
+        DECL    R0
+        DIVL2   PAGSIZ, R0
+        $EXPREG_S PAGCNT=R0, RETADR=VRANGE
+        BLBC    R0, 85$
+        MOVL    VRANGE, R0
+        MOVL    R0, CUR
+        ADDL2   R6, R0
+        MOVL    R0, PREV
+        ADDL2   R6, R0
+        MOVL    R0, TMP
+        CLRL    R1
+30$:    ADDL2   R6, R0
+        MOVL    R0, LVLBUF[R1]
+        AOBLEQ  #MAXLVL, R1, 30$
+        MOVL    #1, RKVBN               ; each key in turn, along their chain
+        CLRL    RKOFF
+        CLRL    RKEY
+40$:    MOVL    RKVBN, R0
+        BSBW    RDPLG
+        BLBC    R0, 85$
+        MOVL    RKOFF, R0
+        MOVC3   #KEY$K_BLN, RPLG(R0), RKD
+        BBC     #F_KEYS, FLAGS, 45$
+        BBC     RKEY, KEYSEL, 50$
+        CLRQ    NSCAN                   ; counted alone
+        CLRL    NINDEX
+        $GETTIM_S TIMADR=T0
+45$:    BSBW    RECLKEY
+        BLBC    R0, 85$
+        BBC     #F_KEYS, FLAGS, 50$
+        BBC     #F_STATS, FLAGS, 50$
+        BSBW    RSTATS
+50$:    MOVZWL  RKD+KEY$W_NOFF, RKOFF
+        MOVL    RKD+KEY$L_IDXFL, RKVBN
+        BEQL    60$
+        INCL    RKEY
+        CMPL    RKEY, #255
+        BLSSU   40$
+60$:    $CLOSE  FAB=RFAB
+        BBS     #F_KEYS, FLAGS, 70$
+        BBC     #F_STATS, FLAGS, 70$
+        BSBW    RSTATS
+70$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    R7, R1                  ; not a file RECLAIM takes
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        MOVL    R6, R0
+85$:    PUSHL   R0
+        $CLOSE  FAB=RFAB
+        MOVL    (SP)+, R0
+        RSB
+
+; RECLKEY: RKD = a key's descriptor. Walks its level 0 chain from its
+; first bucket to the last, which stays, and frees each bucket that holds
+; no record (EMPTY) once the index above lets it go (REMOVEIX): the
+; bucket before it, or the key's first bucket, goes on to the one after
+; it, and the last leads round to the first again. Counts NSCAN, NDATA.
+; R0 = SS$_NORMAL or a read's or write's error. Uses R0-R11.
+RECLKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    #SS$_NORMAL, R0
+        BBS     #KEY$V_INITIDX, RKD+KEY$B_FLAGS, 2$     ; no index yet
+        CMPB    RKD+KEY$B_ROOTLEV, #MAXLVL
+        BLEQU   5$
+2$:     RSB
+5$:     MOVZBL  RKD+KEY$B_DATBKTSZ, R0
+        MULL3   #BLOCK, R0, DSZ
+        MOVZBL  RKD+KEY$B_IDXBKTSZ, R0
+        MULL3   #BLOCK, R0, ISZ
+        MOVL    RFAB+FAB$L_ALQ, R6      ; R6 = buckets at most, against loops
+        MOVL    RKD+KEY$L_LDVBN, R8     ; R8 = the bucket
+        CLRL    R9                      ; R9 = the one kept before it, or 0
+        CLRL    R10                     ; R10 = 1 once the first has gone
+10$:    MOVL    R8, R0
+        MOVL    CUR, R1
+        MOVL    DSZ, R2
+        BSBW    READB
+        BLBC    R0, 90$
+        MOVL    CUR, R11                ; R11 = it
+        BBS     #BKT$V_LASTBKT, BKT$B_BKTCB(R11), 80$
+        INCL    NSCAN
+        MOVL    BKT$L_NXTBKT(R11), R7   ; R7 = the next
+        BSBW    EMPTY
+        BLBC    R0, 50$
+        MOVL    #1, R0                  ; out of the index
+        MOVL    R8, R1
+        MOVL    R7, R2
+        BSBW    REMOVEIX
+        CMPL    R0, #1
+        BEQL    20$
+        TSTL    R0
+        BEQL    50$                     ; it can't go
+        RSB
+20$:    TSTL    R9                      ; out of the chain
+        BNEQ    25$
+        MOVL    R7, RKD+KEY$L_LDVBN     ; the first: the key's first is the next
+        BSBW    WRKD
+        BLBC    R0, 90$
+        MOVL    #1, R10
+        BRB     30$
+25$:    MOVL    PREV, R1
+        MOVL    R7, BKT$L_NXTBKT(R1)
+        MOVL    R9, R0
+        MOVL    DSZ, R2
+        BSBW    WRITEB
+        BLBC    R0, 90$
+30$:    MOVL    R8, R0                  ; then on its area's list
+        MOVL    R11, R1
+        MOVL    DSZ, R2
+        MOVZBL  RKD+KEY$B_DANUM, R3
+        BSBW    FREEBKT
+        BLBC    R0, 90$
+        INCL    NDATA
+        BRB     60$
+50$:    MOVL    R8, R9                  ; kept
+        MOVL    PREV, CUR
+        MOVL    R11, PREV
+60$:    MOVL    R7, R8
+        SOBGTR  R6, 10$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_NORMAL, R0         ; the last: round to the first
+        BLBC    R10, 90$
+        MOVL    RKD+KEY$L_LDVBN, BKT$L_NXTBKT(R11)
+        MOVL    R8, R0
+        MOVL    R11, R1
+        MOVL    DSZ, R2
+        BSBW    WRITEB
+90$:    RSB
+
+; EMPTY: R11 = a level 0 bucket of RKD's key. R0 = 1 if it holds no
+; record: a primary key's has only deleted records, key-only stubs, and
+; deleted RRVs, and IDs left to give; an alternate key's only SIDRs whose
+; pointers are all deleted; else 0. Uses R0-R5.
+EMPTY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    #BKT$K_OVERHDSZ, R2     ; R2 = an entry
+        MOVZWL  BKT$W_FREESPACE(R11), R3
+        TSTL    RKEY
+        BEQL    10$
+2$:     CMPL    R2, R3                  ; a SIDR: its size, its key,
+        BGEQU   80$
+        ADDL3   R11, R2, R0
+        MOVZWL  (R0), R4
+        ADDL2   #2, R2
+        ADDL2   R2, R4                  ; R4 = its end
+        MOVZBL  RKD+KEY$B_KEYSZ, R0
+        BBC     #KEY$V_KEY_COMPR, RKD+KEY$B_FLAGS, 4$
+        MOVZBL  (R11)[R2], R0
+        ADDL2   #2, R0
+4$:     ADDL2   R0, R2
+5$:     CMPL    R2, R4                  ; and its pointers, each deleted
+        BGEQU   2$
+        MOVZBL  (R11)[R2], R1
+        BBC     #IRC$V_DELETED, R1, 90$
+        INCL    R2
+        BBS     #IRC$V_NOPTRSZ, R1, 5$
+        BICL2   #^C3, R1                ; an ID and a VBN
+        ADDL2   #4, R1
+        ADDL2   R1, R2
+        BRB     5$
+10$:    MOVZWL  BKT$W_NXTRECID(R11), R1
+        BEQL    90$
+        CMPL    R1, #MAXID
+        BGTRU   90$
+        MOVZBL  RKD+KEY$B_KEYSZ, R4     ; R4 = a stub's bytes, without a size
+        CLRL    R5                      ; R5 = 1 if records have no size word
+        CMPB    RFAB+FAB$B_RFM, #FAB$C_FIX
+        BNEQ    20$
+        BITB    #KEY$M_KEY_COMPR!KEY$M_REC_COMPR, RKD+KEY$B_FLAGS
+        BNEQ    20$
+        INCL    R5
+20$:    CMPL    R2, R3
+        BGEQU   80$
+        MOVZBL  (R11)[R2], R1           ; its control byte
+        BBC     #IRC$V_DELETED, R1, 90$
+        BICL3   #^C3, R1, R0            ; its header: control, ID, RFA
+        ADDL2   #7, R0
+        ADDL2   R0, R2
+        BBS     #IRC$V_RRV, R1, 20$
+        TSTL    R5
+        BEQL    30$
+        ADDL2   R4, R2                  ; a stub: its key
+        BRB     20$
+30$:    ADDL3   R11, R2, R0             ; a size and the bytes
+        MOVZWL  (R0), R0
+        ADDL2   #2, R2
+        ADDL2   R0, R2
+        BRB     20$
+80$:    MOVL    #1, R0
+        RSB
+90$:    CLRL    R0
+        RSB
+
+; REMOVEIX: R0 = an index level, R1 = a bucket of the level below, R2 =
+; the bucket after it there. Takes the entry that leads to R1 out of the
+; level, as VMS's RECLAIM: not if it is the last of several in its index
+; bucket; at level 1, if the next entry doesn't lead to R2, which then has
+; none, the entry leads there instead; if it is the only one, its bucket
+; goes too, out of the level above, its chain and onto its area's list,
+; unless it is the root or its level's last. R0 = 1 done, 0 refused, or a
+; read's or write's error. Uses R0-R5.
+REMOVEIX:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8, R9, R10, R11>
+        MOVL    R0, R6                  ; R6 = the level
+        MOVL    R2, R8                  ; R8 = the bucket after
+        BSBW    FINDPTR
+        BLBC    R0, 90$
+        MOVL    #1, R0
+        TSTL    R1                      ; none leads there: nothing to do
+        BEQL    90$
+        MOVL    R1, R9                  ; R9 = the index bucket
+        MOVL    R2, R10                 ; R10 = the entry
+        MOVL    LVLBUF[R6], R11         ; R11 = its buffer
+        MOVL    R11, R1
+        MOVL    ISZ, R2
+        BSBW    IXINFO                  ; R3 = a pointer's bytes, R4 = entries
+        CLRL    R0
+        CMPL    R4, #1
+        BEQL    10$
+        SUBL3   #1, R4, R5              ; the last of several stays
+        CMPL    R10, R5
+        BNEQ    20$
+        BRW     90$
+10$:    BITB    #<1@BKT$V_LASTBKT>!<1@BKT$V_ROOTBKT>, BKT$B_BKTCB(R11)
+        BEQL    20$
+        BRW     90$
+20$:    CMPL    R6, #1                  ; level 1: the next entry's bucket
+        BNEQ    40$
+        ADDL3   #1, R10, R0
+        CMPL    R0, R4
+        BGEQU   25$
+        BSBW    PTRGET
+        BRB     30$
+25$:    MOVL    BKT$L_NXTBKT(R11), R0   ; the next index bucket's first
+        MOVL    TMP, R1
+        MOVL    ISZ, R2
+        BSBW    READB
+        BLBS    R0, 27$
+        BRW     90$
+27$:    PUSHR   #^M<R3, R4>
+        MOVL    TMP, R1
+        MOVL    ISZ, R2
+        BSBW    IXINFO
+        CLRL    R0
+        BSBW    PTRGET
+        POPR    #^M<R3, R4>
+        MOVL    R11, R1
+30$:    CMPL    R0, R8
+        BEQL    40$
+        CMPL    R3, #4                  ; none leads there: this one does
+        BGEQU   35$
+        MULL3   #8, R3, R0
+        ASHL    R0, #1, R0
+        CMPL    R8, R0
+        BLSSU   35$
+        CLRL    R0                      ; if the pointer can hold it
+        BRW     90$
+35$:    MOVL    R10, R0
+        MOVL    R8, R5
+        BSBW    PTRSET
+        BRB     60$
+40$:    CMPL    R4, #1                  ; the only one: the bucket goes
+        BNEQ    50$
+        ADDL3   #1, R6, R0
+        MOVL    R9, R1
+        MOVL    BKT$L_NXTBKT(R11), R2
+        BSBW    REMOVEIX
+        CMPL    R0, #1
+        BNEQ    90$
+        MOVL    R9, R1
+        MOVL    BKT$L_NXTBKT(R11), R2
+        BSBW    UNLINK
+        BLBC    R0, 90$
+        MOVL    R9, R0
+        MOVL    R11, R1
+        MOVL    ISZ, R2
+        MOVZBL  RKD+KEY$B_IANUM, R3
+        CMPL    R6, #1
+        BNEQ    45$
+        MOVZBL  RKD+KEY$B_LANUM, R3
+45$:    BSBW    FREEBKT
+        BLBC    R0, 90$
+        INCL    NINDEX
+        MOVL    #1, R0
+        BRB     90$
+50$:    MOVL    R10, R0                 ; else it goes from its bucket
+        MOVL    R11, R1
+        MOVL    ISZ, R2
+        BSBW    IXREMOVE
+60$:    MOVL    R9, R0
+        MOVL    R11, R1
+        MOVL    ISZ, R2
+        BSBW    WRITEB
+        BLBC    R0, 90$
+        MOVL    #1, R0
+90$:    POPR    #^M<R6, R7, R8, R9, R10, R11>
+        RSB
+
+; FINDPTR: R0 = an index level, R1 = a bucket. Looks along the level from
+; its first bucket for the entry that leads to it: R1 = its index bucket,
+; in LVLBUF's for the level, or 0 if there is none; R2 = the entry. R0 =
+; SS$_NORMAL or a read's error. Uses R0-R5.
+FINDPTR:
+        .JSB_ENTRY  OUTPUT=<R1, R2>, SCRATCH=<R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8, R9>
+        MOVL    R0, R6                  ; R6 = the level
+        MOVL    R1, R7                  ; R7 = the bucket
+        BSBW    FIRSTAT
+        BLBC    R0, 90$
+        MOVL    R1, R8                  ; R8 = a bucket of the level
+        MOVL    RFAB+FAB$L_ALQ, R9      ; R9 = buckets at most
+10$:    MOVL    R8, R0
+        MOVL    LVLBUF[R6], R1
+        MOVL    ISZ, R2
+        BSBW    READB
+        BLBC    R0, 90$
+        MOVL    LVLBUF[R6], R1
+        MOVL    ISZ, R2
+        BSBW    IXINFO
+        CLRL    R5
+20$:    CMPL    R5, R4
+        BGEQU   30$
+        MOVL    R5, R0
+        BSBW    PTRGET
+        CMPL    R0, R7
+        BEQL    80$
+        INCL    R5
+        BRB     20$
+30$:    BBS     #BKT$V_LASTBKT, BKT$B_BKTCB(R1), 70$
+        MOVL    BKT$L_NXTBKT(R1), R8
+        SOBGTR  R9, 10$
+70$:    CLRL    R1
+        MOVL    #SS$_NORMAL, R0
+        BRB     90$
+80$:    MOVL    R8, R1
+        MOVL    R5, R2
+        MOVL    #SS$_NORMAL, R0
+90$:    POPR    #^M<R6, R7, R8, R9>
+        RSB
+
+; FIRSTAT: R0 = an index level. R1 = its first bucket, the one the first
+; entries lead to from the root down, read in LVLBUF's for the level. R0
+; = SS$_NORMAL or a read's error. Uses R0-R5.
+FIRSTAT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7>
+        MOVL    R0, R6                  ; R6 = the level
+        MOVL    RKD+KEY$L_ROOTVBN, R7   ; R7 = a bucket, from the root
+        MOVZBL  RKD+KEY$B_ROOTLEV, R5   ; R5 = its level
+10$:    CMPL    R5, R6
+        BLEQU   80$
+        MOVL    R7, R0
+        MOVL    LVLBUF[R6], R1
+        MOVL    ISZ, R2
+        BSBW    READB
+        BLBC    R0, 90$
+        MOVL    LVLBUF[R6], R1
+        MOVL    ISZ, R2
+        BSBW    IXINFO
+        CLRL    R0
+        BSBW    PTRGET
+        MOVL    R0, R7
+        DECL    R5
+        BRB     10$
+80$:    MOVL    R7, R1
+        MOVL    #SS$_NORMAL, R0
+90$:    POPR    #^M<R6, R7>
+        RSB
+
+; UNLINK: R1 = an index bucket, R2 = the one after it. Finds the bucket
+; before it, round its level's chain from R2, and makes it lead to R2.
+; R0 = SS$_NORMAL, RMS$_IRC if there is none, or a read's or write's
+; error. Uses R0-R5.
+UNLINK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    R1, R3                  ; R3 = the bucket
+        MOVL    R2, R4                  ; R4 = the one after
+        MOVL    R2, R5                  ; R5 = one round from it
+        PUSHL   RFAB+FAB$L_ALQ
+10$:    MOVL    R5, R0
+        MOVL    TMP, R1
+        MOVL    ISZ, R2
+        BSBW    READB
+        BLBC    R0, 90$
+        MOVL    TMP, R1
+        CMPL    BKT$L_NXTBKT(R1), R3
+        BEQL    20$
+        MOVL    BKT$L_NXTBKT(R1), R5
+        SOBGTR  (SP), 10$
+        MOVL    #RMS$_IRC, R0
+        BRB     90$
+20$:    MOVL    R4, BKT$L_NXTBKT(R1)
+        MOVL    R5, R0
+        MOVL    ISZ, R2
+        BSBW    WRITEB
+90$:    TSTL    (SP)+
+        RSB
+
+; IXINFO: R1 = an index bucket, R2 = its bytes. R3 = its pointers'
+; bytes, R4 = its entries. Keeps every other register.
+IXINFO:
+        .JSB_ENTRY  OUTPUT=<R3, R4>
+        PUSHL   R0
+        EXTZV   #BKT$V_PTR_SZ, #2, BKT$B_BKTCB(R1), R3
+        ADDL2   #2, R3
+        ADDL3   R1, R2, R0              ; VBN FREE SPACE: below the pointers
+        MOVZWL  -BKT$K_ENDOVHD(R0), R0
+        SUBL3   R0, R2, R4
+        SUBL2   #BKT$K_ENDOVHD+1, R4
+        DIVL2   R3, R4
+        MOVL    (SP)+, R0
+        RSB
+
+; PTRADR: R0 = an entry, R1 = an index bucket, R2 = its bytes, R3 = its
+; pointers' bytes. R0 = the entry's pointer's address. Keeps every other
+; register.
+PTRADR:
+        .JSB_ENTRY
+        INCL    R0
+        MULL2   R3, R0
+        ADDL2   #BKT$K_ENDOVHD, R0
+        SUBL3   R0, R2, R0
+        ADDL2   R1, R0
+        RSB
+
+; PTRGET: R0 = an entry, R1 = an index bucket, R2 = its bytes, R3 = its
+; pointers' bytes. R0 = the bucket it leads to. Keeps every other
+; register.
+PTRGET:
+        .JSB_ENTRY
+        PUSHR   #^M<R3, R4, R5>
+        BSBW    PTRADR
+        MOVL    R0, R4
+        CLRL    R0
+10$:    ASHL    #8, R0, R0
+        MOVZBL  -1(R4)[R3], R5
+        BISL2   R5, R0
+        SOBGTR  R3, 10$
+        POPR    #^M<R3, R4, R5>
+        RSB
+
+; PTRSET: R0 = an entry, R1 = an index bucket, R2 = its bytes, R3 = its
+; pointers' bytes, R5 = a bucket. Makes the entry lead there. Keeps
+; every other register.
+PTRSET:
+        .JSB_ENTRY
+        PUSHR   #^M<R3, R5>
+        BSBW    PTRADR
+10$:    MOVB    R5, (R0)+
+        ASHL    #-8, R5, R5
+        SOBGTR  R3, 10$
+        POPR    #^M<R3, R5>
+        RSB
+
+; IXREMOVE: R0 = an entry, not the last, R1 = an index bucket, R2 = its
+; bytes. Takes the entry out: its pointer, those below it moving up, and
+; its key, those after it moving down, the next compressed again against
+; the one before with RKD's index compression. Uses R0-R5.
+IXREMOVE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8, R9, R10, R11>
+        MOVL    R0, R6                  ; R6 = the entry
+        MOVL    R1, R11                 ; R11 = the bucket
+        BSBW    IXINFO
+        MOVL    R3, R9                  ; R9 = a pointer's bytes
+        MOVL    R6, R0
+        BSBW    PTRADR
+        ADDL3   R11, R2, R7             ; R7 = VBN FREE SPACE's address
+        SUBL2   #BKT$K_ENDOVHD, R7
+        MOVZWL  (R7), R8
+        INCL    R8
+        ADDL2   R11, R8                 ; R8 = the last pointer's address
+        SUBL2   R8, R0                  ; those below it move up
+        ADDL3   R9, R8, R1
+        MOVC3   R0, (R8), (R1)
+        MOVC5   #0, (R8), #0, R9, (R8)
+        ADDW2   R9, (R7)
+        MOVZBL  RKD+KEY$B_KEYSZ, R9     ; R9 = a key's bytes
+        BBS     #KEY$V_IDX_COMPR, RKD+KEY$B_FLAGS, 20$
+        MULL3   R9, R6, R7              ; R7 = where its key is
+        ADDL2   #BKT$K_OVERHDSZ, R7
+        ADDL3   R7, R9, R8              ; R8 = the next's
+        MOVZWL  BKT$W_FREESPACE(R11), R0
+        SUBL2   R8, R0
+        MOVC3   R0, (R11)[R8], (R11)[R7]
+        SUBW2   R9, BKT$W_FREESPACE(R11)
+        BRB     90$
+20$:    ADDL3   #1, R6, R0              ; compressed: the next, whole,
+        MOVAB   KB, R3
+        BSBW    EXPKEY
+        CLRL    R2                      ; and the one before, if any
+        TSTL    R6
+        BEQL    25$
+        SUBL3   #1, R6, R0
+        MOVAB   KA, R3
+        BSBW    EXPKEY
+        MOVAB   KA, R2
+25$:    MOVAB   KB, R1
+        MOVAB   KENC, R3
+        BSBW    ENCKEY
+        MOVL    R0, R10                 ; R10 = the next's bytes now
+        MOVL    R6, R0
+        BSBW    KEYOFF
+        MOVL    R0, R7                  ; R7 = where its key is
+        ADDL3   #2, R6, R0
+        BSBW    KEYOFF
+        MOVL    R0, R8                  ; R8 = where the one after the next is
+        MOVZWL  BKT$W_FREESPACE(R11), R0
+        SUBL2   R8, R0
+        ADDL3   R7, R10, R1
+        MOVC3   R0, (R11)[R8], (R11)[R1]
+        MOVC3   R10, KENC, (R11)[R7]
+        ADDL3   R7, R10, R0
+        SUBL2   R8, R0
+        ADDW2   R0, BKT$W_FREESPACE(R11)
+90$:    POPR    #^M<R6, R7, R8, R9, R10, R11>
+        RSB
+
+; KEYOFF: R0 = an entry, R11 = an index bucket whose keys are
+; compressed. R0 = where its key is, or the keys' end past the last.
+; Keeps every other register.
+KEYOFF:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3>
+        MOVL    R0, R2
+        MOVL    #BKT$K_OVERHDSZ, R0
+        MOVZWL  BKT$W_FREESPACE(R11), R3
+10$:    TSTL    R2
+        BEQL    90$
+        CMPL    R0, R3
+        BGEQU   90$
+        MOVZBL  (R11)[R0], R1
+        ADDL2   #2, R1
+        ADDL2   R1, R0
+        DECL    R2
+        BRB     10$
+90$:    POPR    #^M<R1, R2, R3>
+        RSB
+
+; EXPKEY: R0 = an entry, R11 = an index bucket whose keys are
+; compressed, R3 = room. Puts its key there whole: each key is the front
+; count's bytes of the one before, its own, and its last repeated to
+; KEYSZ. Uses R0-R5.
+EXPKEY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8, R9>
+        MOVL    R0, R6                  ; R6 = the entries still to go
+        MOVL    R3, R7                  ; R7 = the room
+        MOVL    #BKT$K_OVERHDSZ, R8     ; R8 = an entry
+        MOVZBL  RKD+KEY$B_KEYSZ, R9
+10$:    MOVZBL  (R11)[R8], R0           ; its bytes
+        MOVZBL  1(R11)[R8], R1          ; its front
+        ADDL3   R1, R0, -(SP)           ; the bytes it sets
+        ADDL3   R1, R7, R2
+        MOVAB   2(R11)[R8], R3
+        ADDL3   #2, R0, R4
+        ADDL2   R4, R8
+        MOVC3   R0, (R3), (R2)
+        MOVL    (SP)+, R1
+        SUBL3   R1, R9, R2              ; then its last again to the end
+        BLEQ    20$
+        ADDL3   R7, R1, R4
+        MOVZBL  -1(R4), R3
+        MOVC5   #0, (R4), R3, R2, (R4)
+20$:    SOBGEQ  R6, 10$
+        POPR    #^M<R6, R7, R8, R9>
+        RSB
+
+; ENCKEY: R1 = a key, whole, R2 = the key before it in its bucket, or 0,
+; R3 = room. Writes it compressed: its length, its front count, the
+; bytes past those it shares with the one before, but the last, and
+; without its last byte's repeats but one. R0 = its bytes. Keeps every
+; other register.
+ENCKEY:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6>
+        MOVZBL  RKD+KEY$B_KEYSZ, R4
+        CLRL    R5                      ; the front
+        TSTL    R2
+        BEQL    20$
+10$:    CMPL    R5, R4
+        BGEQU   20$
+        CMPB    (R1)[R5], (R2)[R5]
+        BNEQ    20$
+        INCL    R5
+        BRB     10$
+20$:    SUBL3   #1, R4, R0              ; one byte at least
+        CMPL    R5, R0
+        BLEQ    25$
+        MOVL    R0, R5
+25$:    MOVL    R4, R6                  ; the end, past the repeats
+30$:    ADDL3   #1, R5, R0
+        CMPL    R6, R0
+        BLEQ    40$
+        CMPB    -2(R1)[R6], -1(R1)[R6]
+        BNEQ    40$
+        DECL    R6
+        BRB     30$
+40$:    SUBL3   R5, R6, R0
+        MOVB    R0, (R3)+
+        MOVB    R5, (R3)+
+        PUSHL   R0
+        ADDL2   R5, R1
+        MOVC3   R0, (R1), (R3)
+        MOVL    (SP)+, R0
+        ADDL2   #2, R0
+        POPR    #^M<R1, R2, R3, R4, R5, R6>
+        RSB
+
+; FREEBKT: R0 = a bucket, R1 = it, in a buffer, R2 = its bytes, R3 = its
+; area. Puts it first on the area's list of available buckets: its
+; entries go, it leads to the old first, and the list's last says so with
+; BKT$V_LASTBKT; then the area's descriptor says so. R0 = SS$_NORMAL or a
+; read's or write's error. Uses R0-R5.
+FREEBKT:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHR   #^M<R6, R7, R8>
+        MOVQ    R0, R6                  ; R6 = the bucket, R7 = its buffer
+        MOVL    R2, R8                  ; R8 = its bytes
+        DIVL3   #8, R3, R0              ; the area's descriptor
+        ADDL2   AVBN, R0
+        PUSHL   R0
+        BICL3   #^C7, R3, -(SP)
+        MULL2   #AREA$K_BLN, (SP)
+        BSBW    RDPLG
+        BLBC    R0, 90$
+        SUBL3   #BKT$K_OVERHDSZ+1, R8, R0
+        MOVC5   #0, (R7), #0, R0, BKT$K_OVERHDSZ(R7)
+        MOVW    #BKT$K_OVERHDSZ, BKT$W_FREESPACE(R7)
+        MOVL    (SP), R1
+        MOVL    RPLG+AREA$L_AVAIL(R1), BKT$L_NXTBKT(R7)
+        CLRB    BKT$B_BKTCB(R7)
+        TSTL    RPLG+AREA$L_AVAIL(R1)
+        BNEQ    10$
+        MOVB    #1@BKT$V_LASTBKT, BKT$B_BKTCB(R7)
+10$:    MOVL    R6, R0
+        MOVL    R7, R1
+        MOVL    R8, R2
+        BSBW    WRITEB
+        BLBC    R0, 90$
+        MOVL    (SP), R1
+        MOVL    R6, RPLG+AREA$L_AVAIL(R1)
+        MOVL    4(SP), R0
+        BSBW    WRPLG
+90$:    ADDL2   #8, SP
+        POPR    #^M<R6, R7, R8>
+        RSB
+
+; WRKD: writes RKD back where it came from. R0 = SS$_NORMAL or a read's
+; or write's error. Uses R0-R5.
+WRKD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    RKVBN, R0
+        BSBW    RDPLG
+        BLBC    R0, 90$
+        MOVL    RKOFF, R0
+        MOVC3   #KEY$K_BLN, RKD, RPLG(R0)
+        MOVL    RKVBN, R0
+        BSBW    WRPLG
+90$:    RSB
+
+; RDPLG: R0 = a VBN. Reads that prologue block into RPLG. R0 = its
+; status. Keeps every other register.
+RDPLG:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2>
+        MOVAB   RPLG, R1
+        MOVL    #BLOCK, R2
+        BSBW    READB
+        POPR    #^M<R1, R2>
+        RSB
+
+; WRPLG: R0 = a VBN. Writes RPLG there with its checksum, the sum of its
+; first 255 words. R0 = the write's status. Keeps every other register.
+WRPLG:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3>
+        CLRL    R1
+        CLRL    R2
+10$:    ADDW2   RPLG[R2], R1
+        AOBLSS  #255, R2, 10$
+        MOVW    R1, RPLG+510
+        MOVL    R0, RRAB+RAB$L_BKT
+        MOVAB   RPLG, RRAB+RAB$L_RBF
+        MOVW    #BLOCK, RRAB+RAB$W_RSZ
+        $WRITE  RAB=RRAB
+        POPR    #^M<R1, R2, R3>
+        RSB
+
+; READB: R0 = a VBN, R1 = a buffer, R2 = bytes. Reads them. R0 = the
+; read's status. Keeps every other register.
+READB:
+        .JSB_ENTRY
+        MOVL    R0, RRAB+RAB$L_BKT
+        MOVL    R1, RRAB+RAB$L_UBF
+        MOVW    R2, RRAB+RAB$W_USZ
+        PUSHL   R1
+        $READ   RAB=RRAB
+        MOVL    (SP)+, R1
+        RSB
+
+; WRITEB: R0 = a bucket's VBN, R1 = it, R2 = its bytes. Writes it, its
+; check characters one up. R0 = the write's status. Keeps every other
+; register.
+WRITEB:
+        .JSB_ENTRY
+        INCB    (R1)
+        MOVB    (R1), -1(R1)[R2]
+        MOVL    R0, RRAB+RAB$L_BKT
+        MOVL    R1, RRAB+RAB$L_RBF
+        MOVW    R2, RRAB+RAB$W_RSZ
+        PUSHL   R1
+        $WRITE  RAB=RRAB
+        MOVL    (SP)+, R1
+        RSB
+
+; RSTATS: reports NSCAN, NDATA and NINDEX as VMS's CONVERT/RECLAIM
+; /STATISTICS does: for the file, or with /KEY for RKEY's key. Uses
+; R0-R5.
+RSTATS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        $GETTIM_S TIMADR=T1
+        BSBW    LIN$PUT
+        BBS     #F_KEYS, FLAGS, 10$
+        MOVAB   M_RSTATS, R1
+        BSBW    LIN$TEXT
+        BSBW    LIN$PUT
+        BRB     20$
+10$:    MOVAB   M_RFOR, R1
+        BSBW    LIN$TEXT
+        MOVL    RKEY, R1
+        CLRL    R2
+        BSBW    LIN$DEC
+        MOVL    #^A/./, R1
+        BSBW    LIN$CHAR
+        BSBW    LIN$PUT
+        BSBW    LIN$PUT
+20$:    MOVAB   M_RSCAN, R1
+        MOVL    NSCAN, R2
+        MOVL    #12, R3
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVAB   M_RDATA, R1
+        MOVL    NDATA, R2
+        MOVL    #13, R3
+        BSBW    COUNT
+        MOVAB   M_RBIO, R1
+        CLRL    R2
+        MOVL    #13, R3
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVAB   M_RINDEX, R1
+        MOVL    NINDEX, R2
+        MOVL    #12, R3
+        BSBW    COUNT
+        MOVAB   M_RDIO, R1
+        CLRL    R2
+        MOVL    #15, R3
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVAB   M_RTOTAL, R1
+        ADDL3   NDATA, NINDEX, R2
+        MOVL    #12, R3
+        BSBW    COUNT
+        MOVAB   M_RPF, R1
+        CLRL    R2
+        MOVL    #20, R3
+        BSBW    COUNT
+        BSBW    LIN$PUT
+        MOVAB   M_ELAPSED, R1
+        BSBW    LIN$TEXT
+        SUBL3   T0, T1, R0              ; in 100 ns units
+        CLRL    R1
+        EDIV    #100000, R0, R0, R1     ; hundredths
+        MOVL    #10, R2
+        BSBW    DELTA
+        MOVAB   M_RCPU, R1
+        BSBW    LIN$TEXT
+        CLRL    R0
+        MOVL    #10, R2
+        BSBW    DELTA
+        BSBW    LIN$PUT
         RSB
 
         .END    START

@@ -598,7 +598,7 @@ MACRO
 
 ! $IFBDEF
 LITERAL
-    IFB$K_LENGTH = 596,  ! the fixed part
+    IFB$K_LENGTH = 600,  ! the fixed part
     IFB$V_WRITE = 0,  ! it may be written: $CREATE made it or $OPEN opened it for that
     IFB$V_DIRTY = 1,  ! the buffer holds what the file hasn't yet
     IFB$V_HDR = 2,  ! the header changed: its end of file
@@ -607,7 +607,9 @@ LITERAL
     IFB$V_PLG = 5,  ! relative: the prologue's end of file changed
     IFB$V_FOUND = 6,  ! the last record service was a $FIND: a sequential $GET reads the record it found
     IFB$V_DATA = 7,  ! indexed: a bucket was written, the end of file goes past the last block
-    IFB$V_MARKDEL = 8;  ! $ERASE deleted it while open: the last to close it deletes its header
+    IFB$V_MARKDEL = 8,  ! $ERASE deleted it while open: the last to close it deletes its header
+    IFB$V_RLK = 9,  ! record locking: others may write the file, or it is written and others may read it
+    RLB$K_LENGTH = 32;  ! a pool block, in 16-byte units
 MACRO
     IFB$L_POS = 0, 0, 32, 0 %,  ! sequential: the next byte; relative: the next record number
     IFB$L_EOF = 4, 0, 32, 0 %,  ! sequential: the bytes in the file; relative: the VBN after the last bucket
@@ -635,11 +637,20 @@ MACRO
     IFB$L_BUFSZ = 72, 0, 32, 0 %,  ! the buffer's size, to give it back
     IFB$L_LKID = 76, 0, 32, 0 %,  ! the file's access arbitration lock, or 0
     IFB$AB_HDR = 80, 0, 0, 0 %,  ! the file's header
-    IFB$W_VERLIMIT = 592, 0, 16, 0 %;  ! its name's version limit, in its directory
+    IFB$W_VERLIMIT = 592, 0, 16, 0 %,  ! its name's version limit, in its directory
+    IFB$L_RLB = 596, 0, 32, 0 %,  ! the record locks the stream holds: a list of RLBs, or 0
+    RLB$L_NEXT = 0, 0, 32, 0 %,  ! the next of the stream's, or 0
+    RLB$L_LKID = 4, 0, 32, 0 %,  ! the lock
+    RLB$L_ID = 8, 0, 32, 0 %,  ! the lock's name: the RFA's ID, a longword,
+    RLB$L_VBN = 12, 0, 32, 0 %,  ! and VBN
+    RLB$B_MODE = 16, 0, 8, 0 %,  ! the mode it is held in
+    RLB$B_AUTO = 17, 0, 8, 0 %;  ! 1 if the stream's next operation drops it, not RAB$M_ULK's
 
 ! $PLGDEF
 LITERAL
     PLG$C_VER_REL = 1,  ! a relative file's
+    PLG$C_VER_1 = 1,  ! an indexed file's whose keys are all strings, before prologue 3
+    PLG$C_VER_2 = 2,  ! and one with other keys too
     PLG$C_VER_3 = 3;  ! an indexed file's
 MACRO
     PLG$B_AVBN = 102, 0, 8, 0 %,  ! first area descriptor's VBN
@@ -648,6 +659,7 @@ MACRO
     PLG$L_MRN = 108, 0, 32, 0 %,  ! relative: highest record number
     PLG$L_EOF = 112, 0, 32, 0 %,  ! relative: the VBN after the last bucket
     PLG$W_VER_NO = 116, 0, 16, 0 %,  ! prologue version
+    PLG$W_COLVBN = 120, 0, 16, 0 %,  ! indexed: the first block of the collated keys' tables
     PLG$W_CHECKSUM = 510, 0, 16, 0 %;  ! the 16-bit sum of the block's first 255 words
 
 ! $KEYDEF
@@ -732,10 +744,13 @@ LITERAL
     BKT$K_ENDOVHD = 4;  ! an index bucket's end: VBN free space word, 0, check character
 MACRO
     BKT$B_CHECKCHAR = 0, 0, 8, 0 %,  ! as the bucket's last byte
-    BKT$B_INDEXNO = 1, 0, 8, 0 %,  ! key of reference
+    BKT$B_INDEXNO = 1, 0, 8, 0 %,  ! key of reference; prologues 1 and 2: BKT$B_AREANO
+    BKT$B_AREANO = 1, 0, 8, 0 %,  ! prologues 1 and 2: the area it came from
     BKT$W_ADRSAMPLE = 2, 0, 16, 0 %,  ! low word of its VBN
     BKT$W_FREESPACE = 4, 0, 16, 0 %,  ! first free byte
     BKT$W_NXTRECID = 6, 0, 16, 0 %,  ! next record ID
+    BKT$B_NXTRECID = 6, 0, 8, 0 %,  ! prologues 1 and 2: next record ID, a byte,
+    BKT$B_LSTRECID = 7, 0, 8, 0 %,  ! and the last free one
     BKT$L_NXTBKT = 8, 0, 32, 0 %,  ! next bucket of the level
     BKT$B_LEVEL = 12, 0, 8, 0 %,  ! 0 for data and SIDR buckets
     BKT$B_BKTCB = 13, 0, 8, 0 %;  ! BKT$V_
@@ -746,13 +761,19 @@ LITERAL
     IRC$V_PTRSZ = 0,  ! the pointer's size less 2, 2 bits
     IRC$V_DELETED = 2,
     IRC$V_RRV = 3,  ! a record reference vector
-    IRC$V_NOPTRSZ = 4,  ! no pointer: a deleted SIDR pointer
-    IRC$V_FIRST = 7;  ! a SIDR's first pointer
+    IRC$V_NOPTRSZ = 4,  ! no pointer: a deleted SIDR pointer; prologues 1 and 2: a stub, or a SIDR without a count
+    IRC$V_FIRST = 7,  ! a SIDR's first pointer
+    IRC$K_HDRSZ2 = 7,  ! a data record's header, before its size
+    IRC$K_STUBSZ = 2,  ! a stub: control and ID
+    IRC$K_DCNTSZ = 4;  ! a SIDR's count of duplicates
 MACRO
     IRC$B_CONTROL = 0, 0, 8, 0 %,  ! IRC$V_
     IRC$W_ID = 1, 0, 16, 0 %,  ! record ID
     IRC$W_RRV_ID = 3, 0, 16, 0 %,  ! its RFA's ID
-    IRC$L_RRV_VBN = 5, 0, 32, 0 %;  ! and VBN
+    IRC$L_RRV_VBN = 5, 0, 32, 0 %,  ! and VBN
+    IRC$B_ID = 1, 0, 8, 0 %,  ! record ID
+    IRC$B_RRV_ID = 2, 0, 8, 0 %,  ! its RFA's ID
+    IRC$L_RRV_VBN2 = 3, 0, 32, 0 %;  ! and VBN
 
 ! $DLCDEF
 LITERAL
@@ -762,16 +783,21 @@ LITERAL
 ! $IDXDEF
 LITERAL
     W$K_LENGTH = 576,
-    X$K_WALK0 = 1908,  ! the walks
-    X$K_WALK1 = 2484,
-    X$K_WALK2 = 3060,
-    X$K_LENGTH = 3636,
+    X$K_WALK0 = 2972,  ! the walks
+    X$K_WALK1 = 3548,
+    X$K_WALK2 = 4124,
+    X$K_LENGTH = 4700,
     X$C_BOF = 0,  ! before the first record
     X$C_AFTER = 1,  ! after the stream's record
     X$C_AT = 2,  ! at it: a $FIND found it
     X$C_EOF = 3,  ! past the last
     X$V_LASTPUT = 0,  ! X$T_LASTPUT holds a key
-    X$V_OKDUP = 1;  ! a $PUT found a key it has
+    X$V_OKDUP = 1,  ! a $PUT found a key it has
+    X$V_WROTE = 2,  ! the service wrote a bucket or the prologue: the file's other opens get what changed
+    X$V_IDSPLIT = 3,  ! SPLIT0: the bucket has no IDs left, so the new record goes to the new one
+    C$K_LISTMAX = 480,
+    C$K_LENGTH = 1036,
+    S$K_LENGTH = 16;
 MACRO
     W$L_BUF = 0, 0, 32, 0 %,  ! the bucket's room
     W$L_VBN = 4, 0, 32, 0 %,  ! the bucket
@@ -829,7 +855,30 @@ MACRO
     X$W_RFAID = 1892, 0, 16, 0 %,  ! and ID
     X$L_PRREC = 1896, 0, 32, 0 %,  ! a record being packed,
     X$L_PRLEN = 1900, 0, 32, 0 %,  ! and its size
-    X$L_M = 1904, 0, 32, 0 %;  ! a split's first entry that goes
+    X$L_M = 1904, 0, 32, 0 %,  ! a split's first entry that goes
+    X$L_CTXSVBN = 1908, 0, 32, 0 %,  ! the SIDR bucket the stream's record's pointer was in, or 0
+    X$L_NSLOT = 1912, 0, 32, 0 %,  ! buckets kept between services
+    X$L_SLOTS = 1916, 0, 32, 0 %,  ! their slots, S$K_LENGTH each
+    X$L_TICK = 1920, 0, 32, 0 %,  ! uses of them so far, for the least recently used
+    X$L_PLG = 1924, 0, 32, 0 %,  ! the prologue's version, 1, 2 or 3
+    X$L_LKSTS = 1928, 0, 32, 0 %,  ! what locking the record $GET or $FIND found said: RMS$_NORMAL or an alternate success
+    X$L_COLTAB = 1932, 0, 32, 0 %,  ! each key's collating sequence, a C$ block, or 0, a longword each
+    X$L_COLBLK = 1936, 0, 32, 0 %,  ! the block of the collating tables in IDX$AB_PLG, or 0
+    X$T_COLW1 = 1940, 0, 0, 0 %,  ! two keys' weights, being compared
+    X$T_COLW2 = 2452, 0, 0, 0 %,
+    X$L_NEWID = 2964, 0, 32, 0 %,  ! the next record ID of the bucket NEWBKT gave last,
+    X$L_NEWAREA = 2968, 0, 32, 0 %,  ! and its area
+    C$T_PRIM = 0, 0, 0, 0 %,  ! each character's primary weight
+    C$T_SEC = 256, 0, 0, 0 %,  ! and secondary
+    C$T_LIST = 512, 0, 0, 0 %,  ! characters weighed otherwise, 4 bytes each: the character, the next or FF, and its primary weights, the second 0 if one; FF FF after the last
+    C$L_SIZE = 992, 0, 32, 0 %,  ! NCS's table's bytes
+    C$T_NAME = 996, 0, 0, 0 %,  ! its name, .ASCIC
+    C$L_VBN = 1028, 0, 32, 0 %,  ! the file's tables' first VBN
+    C$L_OFF = 1032, 0, 32, 0 %,  ! and where in them this one is, 510 bytes a block
+    S$L_VBN = 0, 0, 32, 0 %,  ! the bucket, 0 if the slot is empty
+    S$L_SIZE = 4, 0, 32, 0 %,  ! its bytes
+    S$L_USE = 8, 0, 32, 0 %,  ! X$L_TICK when it was last used
+    S$L_BUF = 12, 0, 32, 0 %;  ! its room
 
 ! $UAFDEF
 LITERAL

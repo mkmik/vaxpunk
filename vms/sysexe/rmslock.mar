@@ -1,0 +1,232 @@
+        .TITLE  RMSLOCK Record locks between two streams on a shared indexed file
+        .IDENT  /V0.1/
+;
+; RUN RMSLOCK makes LK.IDX, FIX records of 8 bytes with a 2-byte key, K1
+; to K5, shared for writing, and opens it again: two streams, A and B, on
+; it in one process, whose record locks conflict as two processes' would.
+; Then each step prints what a service returned, in hex: RAB$M_ULK's
+; locks kept until $RELEASE and $FREE, a $FIND's lock that the $GET after
+; it finds already held, RAB$M_RLK's lock that RAB$M_NLK may read past,
+; RAB$M_RRL reading a locked record without its lock, so that $UPDATE has
+; none, a $PUT's record kept locked with ULK, and RAB$M_REA's read locks,
+; which two streams may hold at once but which $UPDATE can't use; a
+; $GET that finds nothing, or a record the stream holds already, which
+; drops the lock the one before took; and RAB$M_UIF's $UPDATE, which
+; RAB$M_RRL's reading past another stream's lock doesn't let write.
+; Last, a stream C that reads it, sharing writes, sees what a block
+; writer D wrote, not the bucket it kept. The
+; boot test (boot/tests/rms.rs) knows what each must say. It uses only
+; VMS's own: STARLET's macros and LIB$PUT_OUTPUT.
+;
+        .LIBRARY "starlet.mlb"
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+        $XABKEYDEF
+        .EXTERNAL LIB$PUT_OUTPUT
+
+; STEP stream, service, text: does the service on the stream's RAB and
+; prints the text and its status.
+        .MACRO  STEP    STRM, SERVICE, TEXT, ?L
+        .SAVE_PSECT LOCAL_BLOCK
+        .PSECT  $LITERAL$
+L:      .ASCIC  TEXT
+        .RESTORE_PSECT
+        SERVICE RAB=STRM
+        MOVAB   L, R1
+        BSBW    SAY
+        .ENDM   STEP
+
+; ROP stream, bits: sets the stream's record options to them.
+        .MACRO  ROP     STRM, BITS
+        MOVL    #BITS, STRM+RAB$L_ROP
+        .ENDM   ROP
+
+; KEY stream, n: the stream's next service is by key K and the digit n,
+; in the key buffer after its RAB.
+        .MACRO  KEY     STRM, N
+        MOVB    #RAB$C_KEY, STRM+RAB$B_RAC
+        MOVB    #75, STRM+RAB$C_BLN     ; K
+        MOVB    #<48+N>, STRM+RAB$C_BLN+1
+        .ENDM   KEY
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+LINE:   .BLKB   80                      ; the line being made
+LINEDSC:
+        .LONG   0
+        .ADDRESS LINE
+HEX:    .ASCII  "0123456789ABCDEF"
+NAME:   .ASCII  "LK.IDX"
+DONE:   .ASCIC  "RMSLOCK done"
+RFA1:   .BLKB   6                       ; K1's RFA
+        .ALIGN  LONG
+FAB:    $FAB    FNA=NAME, FNS=6, ORG=IDX, RFM=FIX, MRS=8, FAC=<PUT,GET,UPD,DEL>, SHR=<GET,PUT,UPD,DEL>, XAB=KEY0
+KEY0:   $XABKEY REF=0, POS=0, SIZ=2
+FAB2:   $FAB    FNA=NAME, FNS=6, FAC=<PUT,GET,UPD,DEL>, SHR=<GET,PUT,UPD,DEL>
+; A and B: their key buffer is the longword after the RAB, K and a digit.
+A:      $RAB    FAB=FAB, RAC=KEY, KSZ=2, KBF=A+RAB$C_BLN, UBF=GOTA, USZ=8, RBF=REC, RSZ=8
+        .BLKL   1
+B:      $RAB    FAB=FAB2, RAC=KEY, KSZ=2, KBF=B+RAB$C_BLN, UBF=GOTB, USZ=8, RBF=REC, RSZ=8
+        .BLKL   1
+GOTA:   .BLKB   8
+GOTB:   .BLKB   8
+; C reads LK.IDX sharing writes, while D writes its blocks.
+FAB3:   $FAB    FNA=NAME, FNS=6, FAC=GET, SHR=<GET,PUT,UPD,DEL>
+C:      $RAB    FAB=FAB3, RAC=KEY, KSZ=2, KBF=C+RAB$C_BLN, UBF=GOTC, USZ=8
+        .BLKL   1
+FAB4:   $FAB    FNA=NAME, FNS=6, FAC=<BIO,GET,PUT>, SHR=GET
+D:      $RAB    FAB=FAB4, UBF=BLK, USZ=512, RBF=BLK, RSZ=512
+GOTC:   .BLKB   8
+BLK:    .BLKB   512                     ; a block of LK.IDX
+LOWDATA:
+        .ASCII  "data"
+UPDMSG: .ASCIC  "C GET K1 after D wrote it"
+REC:    .ASCII  "K0 data "              ; a record put, K and its digit first
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  RMSLOCK, ^M<R2, R3, R4, R5, R6, R7>
+        $CREATE FAB=FAB
+        BLBC    R0, 90$
+        $CONNECT RAB=A
+        BLBC    R0, 90$
+        MOVL    #^A/1/, R6              ; K1 to K5
+10$:    MOVB    R6, REC+1
+        $PUT    RAB=A
+        BLBC    R0, 90$
+        AOBLEQ  #^A/5/, R6, 10$
+        $OPEN   FAB=FAB2
+        BLBC    R0, 90$
+        $CONNECT RAB=B
+        BLBS    R0, 20$
+90$:    RET
+20$:    ROP     A, RAB$M_ULK            ; A holds two: K1 and K2
+        KEY     A, 1
+        STEP    A, $GET, "A GET K1 ULK"
+        MOVC3   #6, A+RAB$W_RFA, RFA1
+        KEY     A, 2
+        STEP    A, $GET, "A GET K2 ULK"
+        KEY     B, 1
+        STEP    B, $GET, "B GET K1"
+        KEY     B, 2
+        STEP    B, $GET, "B GET K2"
+        MOVC3   #6, RFA1, A+RAB$W_RFA   ; $RELEASE of K1: B gets it
+        STEP    A, $RELEASE, "A RELEASE K1"
+        KEY     B, 1
+        STEP    B, $GET, "B GET K1"
+        STEP    A, $FREE, "A FREE"      ; K2 goes, then none is left
+        STEP    A, $FREE, "A FREE"
+        KEY     B, 2
+        STEP    B, $GET, "B GET K2"
+        ROP     A, 0                    ; a $FIND's lock, held at the $GET
+        KEY     A, 3
+        STEP    A, $FIND, "A FIND K3"
+        MOVB    #RAB$C_SEQ, A+RAB$B_RAC
+        STEP    A, $GET, "A GET"
+        ROP     A, RAB$M_RLK            ; a lock others may read
+        KEY     A, 4
+        STEP    A, $GET, "A GET K4 RLK"
+        ROP     B, RAB$M_NLK
+        KEY     B, 4
+        STEP    B, $GET, "B GET K4 NLK"
+        ROP     B, RAB$M_RRL
+        STEP    B, $GET, "B GET K4 RRL"
+        ROP     B, 0
+        STEP    B, $UPDATE, "B UPDATE"
+        ROP     A, RAB$M_ULK            ; a $PUT's record, kept locked
+        MOVB    #^A/6/, REC+1
+        MOVAB   REC, A+RAB$L_RBF        ; a $GET left it at what it read
+        STEP    A, $PUT, "A PUT K6 ULK"
+        KEY     B, 6
+        STEP    B, $GET, "B GET K6"
+        STEP    A, $FREE, "A FREE"
+        STEP    B, $GET, "B GET K6"
+        ROP     A, RAB$M_REA            ; read locks, both at once
+        KEY     A, 5
+        STEP    A, $GET, "A GET K5 REA"
+        ROP     B, RAB$M_REA
+        KEY     B, 5
+        STEP    B, $GET, "B GET K5 REA"
+        STEP    B, $UPDATE, "B UPDATE"
+        ROP     A, 0                    ; a $GET that fails drops the lock
+        KEY     A, 6                    ; the one before took
+        STEP    A, $GET, "A GET K6"
+        KEY     A, 7
+        STEP    A, $GET, "A GET K7"
+        ROP     B, 0
+        KEY     B, 6
+        STEP    B, $GET, "B GET K6"
+        ROP     A, RAB$M_ULK            ; a lock held already, found again:
+        KEY     A, 1                    ; the other, automatic, goes
+        STEP    A, $GET, "A GET K1 ULK"
+        ROP     A, 0
+        KEY     A, 2
+        STEP    A, $GET, "A GET K2"
+        KEY     A, 1
+        STEP    A, $GET, "A GET K1"
+        KEY     B, 2
+        STEP    B, $GET, "B GET K2"
+        STEP    A, $FREE, "A FREE"
+        KEY     B, 3                    ; RAB$M_UIF's $UPDATE needs a lock,
+        STEP    B, $GET, "B GET K3"     ; which RRL doesn't give
+        ROP     A, RAB$M_UIF!RAB$M_RRL
+        KEY     A, 3
+        MOVB    #^A/3/, REC+1
+        MOVAB   REC, A+RAB$L_RBF
+        STEP    A, $PUT, "A PUT K3 UIF RRL"
+        $CLOSE  FAB=FAB2
+        $CLOSE  FAB=FAB
+        $OPEN   FAB=FAB3                ; C reads K1, and keeps its bucket;
+        $CONNECT RAB=C                  ; D changes it there, data to
+        KEY     C, 1                    ; Data; C reads that
+        $GET    RAB=C
+        $OPEN   FAB=FAB4
+        $CONNECT RAB=D
+        MOVL    C+RAB$L_RFA0, D+RAB$L_BKT
+        $READ   RAB=D
+        MOVAB   BLK, R6                 ; each record's data, compressed
+        MOVL    #512-4, R7              ; or not, to Data
+30$:    CMPC3   #4, LOWDATA, (R6)
+        BNEQ    35$
+        MOVB    #^A/D/, (R6)
+35$:    INCL    R6
+        SOBGTR  R7, 30$
+        $WRITE  RAB=D
+        $CLOSE  FAB=FAB4
+        KEY     C, 1
+        $GET    RAB=C
+        CLRL    R0
+        CMPB    GOTC+3, #^A/D/
+        BNEQ    40$
+        INCL    R0
+40$:    MOVAB   UPDMSG, R1
+        BSBW    SAY
+        $CLOSE  FAB=FAB3
+        MOVAB   DONE, R1
+        BSBW    SAY
+        MOVL    #RMS$_NORMAL, R0
+        RET
+
+; SAY: R1 = a counted string, R0 = a status. Prints them, the status in
+; hex. Uses R0-R5.
+SAY:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        PUSHL   R0
+        MOVZBL  (R1)+, R2
+        PUSHL   R2
+        MOVC3   R2, (R1), LINE
+        MOVL    (SP)+, R2
+        MOVB    #^A/ /, LINE[R2]
+        INCL    R2
+        MOVL    (SP)+, R3
+        MOVL    #8, R4
+10$:    ROTL    #4, R3, R3
+        EXTZV   #0, #4, R3, R1
+        MOVB    HEX[R1], LINE[R2]
+        INCL    R2
+        SOBGTR  R4, 10$
+        MOVL    R2, LINEDSC
+        PUSHAQ  LINEDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        RSB
+
+        .END    RMSLOCK

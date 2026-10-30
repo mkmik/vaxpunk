@@ -378,6 +378,9 @@ fn run(cmd: Cmd) -> Result<bool, Error> {
             if f.org != 2 {
                 return Err(Error::usage("the FDL file doesn't describe an indexed file").at(&fdl));
             }
+            if matches!(f.prolog, 1 | 2) {
+                return Err(Error::usage("ods loads prologue 3 files only").at(&fdl));
+            }
             let data = std::fs::read(&host).map_err(|e| Error::from(e).at(&host))?;
             let recs = ods_image::rms::lines_to_records(&f.spec, &data).map_err(|e| e.at(&host))?;
             let mut img = rw(&image)?;

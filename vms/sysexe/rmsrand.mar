@@ -15,7 +15,8 @@
 ; record with its key 0 and $UPDATEs it to this one; D $FINDs it and
 ; $DELETEs it; G $GETs it by key 0 and A by key 1. Each prints the
 ; operation, the key, and the statuses in hex, then for a record read
-; its size and its first 18 bytes and its last.
+; its size and its first 18 bytes and its last. A first line V and a
+; digit in column 3 makes RAND.IDX that prologue, XAB$B_PROLOG.
 ;
         .LIBRARY "starlet.mlb"
         $RMSDEF
@@ -51,17 +52,27 @@ RAB:    $RAB    FAB=FAB, UBF=GOT, USZ=256, KBF=TXT+2
 
         .PSECT  CODE, EXE, LONG
         .ENTRY  RMSRAND, ^M<R2, R3, R4, R5, R6, R7>
+        $OPEN   FAB=TFAB
+        BLBC    R0, 5$
+        $CONNECT RAB=TRAB
+        BLBC    R0, 5$
+        $GET    RAB=TRAB                ; a prologue first?
+        BLBC    R0, 2$
+        CMPB    TXT, #^A/V/
+        BNEQ    2$
+        SUBB3   #^A/0/, TXT+2, KEY0+XAB$B_PROLOG
+        CLRL    R0                      ; then no operation yet
+2$:     MOVL    R0, R7
         $CREATE FAB=FAB
         BLBC    R0, 5$
         $CONNECT RAB=RAB
         BLBC    R0, 5$
-        $OPEN   FAB=TFAB
-        BLBC    R0, 5$
-        $CONNECT RAB=TRAB
-        BLBS    R0, 10$
+        MOVL    R7, R0
+        BEQL    10$
+        BRB     13$
 5$:     RET
 10$:    $GET    RAB=TRAB                ; each operation
-        BLBS    R0, 15$
+13$:    BLBS    R0, 15$
         BRW     50$
 15$:    MOVB    TXT, LINE               ; the operation and its key
         MOVB    #^A/ /, LINE+1

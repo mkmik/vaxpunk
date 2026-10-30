@@ -56,10 +56,16 @@ note = "file.mar ponytail: a symbol's 255 bytes"
 
 [[feature]]
 id = "sharing"
-title = "OPEN/SHARE, READ/NOLOCK, READ/TIME_OUT"
+title = "OPEN/SHARE, READ/NOLOCK, READ/WAIT"
+status = "done"
+needs = ["/rms/sharing#record-locks"]
+
+[[feature]]
+id = "time-out"
+title = "READ/TIME_OUT, of a terminal or a record lock's wait"
 status = "todo"
-needs = ["/rms/sharing"]
-note = "dcl.cld ponytail: /SHARE taken and ignored"
+needs = ["/rms/sharing#wait-timeout"]
+note = "dcl.cld ponytail"
 
 [[feature]]
 id = "dispositions"

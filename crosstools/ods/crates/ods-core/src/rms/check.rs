@@ -158,6 +158,7 @@ impl Indexed<'_> {
             c.r.keys.push(stats);
         }
         c.rrvs();
+        c.avail();
         c.r
     }
 }
@@ -213,7 +214,12 @@ impl Checker<'_, '_> {
         if h.adrsample() != vbn as u16 {
             self.r.error(format!("address sample {} is not the bucket's VBN", h.adrsample()), key, vbn);
         }
-        if h.indexno() as usize != n {
+        if self.x.plg < 3 {
+            // Before prologue 3 the byte says the bucket's area.
+            if h.indexno() != area {
+                self.r.error(format!("bucket of area {} in area {area}", h.indexno()), key, vbn);
+            }
+        } else if h.indexno() as usize != n {
             self.r.error(format!("bucket of key {}", h.indexno()), key, vbn);
         }
         if h.level() != level {
@@ -227,6 +233,41 @@ impl Checker<'_, '_> {
             Some(_) => {}
             None => self.r.error(format!("bucket in area {area}, which the file doesn't have"), key, vbn),
         }
+        self.claim(key, vbn, end);
+    }
+
+    /// Whether level 0 bucket `vbn` of key `n` goes on with the key the
+    /// one before it, `prev`, ends with: OpenVMS gives such a bucket, the
+    /// rest of a SIDR or of a run of duplicates, no index entry of its own
+    /// (`rc4.idx`).
+    fn continues(&self, n: usize, prev: u32, vbn: u32) -> bool {
+        let k = &self.x.keys[n];
+        let keys = |v: u32| -> Option<Vec<Vec<u8>>> {
+            let b = self.x.bucket(v, k.datbktsz()).ok()?;
+            Some(if n == 0 {
+                let items = self.x.data_bucket(k, v, b).ok()?;
+                items
+                    .into_iter()
+                    .filter_map(|i| match i {
+                        Item::Rec(r) => Some(r.key),
+                        Item::Rrv { .. } => None,
+                    })
+                    .collect()
+            } else {
+                self.x.sidr_bucket(k, v, b).ok()?.into_iter().map(|s| s.key).collect()
+            })
+        };
+        match (keys(prev), keys(vbn)) {
+            (Some(p), Some(b)) => {
+                matches!((p.last(), b.first()), (Some(a), Some(c)) if self.x.compare(n, a, c) == Ordering::Equal)
+            }
+            _ => false,
+        }
+    }
+
+    /// Claims a bucket's blocks, `vbn` up to `end`, unless another bucket
+    /// or the prologue has.
+    fn claim(&mut self, key: Option<u8>, vbn: u32, end: u64) {
         let mut overlap = false;
         for blk in vbn as usize..end as usize {
             if let Some(o) = self.owned.get_mut(blk) {
@@ -236,6 +277,43 @@ impl Checker<'_, '_> {
         }
         if overlap {
             self.r.error("bucket overlaps another bucket or the prologue", key, vbn);
+        }
+    }
+
+    /// Walks each area's list of available buckets, which CONVERT/RECLAIM
+    /// freed, from `AVAIL` through `NXTBKT` to 0: each claims its blocks as
+    /// any bucket does, and the last says it is.
+    fn avail(&mut self) {
+        let x = self.x;
+        for (i, a) in x.areas.iter().enumerate() {
+            let at = x.avbn + i as u32 / 8;
+            let mut vbn = a.avail();
+            let mut seen = BTreeSet::new();
+            while vbn != 0 {
+                if !seen.insert(vbn) {
+                    self.r.error(format!("area {i}'s available buckets go round"), None, at);
+                    break;
+                }
+                let b = match x.bucket(vbn, a.arbktsz()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.r.error(e.to_string(), None, vbn);
+                        break;
+                    }
+                };
+                let h = BucketHeader(&b[..BKT_HDR]);
+                if b[0] != b[b.len() - 1] {
+                    self.r.error("check characters differ", None, vbn);
+                }
+                if h.adrsample() != vbn as u16 {
+                    self.r.error(format!("address sample {} is not the bucket's VBN", h.adrsample()), None, vbn);
+                }
+                if (h.nxtbkt() == 0) != (h.bktcb() & bktcb::LASTBKT != 0) {
+                    self.r.error(format!("area {i}'s available buckets: last bucket not marked so"), None, vbn);
+                }
+                self.claim(None, vbn, vbn as u64 + a.arbktsz() as u64);
+                vbn = h.nxtbkt();
+            }
         }
     }
 
@@ -316,7 +394,10 @@ impl Checker<'_, '_> {
                 self.r.error(format!("last bucket of level {l} doesn't point back to the first"), key, last);
             }
             if chain != *list {
-                for &v in chain.iter().filter(|v| !list.contains(v)) {
+                for (i, &v) in chain.iter().enumerate().filter(|(_, v)| !list.contains(v)) {
+                    if l == 0 && i > 0 && self.continues(n, chain[i - 1], v) {
+                        continue;
+                    }
                     self.r.error(format!("level {l} bucket the index doesn't reach"), key, v);
                 }
                 for &v in list.iter().filter(|v| !chain.contains(v)) {
@@ -336,12 +417,16 @@ impl Checker<'_, '_> {
         // Level 0: records or SIDRs, in order and within their index keys.
         let mut prev: Option<Vec<u8>> = None;
         let mut pointers = Vec::new();
+        let mut before = (None, None);
         for &vbn in &level0 {
             let Ok(b) = self.x.bucket(vbn, k.datbktsz()) else { continue };
             if !seen.contains(&vbn) {
                 self.header(n, vbn, b, 0, k.danum());
             }
-            let (lo, hi) = bounds.get(&vbn).cloned().unwrap_or((None, None));
+            // One without an index entry, which only carries on the key
+            // before it, has the bounds of the bucket before.
+            let (lo, hi) = bounds.get(&vbn).cloned().unwrap_or_else(|| before.clone());
+            before = (lo.clone(), hi.clone());
             let keys: Vec<Vec<u8>> = if n == 0 {
                 match self.x.data_bucket(&k, vbn, b) {
                     Ok(items) => self.data_items(&k, vbn, b, items),
@@ -361,7 +446,7 @@ impl Checker<'_, '_> {
                             pointers.extend(s.ptrs.iter().map(|&(c, rfa)| (vbn, c, rfa, s.key.clone())));
                             ks.push(s.key);
                         }
-                        if ks.windows(2).any(|w| k.compare(&w[0], &w[1]) != Ordering::Less) {
+                        if ks.windows(2).any(|w| self.x.compare(n, &w[0], &w[1]) != Ordering::Less) {
                             self.r.error("SIDR keys out of order or repeated in a bucket", key, vbn);
                         }
                         ks
@@ -375,16 +460,16 @@ impl Checker<'_, '_> {
             stats.entries.push(keys.len());
             for kv in keys {
                 if let Some(p) = &prev {
-                    match k.compare(p, &kv) {
+                    match self.x.compare(n, p, &kv) {
                         Ordering::Greater => self.r.error("keys out of order", key, vbn),
                         Ordering::Equal if !k.has(keyflag::DUPKEYS) => self.r.error("duplicate key", key, vbn),
                         _ => {}
                     }
                 }
-                if hi.as_ref().is_some_and(|h| k.compare(&kv, h) == Ordering::Greater) {
+                if hi.as_ref().is_some_and(|h| self.x.compare(n, &kv, h) == Ordering::Greater) {
                     self.r.error("key above the index key for its bucket", key, vbn);
                 }
-                if lo.as_ref().is_some_and(|l| k.compare(&kv, l) == Ordering::Less) {
+                if lo.as_ref().is_some_and(|l| self.x.compare(n, &kv, l) == Ordering::Less) {
                     self.r.error("key below the index key for the bucket before", key, vbn);
                 }
                 prev = Some(kv);
@@ -448,14 +533,14 @@ impl Checker<'_, '_> {
         }
         let ps = (b[13] >> 3 & 3) as usize + 2;
         let vfree = u16::get(&b[b.len() - 4..]) as usize;
-        if vfree + 1 + keys.len() * ps + 4 != b.len() {
+        if self.x.plg == 3 && vfree + 1 + keys.len() * ps + 4 != b.len() {
             self.r.error(format!("VBN free space {vfree} doesn't fit {} pointers", keys.len()), key, vbn);
         }
-        if keys.windows(2).any(|w| k.compare(&w[0], &w[1]) == Ordering::Greater) {
+        if keys.windows(2).any(|w| self.x.compare(n, &w[0], &w[1]) == Ordering::Greater) {
             self.r.error("index keys out of order", key, vbn);
         }
         if let Some(h) = hi
-            && keys.iter().any(|kv| k.compare(kv, h) == Ordering::Greater)
+            && keys.iter().any(|kv| self.x.compare(n, kv, h) == Ordering::Greater)
         {
             self.r.error("index key above the one leading here", key, vbn);
         }
@@ -466,10 +551,17 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Checks a primary data bucket's records and RRVs; returns their keys.
+    /// Checks a primary data bucket's records and RRVs; returns the keys of
+    /// those not deleted.
     fn data_items(&mut self, k: &Key, vbn: u32, b: &[u8], items: Vec<Item>) -> Vec<Vec<u8>> {
         let key = Some(0);
-        let nxtrecid = u16::get(&b[6..]);
+        // The next ID; 0 when every one up to 65535 was given. Before
+        // prologue 3 it is a byte, and free IDs are given again.
+        let nxtrecid = match u16::get(&b[6..]) {
+            _ if self.x.plg < 3 => u32::MAX,
+            0 => 65536,
+            n => n as u32,
+        };
         let mut ids = BTreeSet::new();
         let mut keys = Vec::new();
         for item in items {
@@ -480,7 +572,7 @@ impl Checker<'_, '_> {
             if !ids.insert(id) {
                 self.r.error(format!("record ID {id} used twice"), key, vbn);
             }
-            if id >= nxtrecid || id == 0 {
+            if id as u32 >= nxtrecid || id == 0 {
                 self.r.error(format!("record ID {id} not below the next ID, {nxtrecid}"), key, vbn);
             }
             match item {
@@ -509,7 +601,11 @@ impl Checker<'_, '_> {
                     if self.by_rfa.insert(r.rfa, Placed { vbn, id: r.id, live, rec: r.rec }).is_some() {
                         self.r.error(format!("RFA ({},{}) used twice", r.rfa.0, r.rfa.1), key, vbn);
                     }
-                    keys.push(r.key);
+                    // A deleted record OpenVMS left keeps its key, which a
+                    // record put since may have too (rid).
+                    if live {
+                        keys.push(r.key);
+                    }
                 }
             }
         }
@@ -527,7 +623,7 @@ impl Checker<'_, '_> {
             if c & (irc::DELETED | irc::NOPTRSZ) != 0 {
                 continue;
             }
-            if !k.has(keyflag::DUPKEYS) && last_key.is_some_and(|l| k.compare(l, kv) == Ordering::Equal) {
+            if !k.has(keyflag::DUPKEYS) && last_key.is_some_and(|l| self.x.compare(n, l, kv) == Ordering::Equal) {
                 self.r.error("duplicate key", key, *vbn);
             }
             last_key = Some(kv);
@@ -535,7 +631,7 @@ impl Checker<'_, '_> {
                 None => self.r.error(format!("SIDR pointer to ({},{}), no record", rfa.0, rfa.1), key, *vbn),
                 Some(p) if !p.live => self.r.error("SIDR pointer to a deleted record", key, *vbn),
                 Some(p) => {
-                    if k.key_of(&p.rec).is_none_or(|rk| k.compare(&rk, kv) != Ordering::Equal) {
+                    if k.key_of(&p.rec).is_none_or(|rk| self.x.compare(n, &rk, kv) != Ordering::Equal) {
                         self.r.error(format!("SIDR key differs from record ({},{})'s", rfa.0, rfa.1), key, *vbn);
                     }
                     *times.entry(*rfa).or_default() += 1;

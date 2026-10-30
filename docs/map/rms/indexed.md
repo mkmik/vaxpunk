@@ -1,7 +1,7 @@
 +++
 title = "Indexed files"
-summary = "Prologue 3 files: records in key order, a primary and up to 254 alternate keys"
-aka = ["IDX", "ISAM", "prologue 3", "XABKEY", "SIDR", "RRV", "bucket split", "key compression", "rmsidx.mar", "rmsidxw.mar"]
+summary = "Prologue 1, 2 and 3 files: records in key order, a primary and up to 254 alternate keys"
+aka = ["IDX", "ISAM", "prologue 3", "prologue 1", "prologue 2", "XABKEY", "SIDR", "RRV", "bucket split", "key compression", "rmsidx.mar", "rmsidxw.mar"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -31,45 +31,46 @@ note = "PRD-0008 step 6"
 [[feature]]
 id = "bucket-cache"
 title = "Buckets kept in buffers between services, not read each time"
-status = "todo"
-note = "rmsidx.mar ponytail; PRD-0008 open question on buffers"
+status = "done"
+note = "rmsidx.mar: the last 8 buckets read or written, by VBN; ponytail: 8 whatever RAB$B_MBF says"
 
 [[feature]]
 id = "duplicates"
 title = "A $GET along duplicates that doesn't walk every one before the current"
-status = "todo"
-note = "rmsidx.mar ponytail"
+status = "done"
+note = "IDX$NEXT goes on from the record, by its RFA, or from the SIDR bucket its pointer was in"
 
 [[feature]]
 id = "reclaim"
 title = "Emptied buckets reclaimed and record IDs reused; CONVERT/RECLAIM"
-status = "todo"
-note = "rmsidxw.mar ponytail"
+status = "done"
+note = "$PUT takes buckets from AREA$L_AVAIL first; a bucket out of IDs splits; ponytail: one whose new record goes first takes a free ID"
 
 [[feature]]
 id = "big-buckets"
 title = "Buckets up to the prologue's 63 blocks, not 32"
-status = "todo"
-note = "PRD-0008 Limits: RMS$_BKS past what fits in pool"
+status = "done"
+note = "Pool grows as needed (t8y:/exec/capacity#pool); the boot test's IDX63.IDX"
 
 [[feature]]
 id = "key-types"
 title = "Collated and packed decimal keys"
-status = "todo"
-note = "PRD-0008 non-goal at first: RMS$_DTP"
+status = "done"
+note = "Packed decimal by value; collated by the NCS table $CREATE takes from XAB$L_COLTBL and keeps after the prologue; vaxpunk: $DISPLAY copies it to XAB$L_COLTBL's buffer"
 
 [[feature]]
 id = "old-prologues"
 title = "Prologue 1 and 2 files"
-status = "todo"
-note = "PRD-0008 non-goal: refused with RMS$_PLV; CONVERT on OpenVMS makes them prologue 3"
+status = "done"
+note = "Read and written as OpenVMS does, XAB$B_PROLOG at $CREATE; ponytail: a bucket full of stubs drops them"
 
 [[feature]]
 id = "shared"
 title = "Shared access with bucket and record locks"
-status = "todo"
+status = "done"
 needs = ["/rms/sharing#record-locks"]
-note = "PRD-0008 step 9"
+refs = ["docs/adr/0046-shared-indexed-files-and-record-locks.md"]
+note = "PRD-0008 step 9: writers in CW, record locks, the other opens kept in step"
 
 [[needs]]
 on = "/rms/core"
@@ -107,14 +108,32 @@ segments are allowed. Most VMS applications keep their data in indexed
 files, and so does VMS: `SYSUAF.DAT`, `RIGHTSLIST.DAT`, the queue file,
 mail folders.
 
-vaxpunk's are prologue 3 as OpenVMS writes them, with every key type but
-collated and packed decimal: `rmsidx.mar` finds records, `rmsidxw.mar`
-puts, updates and deletes them
+vaxpunk's are prologue 3 as OpenVMS writes them, with every key type:
+`rmsidx.mar` finds records, `rmsidxw.mar` puts, updates and deletes them
 ([PRD-0008](../../prd/0008-rms-record-and-indexed-files.md) steps
 5 and 6). The boot test reads files `CONVERT` made on OpenVMS Alpha by
 every key and prints the same dumps, and `RMSRAND` runs a long random mix
 of operations against a model, after which the file passes the `ods`
 checker and `ANALYZE/RMS_FILE/CHECK`. `SYSUAF.DAT` is one, with
 OpenVMS's four keys
-([ADR-0029](../../adr/0029-loginout-and-sysuaf.md)). Buckets are read
-again each time they are wanted.
+([ADR-0029](../../adr/0029-loginout-and-sysuaf.md)). Each open keeps
+the last buckets it read or wrote; a service that changes the file
+gives its other opens the header and descriptors it changed, and they
+forget their buckets. A `$GET` goes on from the stream's record, found
+by its RFA, so a long run of duplicates costs no more than any other.
+A packed decimal key is ordered by the number it holds. A collated key
+is ordered by a collating sequence of NCS's that `$CREATE` takes from
+`XAB$L_COLTBL` and keeps after the prologue; since RMS's copy is in
+system space, `$DISPLAY` copies the table to the buffer `XAB$L_COLTBL`
+gives instead of returning its address, which is how `CONVERT` makes a
+collated file again.
+`CONVERT/RECLAIM` puts the buckets deletions emptied on their area's list
+of available buckets, and a split takes its new bucket from there before
+growing the file, its record IDs going on from where they were. A bucket
+that has given all 65,535 IDs splits when a new record comes, as on
+OpenVMS, so an RFA never finds another record.
+Files of prologues 1 and 2, which VAX/VMS made before V4 and OpenVMS
+still makes when an FDL file asks, are read and written too: no
+compression, record IDs of a byte that are given again, and index
+entries that keep their pointers next to their keys. `RMSRAND` runs its
+random mix on a prologue 1 file as well.

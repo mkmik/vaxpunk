@@ -9,7 +9,10 @@ use ods_core::RecordAttrs;
 use ods_core::rms::{self, AreaSpec, KeySpec, Spec, dtype, fdl};
 use ods_core::{rat, rfm};
 
-const INDEXED: [&str; 7] = ["idx1", "idxc", "idxf", "idxb", "comp", "idxm", "uaf"];
+const INDEXED: [&str; 26] = [
+    "idx1", "idxc", "idxf", "idxb", "comp", "idxm", "uaf", "p1", "p2", "p2b", "p2i", "p2m", "pd1", "pd2", "pd3", "pkn",
+    "col1c", "col6c", "col8", "col9", "rc1", "rc2", "rc4", "rcb1", "rcb2", "rcb3",
+];
 const RELATIVE: [&str; 2] = ["rel", "relf"];
 
 fn path(name: &str) -> PathBuf {
@@ -116,6 +119,8 @@ fn damage_is_reported() {
     damaged("idx1", |d| d[at(8) + 8] = 10, "level 0");
     damaged("idx1", |d| d[at(2) + 40] ^= 1, "prologue checksum");
     damaged("relf", |d| d[100] ^= 1, "prologue checksum");
+    // col1c: no collating tables where its prologue says, at VBN 0.
+    damaged("col1c", |d| d[0x78..0x7a].fill(0), "collating table");
     // Swap the keys of the first two records of VBN 4.
     damaged(
         "idx1",
@@ -282,6 +287,44 @@ fn load_fixed_areas() {
     spec.keys.truncate(2);
     let many: Vec<Vec<u8>> = (0..3000).map(|i| format!("{i:06} DEPT  SAME{:<23}", "").into_bytes()).collect();
     round_trip(&spec, &many);
+}
+
+/// A level 0 bucket without an index entry only carries on the key the
+/// bucket before ends with: one that goes on to greater keys, which no
+/// lookup finds, is reported.
+#[test]
+fn continuation_within_bounds() {
+    let mut key = KeySpec::string(0, 4);
+    key.dups = true;
+    let spec = Spec {
+        rfm: rfm::FIX,
+        mrs: 8,
+        rat: rat::CR,
+        areas: vec![AreaSpec { bktsz: 1, alloc: 0, deq: 0 }],
+        keys: vec![key],
+        cluster: 0,
+    };
+    let recs: Vec<Vec<u8>> = [("AAAA", 40), ("ABBB", 5), ("CCCC", 40)]
+        .iter()
+        .flat_map(|&(k, n)| vec![format!("{k}data").into_bytes(); n])
+        .collect();
+    let mut data = rms::build(&spec, &recs).unwrap();
+    let attrs = spec.record_attrs((data.len() / 512) as u32);
+    assert_clean("built", &rms::check(&data, &attrs));
+    // The root's second entry out: its key, and its pointer, the ones
+    // below moving up.
+    let root = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
+    let b = &mut data[at(root)..at(root) + 512];
+    assert_eq!(b[12], 1, "the root leads to data buckets");
+    let ps = (b[13] >> 3 & 3) as usize + 2;
+    let free = u16::from_le_bytes([b[4], b[5]]) as usize;
+    b.copy_within(14 + 8..free, 14 + 4);
+    b[4..6].copy_from_slice(&((free - 4) as u16).to_le_bytes());
+    let low = u16::from_le_bytes([b[508], b[509]]) as usize + 1;
+    b.copy_within(low..512 - 4 - 2 * ps, low + ps);
+    b[508..510].copy_from_slice(&((low - 1 + ps) as u16).to_le_bytes());
+    let r = rms::check(&data, &attrs);
+    assert!(r.findings.iter().any(|f| f.what.contains("key above the index key")), "{:#?}", r.findings);
 }
 
 #[test]

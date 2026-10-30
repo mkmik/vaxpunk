@@ -1,0 +1,235 @@
+--- 1 open F1 rw share=write: OPEN/READ/WRITE/SHARE=WRITE F1 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 2 open F2 rw share=write: OPEN/READ/WRITE/SHARE=WRITE F2 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 3 F1 read K3: READ/KEY='K0000003' F1 R1
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R1=K0000003 BETA x
+--- 4 F2 read K3 (F1 holds it): READ/KEY='K0000003' F2 R2
+%RMS-E-RLK, target record currently locked by another stream
+=> %X000182AA %RMS-E-RLK, target record currently locked by another stream
+   R2=-
+--- 5 F2 read/nolock K3: READ/NOLOCK/KEY='K0000003' F2 R2
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R2=K0000003 BETA x
+--- 5b F2 write/update after read/nolock (RNL?): WRITE/UPDATE F2 R2
+%RMS-W-RNL, record not locked
+=> %X000181A0 %RMS-W-RNL, record not locked
+--- 6 F2 read K6: READ/KEY='K0000006' F2 R2
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R2=K0000006 ALPHA xx
+--- 7 F1 write/update K3: WRITE/UPDATE F1 'K0000003 BETA updated by F1'
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 8 F2 read K3 after F1 update: READ/KEY='K0000003' F2 R2
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R2=K0000003 BETA updated by F1
+--- 9 F1 read K3 (F2 now holds it?): READ/KEY='K0000003' F1 R1
+%RMS-E-RLK, target record currently locked by another stream
+=> %X000182AA %RMS-E-RLK, target record currently locked by another stream
+   R1=K0000003 BETA x
+--- 10 F1 read K9: READ/KEY='K0000009' F1 R1
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R1=K0000009 GAMMA xxx
+--- 11 F2 read/delete K9 (F1 holds it): READ/KEY='K0000009'/DELETE F2 R2
+%RMS-E-RLK, target record currently locked by another stream
+=> %X000182AA %RMS-E-RLK, target record currently locked by another stream
+   R2=K0000003 BETA updated by F1
+--- 12 F1 read next (K12): READ F1 R1
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R1=K0000012 ALPHA xxxx
+--- 13 F2 read/delete K9 again: READ/KEY='K0000009'/DELETE F2 R2
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+   R2=K0000009 GAMMA xxx
+--- 14 F1 read K9 (deleted by F2): READ/KEY='K0000009' F1 R1
+%RMS-E-RNF, record not found
+=> %X000182B2 %RMS-E-RNF, record not found
+   R1=K0000012 ALPHA xxxx
+--- 16 F1 write new K10: WRITE F1 'K0000010 NEW from F1'
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 17 F2 read K10: READ/KEY='K0000010' F2 R2
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R2=K0000010 NEW from F1
+--- 18 F1 read K10 (F2 holds it): READ/KEY='K0000010' F1 R1
+%RMS-E-RLK, target record currently locked by another stream
+=> %X000182AA %RMS-E-RLK, target record currently locked by another stream
+   R1=K0000012 ALPHA xxxx
+--- 18b F1 write/update after RLK (CUR?): WRITE/UPDATE F1 'K0000010 changed after RLK'
+%RMS-F-CUR, no current record (operation not preceded by $GET/$FIND)
+=> %X000184B4 %RMS-F-CUR, no current record (operation not preceded by $GET/$FIND)
+--- 19 open F3 read share=write: OPEN/READ/SHARE=WRITE F3 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 20 F3 read K15: READ/KEY='K0000015' F3 R3
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R3=K0000015 DELTA xxxxx
+--- 21 F2 read K15 (F3 is read-only): READ/KEY='K0000015' F2 R2
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R2=K0000015 DELTA xxxxx
+--- 21b F3 read K15 again (F2 holds it): READ/KEY='K0000015' F3 R3
+%RMS-E-RLK, target record currently locked by another stream
+=> %X000182AA %RMS-E-RLK, target record currently locked by another stream
+   R3=K0000015 DELTA xxxxx
+--- 21c F3 read/nolock K15: READ/NOLOCK/KEY='K0000015' F3 R3
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R3=K0000015 DELTA xxxxx
+--- 22 F1 read K18: READ/KEY='K0000018' F1 R1
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R1=K0000018 DELTA xxxxxx
+--- 23 close F1: CLOSE F1
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 24 F2 read K18 after F1 closed: READ/KEY='K0000018' F2 R2
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R2=K0000018 DELTA xxxxxx
+--- 25 close F2: CLOSE F2
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 26 close F3: CLOSE F3
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 27 open A rw share: OPEN/READ/WRITE/SHARE A L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 28 open B rw share: OPEN/READ/WRITE/SHARE B L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 29 A read K6: READ/KEY='K0000006' A RA
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   RA=K0000006 ALPHA xx
+--- 30 B read first: READ B RB
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   RB=K0000003 BETA updated by F1
+--- 31 B read next (K6, A holds it): READ B RB
+%RMS-E-RLK, target record currently locked by another stream
+=> %X000182AA %RMS-E-RLK, target record currently locked by another stream
+   RB=K0000003 BETA updated by F1
+--- 31b B write/update after RLK: WRITE/UPDATE B 'K0000003 BETA by B'
+%RMS-F-CUR, no current record (operation not preceded by $GET/$FIND)
+=> %X000184B4 %RMS-F-CUR, no current record (operation not preceded by $GET/$FIND)
+--- 32 close A: CLOSE A
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 33 B read next after A closed: READ B RB
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   RB=K0000006 ALPHA xx
+--- 34 open A rw share: OPEN/READ/WRITE/SHARE A L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 35 A read K12: READ/KEY='K0000012' A RA
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   RA=K0000012 ALPHA xxxx
+--- 40 B read/delete/nolock K15: READ/DELETE/NOLOCK/KEY='K0000015' B RB
+%RMS-W-RNL, record not locked
+=> %X000181A0 %RMS-W-RNL, record not locked
+   RB=K0000015 DELTA xxxxx
+--- 41 close A: CLOSE A
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 42 close B: CLOSE B
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 43 open R read share: OPEN/READ/SHARE R L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 44 open W rw share: OPEN/READ/WRITE/SHARE W L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 45 R read K18: READ/KEY='K0000018' R RR
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   RR=K0000018 DELTA xxxxxx
+--- 46 W read K18 (R only queried?): READ/KEY='K0000018' W RW
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   RW=K0000018 DELTA xxxxxx
+--- 47 R read K18 (W holds it): READ/KEY='K0000018' R RR
+%RMS-E-RLK, target record currently locked by another stream
+=> %X000182AA %RMS-E-RLK, target record currently locked by another stream
+   RR=K0000018 DELTA xxxxxx
+--- 48 R read/nolock K18: READ/NOLOCK/KEY='K0000018' R RR
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   RR=K0000018 DELTA xxxxxx
+--- 49 close R: CLOSE R
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 50 close W: CLOSE W
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 51 open P rw share=read: OPEN/READ/WRITE/SHARE=READ P L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 52 open A rw share (CW vs PW): OPEN/READ/WRITE/SHARE A L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 53 open R read share (CR): OPEN/READ/SHARE R L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 54 open Q read (PR vs PW): OPEN/READ Q L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 55 open S read share=read: OPEN/READ/SHARE=READ S L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 56 close P: CLOSE P
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 57 open A rw share again: OPEN/READ/WRITE/SHARE A L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 58 close: CLOSE A
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 59 close: CLOSE R
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 60 close: CLOSE Q
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+=> %X00038188 %CLI-W-UNDFIL, file has not been opened by DCL - check logical name
+--- 61 close: CLOSE S
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+=> %X00038188 %CLI-W-UNDFIL, file has not been opened by DCL - check logical name
+--- 62 open F1 rw share=write: OPEN/READ/WRITE/SHARE=WRITE F1 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 63 open F2 rw share=read: OPEN/READ/WRITE/SHARE=READ F2 L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 64 open F2 read share=read: OPEN/READ/SHARE=READ F2 L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 65 open F2 read (no share): OPEN/READ F2 L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 66 open F2 read share=write: OPEN/READ/SHARE=WRITE F2 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 67 close: CLOSE F1
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 68 close: CLOSE F2
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 69 open F1 rw (no share): OPEN/READ/WRITE F1 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 70 open F2 rw (no share): OPEN/READ/WRITE F2 L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 71 open F2 read (no share): OPEN/READ F2 L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 72 open F2 read share=write: OPEN/READ/SHARE=WRITE F2 L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 73 close: CLOSE F1
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 74 close: CLOSE F2
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+=> %X00038188 %CLI-W-UNDFIL, file has not been opened by DCL - check logical name
+--- 75 open F1 read (no share): OPEN/READ F1 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 76 open F2 read (no share): OPEN/READ F2 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 77 open F3 rw share=write: OPEN/READ/WRITE/SHARE=WRITE F3 L.IDX
+%DCL-E-OPENIN, error opening DKA100:[EXP5]L.IDX; as input
+-RMS-E-FLK, file currently locked by another user
+=> %X1001828A %RMS-E-FLK, file currently locked by another user
+--- 78 open F4 read share=write: OPEN/READ/SHARE=WRITE F4 L.IDX
+=> %X00000001 %SYSTEM-S-NORMAL, normal successful completion
+--- 79 F1 read K3: READ/KEY='K0000003' F1 R1
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R1=K0000003 BETA updated by F1
+--- 80 F2 read K3: READ/KEY='K0000003' F2 R2
+=> %X00030001 %CLI-S-NORMAL, normal successful completion
+   R2=K0000003 BETA updated by F1
+--- 81 close: CLOSE F1
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 82 close: CLOSE F2
+=> %X00010001 %RMS-S-NORMAL, normal successful completion
+--- 83 close: CLOSE F3
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+=> %X00038188 %CLI-W-UNDFIL, file has not been opened by DCL - check logical name
+--- 84 close: CLOSE F4
+=> %X00010001 %RMS-S-NORMAL, normal successful completion

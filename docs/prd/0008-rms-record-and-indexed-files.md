@@ -69,9 +69,11 @@ Decisions this PRD rests on:
   of FreeVMS. The structure layouts come from the manuals and from
   `ANALYZE/RMS_FILE` dumps of the oracle's files.
 - **Prologue 1 and 2 indexed files.** VMS still opens them; we refuse them
-  with `RMS$_PLV`. `CONVERT` on OpenVMS turns them into prologue 3.
+  with `RMS$_PLV`. `CONVERT` on OpenVMS turns them into prologue 3. They
+  came later ([t8y:/rms/indexed#old-prologues](../map/rms/indexed.md)).
 - **Collated keys and packed decimal keys** at first. String, signed and
   unsigned integer of 2, 4 and 8 bytes, and their descending forms, are in.
+  Both came later ([t8y:/rms/indexed#key-types](../map/rms/indexed.md)).
 - **RMS Journaling**: after-image, before-image and recovery units. No
   `SET FILE/AI_JOURNALING`, no DECdtm.
 - **Global buffers**, `SET FILE/GLOBAL_BUFFERS`, and deferred write across
@@ -144,8 +146,7 @@ Prologue 3, as `CONVERT` on OpenVMS makes it by default:
   `XABKEY` chain and the areas from the `XABALL`s.
 - **Limits.** The prologue's: 255 keys, 8 segments, 255-byte keys, 63-block
   buckets. Ours, set by pool (*Open questions*): fewer buffers per stream
-  than VMS's defaults, and bucket sizes past what fits refused with
-  `RMS$_BKS`.
+  than VMS's defaults.
 
 Every condition value is VMS's, in `starlet.mlb`'s `$RMSDEF`, with VMS's
 message text.
@@ -203,10 +204,12 @@ instead, `RAB$V_NLK` and `RAB$V_RRL` to read past it, `RAB$V_ULK` with
 
 ## Open questions
 
-- [ ] **Buffers.** VMS gives each stream several buffers of a bucket's size
-  each, up to 32 KB a bucket, in the process's P1. Ours come from 512 KB
-  of nonpaged pool shared by everything. Smaller defaults and a total cap,
-  or move RMS's buffers to P1 now, ahead of executive mode?
+- [x] **Buffers.** VMS gives each stream several buffers of a bucket's size
+  each, up to 32 KB a bucket, in the process's P1. Ours come from
+  nonpaged pool, which now grows as it needs to
+  (`t8y:/exec/capacity#pool`): each open of an indexed file keeps its last
+  8 buckets there, whatever their size, and they move to P1 with RMS when
+  it runs in executive mode.
 - [ ] **Files-11 first.** An indexed file extends often and in small
   pieces, and a header without extension headers runs out of map
   pointers; at 4,096 blocks a disk holds few big files. Backlog item 22's
@@ -229,9 +232,12 @@ instead, `RAB$V_NLK` and `RAB$V_RRL` to read past it, `RAB$V_ULK` with
 
 Each step ends in something you can run or look at.
 
-Steps 1 to 8 are done; step 9 builds on PRD-0003's step 7, whose access
-arbitration lets one writer at a time open a file
-([ADR-0036](../adr/0036-file-access-arbitration-locks.md)).
+Steps 1 to 9 are done, step 9 for indexed files: writers that share
+writing open them together, in CW, with record locks
+([ADR-0046](../adr/0046-shared-indexed-files-and-record-locks.md)); a
+relative file still has one writer at a time
+([ADR-0036](../adr/0036-file-access-arbitration-locks.md)), and one
+stream per file.
 `boot/tests/rms.rs` checks each against the fixtures and a model, and
 the reports `ANALYZE/RMS_FILE` and `DIRECTORY/FULL` write matched the
 oracle's on every fixture. DCL's `OPEN`, `READ`, `WRITE` and `CLOSE`

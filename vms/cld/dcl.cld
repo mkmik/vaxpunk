@@ -120,8 +120,8 @@ define verb ON
 ! OPEN logical-name file-spec: opens a file for READ and WRITE, for
 ! reading by default; /WRITE alone makes a new sequential file, /READ/WRITE
 ! opens one of any organization for both, and /APPEND writes after its
-! last record. ponytail: /SHARE is taken and does nothing, as RMS has
-! one stream per file until PRD-0008's step 9.
+! last record. /SHARE, or /SHARE=WRITE, lets others read and write it
+! too, /SHARE=READ only read it.
 define verb OPEN
 	cliroutine OPEN
 	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
@@ -144,8 +144,9 @@ define verb PIPE
 ! READ logical-name symbol: reads the next record of the file OPEN
 ! opened, or with /KEY the one with that key, along key /INDEX, into a
 ! local symbol; SYS$INPUT a procedure's next data line, or the terminal,
-! after /PROMPT's text, as SYS$COMMAND. ponytail: no /NOLOCK or
-! /TIME_OUT, which read shared files and terminals.
+! after /PROMPT's text, as SYS$COMMAND. A shared file's record is locked
+! until the next command on the file; /NOLOCK reads it locked or not,
+! /WAIT waits for another's lock. ponytail: no /TIME_OUT.
 define verb READ
 	cliroutine READ
 	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
@@ -155,8 +156,10 @@ define verb READ
 	qualifier ERROR, value(required)
 	qualifier INDEX, value(required, type=$number)
 	qualifier KEY, value(required)
+	qualifier LOCK, default
 	qualifier MATCH, value(required, type=MATCH_OPTIONS)
 	qualifier PROMPT, value(required)
+	qualifier WAIT
 
 define type MATCH_OPTIONS
 	keyword EQ

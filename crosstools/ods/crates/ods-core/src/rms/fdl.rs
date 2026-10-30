@@ -25,6 +25,8 @@ pub struct Fdl {
     pub mrn: u32,
     /// `RECORD CONTROL_FIELD_SIZE`.
     pub vfc: u8,
+    /// `KEY 0 PROLOG`, 0 if not given. The loader makes prologue 3 only.
+    pub prolog: u8,
     /// Record format, size and attributes; areas and keys of an indexed
     /// file. `cluster` is 0.
     pub spec: Spec,
@@ -113,6 +115,7 @@ pub fn parse(text: &str) -> Result<Fdl> {
         bktsz: 0,
         mrn: 0,
         vfc: 0,
+        prolog: 0,
         spec: Spec { rfm: rfm::VAR, mrs: 0, rat: rat::CR, areas: Vec::new(), keys: Vec::new(), cluster: 0 },
     };
     let mut areas: BTreeMap<u8, AreaSpec> = BTreeMap::new();
@@ -242,9 +245,7 @@ pub fn parse(text: &str) -> Result<Fdl> {
                         "INDEX_AREA" => k.index_area = small(254)? as u8,
                         "LEVEL1_INDEX_AREA" => k.level1_area = Some(small(254)? as u8),
                         "NAME" => k.name = quoted(value).ok_or_else(|| bad("expected a quoted name"))?,
-                        "PROLOG" | "PROLOGUE" if number()? != 3 => {
-                            return Err(RmsError::Unsupported("prologues other than 3"));
-                        }
+                        "PROLOG" | "PROLOGUE" => fdl.prolog = small(3)? as u8,
                         _ => {}
                     }
                 }

@@ -58,8 +58,14 @@ V_GT:   .ASCID  "MATCH.GT"
 V_INDEX:
         .ASCID  "INDEX"
 V_KEY:  .ASCID  "KEY"
+V_LOCK: .ASCID  "LOCK"
 V_LOG:  .ASCID  "LOG"
 V_READ: .ASCID  "READ"
+V_SHARE:
+        .ASCID  "SHARE"
+V_SHREAD:
+        .ASCID  "SHARE.READ"
+V_WAIT: .ASCID  "WAIT"
 V_SYMBOL:
         .ASCID  "SYMBOL"
 V_UPDATE:
@@ -137,11 +143,12 @@ LABEL:  .GLOBAL_LABEL
 10$:    MOVL    R9, R0
         BRW     DCL$DONE
 
-; DCL$OPEN, OPEN[/READ][/WRITE][/APPEND] name file: opens file as name,
-; for reading, with /WRITE alone a new sequential file of VAR records
-; for writing, with /READ/WRITE an existing one of any organization for
-; both, with /APPEND an existing one to write after its last record. A
-; name OPEN opened already stays as it is.
+; DCL$OPEN, OPEN[/READ][/WRITE][/APPEND][/SHARE] name file: opens file
+; as name, for reading, with /WRITE alone a new sequential file of VAR
+; records for writing, with /READ/WRITE an existing one of any
+; organization for both, with /APPEND an existing one to write after its
+; last record; with /SHARE others may read and write it too, with
+; /SHARE=READ read it. A name OPEN opened already stays as it is.
 DCL$OPEN::
         .EXCEPTION_ENTRY
         MOVAB   DCL$V_LOGNAM, R1
@@ -172,7 +179,15 @@ DCL$OPEN::
         MOVC3   R8, DCL$TOKEN, SPEC
         MOVAB   SPEC, FAB$L_FNA(R10)
         MOVB    R8, FAB$B_FNS(R10)
-        MOVAB   V_APPEND, R1
+        MOVAB   V_SHARE, R1             ; others may read and write,
+        BSBW    DCL$ISPRES
+        BLBC    R0, 25$
+        MOVB    #FAB$M_SHRGET!FAB$M_SHRPUT!FAB$M_SHRUPD!FAB$M_SHRDEL, FAB$B_SHR(R10)
+        MOVAB   V_SHREAD, R1            ; or only read
+        BSBW    DCL$ISPRES
+        BLBC    R0, 25$
+        MOVB    #FAB$M_SHRGET, FAB$B_SHR(R10)
+25$:    MOVAB   V_APPEND, R1
         BSBW    DCL$ISPRES
         BLBC    R0, 30$
         MOVB    #FAB$M_PUT!FAB$M_UPD!FAB$M_DEL, FAB$B_FAC(R10)
@@ -203,16 +218,16 @@ DCL$OPEN::
         TSTL    R8
         BEQL    85$
         BRW     DCL$GOTOSYM
-85$:    CMPB    FAB$B_FAC(R10), #FAB$M_GET
-        BNEQ    86$
+85$:    BITB    #FAB$M_GET, FAB$B_FAC(R10)  ; /READ, /READ/WRITE: input
+        BEQL    86$
         ADDTEXT "%DCL-E-OPENIN, error opening "
         BRB     87$
 86$:    ADDTEXT "%DCL-E-OPENOUT, error opening "
 87$:    MOVAB   SPEC, R1
         MOVZBL  FAB$B_FNS(R10), R2
         BSBW    DCL$ADD
-        CMPB    FAB$B_FAC(R10), #FAB$M_GET
-        BNEQ    88$
+        BITB    #FAB$M_GET, FAB$B_FAC(R10)
+        BEQL    88$
         ADDTEXT " as input"
         BRB     89$
 88$:    ADDTEXT " as output"
@@ -248,9 +263,11 @@ DCL$CLOSE::
 ; with that key, along key /INDEX=n, the last READ's or 0: EQ, the default /MATCH, the first whose key starts with
 ; string, GE the first equal or greater, GT the first greater. The next
 ; READ without /KEY reads the record after it along that key. /DELETE
-; deletes the record after reading it. Past the last record, goes to the
-; /END_OF_FILE label, if there is one. SYS$INPUT and SYS$COMMAND, which
-; OPEN didn't open, are TERMREAD's.
+; deletes the record after reading it. A shared file's record stays
+; locked until the next command on the file; /NOLOCK reads it whoever
+; has it locked, and locks nothing, /WAIT waits for another's lock. Past
+; the last record, goes to the /END_OF_FILE label, if there is one.
+; SYS$INPUT and SYS$COMMAND, which OPEN didn't open, are TERMREAD's.
 DCL$READ::
         .EXCEPTION_ENTRY
         MOVAB   DCL$V_LOGNAM, R1
@@ -260,7 +277,16 @@ DCL$READ::
         BRW     TERMREAD
 5$:     MOVAB   FIL$R_RAB(R11), R10
         MOVB    #RAB$C_SEQ, RAB$B_RAC(R10)
-        BICL2   #RAB$M_KGE!RAB$M_KGT, RAB$L_ROP(R10)
+        BICL2   #RAB$M_KGE!RAB$M_KGT!RAB$M_NLK!RAB$M_RRL!RAB$M_WAT, RAB$L_ROP(R10)
+        MOVAB   V_LOCK, R1
+        BSBW    DCL$ISPRES
+        BLBS    R0, 6$
+        BISL2   #RAB$M_NLK!RAB$M_RRL, RAB$L_ROP(R10)
+6$:     MOVAB   V_WAIT, R1
+        BSBW    DCL$ISPRES
+        BLBC    R0, 7$
+        BISL2   #RAB$M_WAT, RAB$L_ROP(R10)
+7$:
         MOVAB   V_INDEX, R1
         BSBW    DCL$GETVAL
         CLRL    R2
@@ -296,23 +322,25 @@ DCL$READ::
         MOVAB   V_EOF, R1
         BRW     LABEL
 25$:    BRW     FILERR
-30$:    MOVAB   DCL$VSTACK, R9
+30$:    MOVAB   DCL$VSTACK, R9          ; the symbol gets it, deleted or not
         MOVL    #1, VAL$L_TYPE(R9)
         MOVZWL  RAB$W_RSZ(R10), R0
         MOVB    R0, VAL$T_STR(R9)
         MOVC3   R0, @RAB$L_RBF(R10), VAL$T_STR+1(R9)
+        PUSHL   R10
+        MOVAB   V_SYMBOL, R1
+        BSBW    DCL$VALNAME
+        MOVL    DCL$DEPTH, R10
+        MOVAB   DCL$VSTACK, R9
+        BSBW    DCL$SETSYM
+        MOVL    (SP)+, R10
         MOVAB   V_DELETE, R1
         BSBW    DCL$ISPRES
         BLBC    R0, 40$
         $DELETE RAB=(R10)
         BLBS    R0, 40$
         BRW     FILERR
-40$:    MOVAB   V_SYMBOL, R1
-        BSBW    DCL$VALNAME
-        MOVL    DCL$DEPTH, R10
-        MOVAB   DCL$VSTACK, R9
-        BSBW    DCL$SETSYM
-        BRW     DCL$OK
+40$:    BRW     DCL$OK
 
 ; TERMREAD: READ SYS$INPUT symbol, or SYS$COMMAND, DCL$TOKEN = the name,
 ; R8 = its length. SYS$INPUT in a procedure is its next data line, a line

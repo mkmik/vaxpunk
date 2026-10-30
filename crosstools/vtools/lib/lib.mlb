@@ -779,7 +779,8 @@ IFB$L_BUFSZ = 72                        ; the buffer's size, to give it back
 IFB$L_LKID = 76                         ; the file's access arbitration lock, or 0
 IFB$AB_HDR = 80                         ; the file's header
 IFB$W_VERLIMIT = 592                    ; its name's version limit, in its directory
-IFB$K_LENGTH = 596                      ; the fixed part
+IFB$L_RLB = 596                         ; the record locks the stream holds: a list of RLBs, or 0
+IFB$K_LENGTH = 600                      ; the fixed part
 IFB$V_WRITE = 0                         ; it may be written: $CREATE made it or $OPEN opened it for that
 IFB$V_DIRTY = 1                         ; the buffer holds what the file hasn't yet
 IFB$V_HDR = 2                           ; the header changed: its end of file
@@ -789,6 +790,16 @@ IFB$V_PLG = 5                           ; relative: the prologue's end of file c
 IFB$V_FOUND = 6                         ; the last record service was a $FIND: a sequential $GET reads the record it found
 IFB$V_DATA = 7                          ; indexed: a bucket was written, the end of file goes past the last block
 IFB$V_MARKDEL = 8                       ; $ERASE deleted it while open: the last to close it deletes its header
+IFB$V_RLK = 9                           ; record locking: others may write the file, or it is written and others may read it
+; An RLB: a lock a stream holds on a record, a sublock of its file's
+; access arbitration lock named by the record's RFA.
+RLB$L_NEXT = 0                          ; the next of the stream's, or 0
+RLB$L_LKID = 4                          ; the lock
+RLB$L_ID = 8                            ; the lock's name: the RFA's ID, a longword,
+RLB$L_VBN = 12                          ; and VBN
+RLB$B_MODE = 16                         ; the mode it is held in
+RLB$B_AUTO = 17                         ; 1 if the stream's next operation drops it, not RAB$M_ULK's
+RLB$K_LENGTH = 32                       ; a pool block, in 16-byte units
         .ENDM   $IFBDEF
 
 ; $PLGDEF, $KEYDEF, $AREADEF, $BKTDEF, $IRCDEF, $DLCDEF: relative and
@@ -801,7 +812,10 @@ PLG$L_MRN = 108                         ; relative: highest record number
 PLG$L_EOF = 112                         ; relative: the VBN after the last bucket
 PLG$W_VER_NO = 116                      ; prologue version
 PLG$C_VER_REL = 1                       ; a relative file's
+PLG$C_VER_1 = 1                         ; an indexed file's whose keys are all strings, before prologue 3
+PLG$C_VER_2 = 2                         ; and one with other keys too
 PLG$C_VER_3 = 3                         ; an indexed file's
+PLG$W_COLVBN = 120                      ; indexed: the first block of the collated keys' tables
 PLG$W_CHECKSUM = 510                    ; the 16-bit sum of the block's first 255 words
         .ENDM   $PLGDEF
 
@@ -878,10 +892,13 @@ AREA$K_BLN = 64                         ; an area descriptor's size
 
         .MACRO  $BKTDEF
 BKT$B_CHECKCHAR = 0                     ; as the bucket's last byte
-BKT$B_INDEXNO = 1                       ; key of reference
+BKT$B_INDEXNO = 1                       ; key of reference; prologues 1 and 2: BKT$B_AREANO
+BKT$B_AREANO = 1                        ; prologues 1 and 2: the area it came from
 BKT$W_ADRSAMPLE = 2                     ; low word of its VBN
 BKT$W_FREESPACE = 4                     ; first free byte
 BKT$W_NXTRECID = 6                      ; next record ID
+BKT$B_NXTRECID = 6                      ; prologues 1 and 2: next record ID, a byte,
+BKT$B_LSTRECID = 7                      ; and the last free one
 BKT$L_NXTBKT = 8                        ; next bucket of the level
 BKT$B_LEVEL = 12                        ; 0 for data and SIDR buckets
 BKT$B_BKTCB = 13                        ; BKT$V_
@@ -901,8 +918,16 @@ IRC$K_HDRSZ = 9                         ; a data record's header, with a 4-byte 
 IRC$V_PTRSZ = 0                         ; the pointer's size less 2, 2 bits
 IRC$V_DELETED = 2
 IRC$V_RRV = 3                           ; a record reference vector
-IRC$V_NOPTRSZ = 4                       ; no pointer: a deleted SIDR pointer
+IRC$V_NOPTRSZ = 4                       ; no pointer: a deleted SIDR pointer; prologues 1 and 2: a stub, or a SIDR without a count
 IRC$V_FIRST = 7                         ; a SIDR's first pointer
+; Prologues 1 and 2: IDs are a byte, the RRV's pointer 4 bytes, a stub
+; holds a deleted record's ID, and a SIDR may have a count of duplicates.
+IRC$B_ID = 1                            ; record ID
+IRC$B_RRV_ID = 2                        ; its RFA's ID
+IRC$L_RRV_VBN2 = 3                      ; and VBN
+IRC$K_HDRSZ2 = 7                        ; a data record's header, before its size
+IRC$K_STUBSZ = 2                        ; a stub: control and ID
+IRC$K_DCNTSZ = 4                        ; a SIDR's count of duplicates
         .ENDM   $IRCDEF
 
         .MACRO  $DLCDEF
@@ -911,8 +936,9 @@ DLC$V_REC = 3                           ; it has a record
         .ENDM   $DLCDEF
 
 ; $IDXDEF: an indexed file's state, in its IFAB's buffer: its keys and
-; areas, the stream's place, the keys being worked on, and walks, each a
-; place in a bucket. rmsidx.mar and rmsidxw.mar's.
+; areas, the stream's place, the keys being worked on, walks, each a
+; place in a bucket, and the buckets kept between services, each in a
+; slot. rmsidx.mar and rmsidxw.mar's.
         .MACRO  $IDXDEF
 ; A walk: a bucket, an entry in it, what the entry is, and the keys
 ; before it and of it, expanded.
@@ -974,16 +1000,46 @@ X$W_RFAID = 1892                        ; and ID
 X$L_PRREC = 1896                        ; a record being packed,
 X$L_PRLEN = 1900                        ; and its size
 X$L_M = 1904                            ; a split's first entry that goes
-X$K_WALK0 = 1908                        ; the walks
-X$K_WALK1 = 1908+W$K_LENGTH
-X$K_WALK2 = 1908+<2*W$K_LENGTH>
-X$K_LENGTH = 1908+<3*W$K_LENGTH>
+X$L_CTXSVBN = 1908                      ; the SIDR bucket the stream's record's pointer was in, or 0
+X$L_NSLOT = 1912                        ; buckets kept between services
+X$L_SLOTS = 1916                        ; their slots, S$K_LENGTH each
+X$L_TICK = 1920                         ; uses of them so far, for the least recently used
+X$L_PLG = 1924                          ; the prologue's version, 1, 2 or 3
+X$L_LKSTS = 1928                        ; what locking the record $GET or $FIND found said: RMS$_NORMAL or an alternate success
+X$L_COLTAB = 1932                       ; each key's collating sequence, a C$ block, or 0, a longword each
+X$L_COLBLK = 1936                       ; the block of the collating tables in IDX$AB_PLG, or 0
+X$T_COLW1 = 1940                        ; two keys' weights, being compared
+X$T_COLW2 = 2452
+X$L_NEWID = 2964                        ; the next record ID of the bucket NEWBKT gave last,
+X$L_NEWAREA = 2968                      ; and its area
+X$K_WALK0 = 2972                        ; the walks
+X$K_WALK1 = 2972+W$K_LENGTH
+X$K_WALK2 = 2972+<2*W$K_LENGTH>
+X$K_LENGTH = 2972+<3*W$K_LENGTH>
 X$C_BOF = 0                             ; before the first record
 X$C_AFTER = 1                           ; after the stream's record
 X$C_AT = 2                              ; at it: a $FIND found it
 X$C_EOF = 3                             ; past the last
 X$V_LASTPUT = 0                         ; X$T_LASTPUT holds a key
 X$V_OKDUP = 1                           ; a $PUT found a key it has
+X$V_WROTE = 2                           ; the service wrote a bucket or the prologue: the file's other opens get what changed
+X$V_IDSPLIT = 3                         ; SPLIT0: the bucket has no IDs left, so the new record goes to the new one
+; A collated key's collating sequence, from the file's tables: NCS's.
+C$T_PRIM = 0                            ; each character's primary weight
+C$T_SEC = 256                           ; and secondary
+C$T_LIST = 512                          ; characters weighed otherwise, 4 bytes each: the character, the next or FF, and its primary weights, the second 0 if one; FF FF after the last
+C$K_LISTMAX = 480
+C$L_SIZE = 992                          ; NCS's table's bytes
+C$T_NAME = 996                          ; its name, .ASCIC
+C$L_VBN = 1028                          ; the file's tables' first VBN
+C$L_OFF = 1032                          ; and where in them this one is, 510 bytes a block
+C$K_LENGTH = 1036
+; A slot: a bucket kept, by VBN.
+S$L_VBN = 0                             ; the bucket, 0 if the slot is empty
+S$L_SIZE = 4                            ; its bytes
+S$L_USE = 8                             ; X$L_TICK when it was last used
+S$L_BUF = 12                            ; its room
+S$K_LENGTH = 16
         .ENDM   $IDXDEF
 
 ; $UAFDEF: a SYSUAF.DAT record, VMS's layout: the user's name, UIC,

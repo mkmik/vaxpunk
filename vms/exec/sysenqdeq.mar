@@ -249,6 +249,83 @@ EXE$ENQW::
         MOVL    R6, R0
 90$:    RET
 
+; LCK$ENQWK: R0 = a lock mode, R1 = an event flag, R2 = a resource name,
+; R3 = its length, R4 = the ID of a granted kernel mode lock of the
+; current process's, R5 = a lock status block. $ENQW from kernel mode,
+; below IPL$_ASTDEL, of a kernel mode sublock of it for the current
+; process, queued if it can't be granted now: waits on the event flag
+; until it is granted or ends, with its status in the status block's
+; first word and its ID in its second longword; the deadlock search
+; looks at it as at any request. RMS waits so for a record lock, having
+; let go of FIL$LOCK. R0 = SS$_NORMAL, or what LCK$ENQ refused it with.
+; Uses R0-R3.
+LCK$ENQWK::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R4, R5, R6, R7, R8, R9, R10>
+        MOVQ    R0, R6                  ; R6 = the mode, R7 = the event flag
+        MOVQ    R2, R8                  ; R8 = the name, R9 = its length
+        MOVL    R5, R10                 ; R10 = the status block
+        PUSHL   R7
+        CALLS   #1, G^EXE$CLREF
+        BLBC    R0, 90$
+        MOVL    #LKA_K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 90$
+        MOVL    R2, R5                  ; LCK$POST's ACB, with no AST after it
+        MOVW    R1, ACB$W_SIZE(R5)
+        MOVB    #DYN$C_ACB, ACB$B_TYPE(R5)
+        CLRB    ACB$B_RMOD(R5)
+        MOVL    SCH$GL_CURPCB, R0
+        MOVL    PCB$L_PID(R0), ACB$L_PID(R5)
+        CLRL    ACB$L_AST(R5)
+        CLRL    ACB$L_ASTPRM(R5)
+        MOVAB   LCK$POST, ACB$L_KAST(R5)
+        MOVL    R10, LKA_L_LKSB(R5)
+        MOVL    R7, LKA_L_EFN(R5)
+        CLRB    LKA_B_ACMODE(R5)
+        DSBINT  #IPL$_SYNCH
+        CLRL    -(SP)                   ; no blocking AST
+        PUSHL   R4                      ; the parent
+        PUSHL   R5                      ; the ACB
+        MNEGL   #1, -(SP)               ; the system's
+        CLRL    -(SP)                   ; kernel mode
+        PUSHL   R8
+        PUSHL   R9
+        CLRL    -(SP)                   ; no flags: it may wait
+        PUSHL   R10
+        PUSHL   R6
+        MOVL    SCH$GL_CURPCB, R0
+        PUSHL   PCB$L_PID(R0)
+        CALLS   #11, G^LCK$ENQ
+        CMPL    R0, #SS$_SYNCH          ; granted now, and posted
+        BEQL    30$
+        BLBC    R0, 20$
+        BSBW    LCK$ARM                 ; it waits, and the lock has the ACB
+        BRB     30$
+20$:    PUSHL   R0
+        MOVL    R5, R0
+        BSBW    FREEACB
+        MOVL    (SP)+, R0
+        ENBINT
+        BRB     90$
+30$:    ENBINT
+40$:    PUSHL   R7                      ; until LCK$POST writes the status
+        CALLS   #1, G^EXE$WAITFR
+        DSBINT  #IPL$_ASTDEL
+        TSTW    (R10)
+        BNEQ    50$
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    R7, R3
+        BSBW    SCH$GETEFC
+        BLBC    R0, 50$
+        BBCC    R2, (R1), 50$
+50$:    ENBINT
+        TSTW    (R10)
+        BEQL    40$
+        MOVL    #SS$_NORMAL, R0
+90$:    POPR    #^M<R4, R5, R6, R7, R8, R9, R10>
+        RSB
+
 ; $DEQ lkid, valblk, acmode, flags: dequeues the lock lkid, of acmode or
 ; an outer mode, the caller's at least; a request of it that waits ends
 ; with SS$_ABORT in its status block. If the lock is granted in PW or EX
