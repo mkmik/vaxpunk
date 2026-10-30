@@ -96,7 +96,7 @@
         .EXTERNAL REL$OPEN, REL$CREATE, REL$CONNECT, REL$GET, REL$FIND, REL$PUT
         .EXTERNAL REL$UPDATE, REL$DELETE, REL$REWIND, REL$FLUSH
         .EXTERNAL IDX$OPEN, IDX$CREATE, IDX$CONNECT, IDX$GET, IDX$FIND, IDX$PUT
-        .EXTERNAL IDX$UPDATE, IDX$DELETE, IDX$REWIND, IDX$FLUSH, IDX$PEER
+        .EXTERNAL IDX$UPDATE, IDX$DELETE, IDX$REWIND, IDX$FLUSH, IDX$PEER, IDX$FORGET
 
 BLOCK = 512
 MFD = 4                                 ; the MFD's file number
@@ -2518,7 +2518,10 @@ PEER:
 ; are an indexed file's by record I/O, its key and area descriptors,
 ; and empties the other's slots (IDX$PEER): each open keeps the file's
 ; header and prologue, and a stream changes them only holding FIL$LOCK.
-; Keeps every register.
+; After block I/O, an indexed file's other opens only forget their
+; buckets (IDX$FORGET). Keeps every register.
+; ponytail: block I/O that writes the prologue leaves the other opens'
+; key and area descriptors as they were.
 RMS$SYNC::
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4, R5>
@@ -2529,11 +2532,13 @@ RMS$SYNC::
         PUSHR   #^M<R1, R2>
         MOVC3   #BLOCK, IFB$AB_HDR(R7), IFB$AB_HDR(R1)
         POPR    #^M<R1, R2>
-        TSTL    IFB$L_IDX(R7)
-        BEQL    10$
         TSTL    IFB$L_IDX(R1)
         BEQL    10$
+        TSTL    IFB$L_IDX(R7)
+        BEQL    20$
         BSBW    IDX$PEER
+        BRB     10$
+20$:    BSBW    IDX$FORGET
         BRB     10$
 90$:    POPR    #^M<R0, R1, R2, R3, R4, R5>
         RSB

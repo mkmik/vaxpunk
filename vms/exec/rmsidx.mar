@@ -1072,7 +1072,8 @@ SLOT:
 
 ; IDX$PEER: R7 = an indexed file's IFAB, whose service changed the file,
 ; R1 = another open of it, by record I/O. Gives that one R7's key and
-; area descriptors, and empties its slots. Keeps every register.
+; area descriptors, and empties its slots (IDX$FORGET). Keeps every
+; register.
 IDX$PEER::
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6, R11>
@@ -1082,13 +1083,23 @@ IDX$PEER::
         MOVC3   R0, @X$L_KEYS(R11), @X$L_KEYS(R6)
         MULL3   #AREA$K_BLN, X$L_NAREAS(R11), R0
         MOVC3   R0, @X$L_AREAS(R11), @X$L_AREAS(R6)
+        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R11>
+        BSBW    IDX$FORGET
+        RSB
+
+; IDX$FORGET: R1 = an indexed file's IFAB, open by record I/O. Empties
+; its slots: another stream wrote the file. Keeps every register.
+IDX$FORGET::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R6>
+        MOVL    IFB$L_IDX(R1), R6       ; R6 = its state
         MOVL    X$L_SLOTS(R6), R0
         MOVL    X$L_NSLOT(R6), R1
 10$:    CLRQ    S$L_VBN(R0)             ; its VBN and size
         CLRL    S$L_USE(R0)
         ADDL2   #S$K_LENGTH, R0
         SOBGTR  R1, 10$
-        POPR    #^M<R0, R1, R2, R3, R4, R5, R6, R11>
+        POPR    #^M<R0, R1, R6>
         RSB
 
 ; IDX$ENTRY: R11 = an indexed file's state, R9 = the key descriptor of

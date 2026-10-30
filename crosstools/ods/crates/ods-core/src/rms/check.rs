@@ -417,12 +417,16 @@ impl Checker<'_, '_> {
         // Level 0: records or SIDRs, in order and within their index keys.
         let mut prev: Option<Vec<u8>> = None;
         let mut pointers = Vec::new();
+        let mut before = (None, None);
         for &vbn in &level0 {
             let Ok(b) = self.x.bucket(vbn, k.datbktsz()) else { continue };
             if !seen.contains(&vbn) {
                 self.header(n, vbn, b, 0, k.danum());
             }
-            let (lo, hi) = bounds.get(&vbn).cloned().unwrap_or((None, None));
+            // One without an index entry, which only carries on the key
+            // before it, has the bounds of the bucket before.
+            let (lo, hi) = bounds.get(&vbn).cloned().unwrap_or_else(|| before.clone());
+            before = (lo.clone(), hi.clone());
             let keys: Vec<Vec<u8>> = if n == 0 {
                 match self.x.data_bucket(&k, vbn, b) {
                     Ok(items) => self.data_items(&k, vbn, b, items),

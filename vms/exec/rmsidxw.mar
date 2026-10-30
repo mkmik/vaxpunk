@@ -1548,6 +1548,67 @@ USEDID:
 90$:    POPR    #^M<R1, R2, R3, R4, R5, R8>
         RSB
 
+; SPLITB: R7 = an IFAB, R11 = its state, R9 = key 0's descriptor, R8 =
+; walk 0 at a data bucket a record goes first in, which has no ID to give
+; it, X$L_PATH from the descent to it, X$T_KEY = the record's key. Makes
+; an empty bucket before it, in its chain and in the index, with the key,
+; for the record to go in. R0 = RMS$_NORMAL or a bucket's error. Uses
+; R0-R6.
+SPLITB:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        PUSHL   R8
+        PUSHL   W$L_VBN(R8)             ; (SP) = the bucket
+        MOVZBL  KEY$B_DANUM(R9), R0     ; R6 = the new one, in walk 1
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        BSBW    NEWBKT
+        BLBS    R0, 5$
+        BRW     90$
+5$:     MOVL    R1, R6
+        MOVAB   X$K_WALK1(R11), R8
+        MOVL    X$L_BUF1(R11), W$L_BUF(R8)
+        MOVL    R6, R0
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        CLRL    R2
+        CLRL    R3
+        BSBW    INITW
+        MOVL    W$L_BUF(R8), R0         ; leading to the bucket
+        MOVL    (SP), BKT$L_NXTBKT(R0)
+        CLRB    BKT$B_BKTCB(R0)
+        BSBW    WRW
+        BLBC    R0, 90$
+        MOVAB   X$K_WALK2(R11), R8      ; the bucket before it leads to it:
+        MOVL    X$L_BUF2(R11), W$L_BUF(R8)      ; the last, round, if it
+        CMPL    KEY$L_LDVBN(R9), (SP)           ; was first, which it is
+        BNEQ    8$                              ; now; R4 = each
+        MOVL    R6, KEY$L_LDVBN(R9)
+        BSBW    WRKEY
+        BLBC    R0, 90$
+        MOVL    (SP), R4
+        BRB     10$
+8$:     MOVL    KEY$L_LDVBN(R9), R4
+10$:    MOVL    R4, R0
+        MOVZBL  KEY$B_DATBKTSZ(R9), R1
+        BSBW    IDX$LOADW
+        BLBC    R0, 90$
+        MOVL    W$L_BUF(R8), R0
+        CMPL    BKT$L_NXTBKT(R0), (SP)
+        BEQL    20$
+        MOVL    BKT$L_NXTBKT(R0), R4
+        BRB     10$
+20$:    MOVL    R6, BKT$L_NXTBKT(R0)
+        BSBW    WRW
+        BLBC    R0, 90$
+        MOVL    #1, R0                  ; and an entry for it before its
+        MOVAQ   X$L_PATH(R11)[R0], R1   ; in the index
+        MOVL    4(R1), R1
+        MOVAB   X$T_KEY(R11), R2
+        MOVL    R6, R3
+        MOVL    (SP), R4
+        BSBW    IXINS
+90$:    TSTL    (SP)+
+        MOVL    (SP)+, R8
+        RSB
+
 ; NOSTUBS: R7 = an IFAB, R11 = its state, R9 = key 0's descriptor, R8
 ; = a walk in a data bucket without records, full. Before prologue 3,
 ; takes its stubs out, and writes it. R0 = RMS$_NORMAL, RMS$_RSZ if it
@@ -1706,11 +1767,10 @@ GROWS:
 ;
 ; A bucket that has given ID 65535 has none left (BKT$W_NXTRECID 0): a
 ; new record splits it, as VMS's does, and goes first in the new bucket,
-; with the records after it. ponytail: one that goes first in such a
-; bucket takes the lowest ID nothing there has (FREEID), where VMS would
-; split before it, so an RFA kept from a deleted record there may find it.
-; Before prologue 3 IDs are bytes, given again: a bucket gives a run of
-; free ones, then looks for another (NEXTID), and splits without one.
+; with the records after it, or, going first in the old one, into a new
+; bucket before it (SPLITB). Before prologue 3 IDs are bytes, given
+; again: a bucket gives a run of free ones, then looks for another
+; (NEXTID), and splits so without one.
 PUTPRI:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9>
         PUSHR   #^M<R1, R2>             ; 0 the record, 4 its size
@@ -1746,11 +1806,14 @@ PUTPRI:
         BEQL    26$                     ; left, a split, as VMS's, the new
         CMPL    R0, W$L_VBN(R8)         ; record going to the new bucket
         BEQL    28$
-26$:    TSTL    X$L_Q(R11)
-        BEQL    28$
-        BSBW    HASID
+26$:    BSBW    HASID
         BLBS    R0, 28$
-        BISW2   #1@X$V_IDSPLIT, X$W_FLAGS(R11)
+        TSTL    X$L_Q(R11)              ; first in it: a new bucket before
+        BNEQ    29$
+        BSBW    SPLITB
+        BLBS    R0, 10$
+        BRW     90$
+29$:    BISW2   #1@X$V_IDSPLIT, X$W_FLAGS(R11)
         BRB     31$
 28$:    BSBW    ROOM
         CMPL    R5, R0

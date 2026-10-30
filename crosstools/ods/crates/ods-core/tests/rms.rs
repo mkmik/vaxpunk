@@ -289,6 +289,44 @@ fn load_fixed_areas() {
     round_trip(&spec, &many);
 }
 
+/// A level 0 bucket without an index entry only carries on the key the
+/// bucket before ends with: one that goes on to greater keys, which no
+/// lookup finds, is reported.
+#[test]
+fn continuation_within_bounds() {
+    let mut key = KeySpec::string(0, 4);
+    key.dups = true;
+    let spec = Spec {
+        rfm: rfm::FIX,
+        mrs: 8,
+        rat: rat::CR,
+        areas: vec![AreaSpec { bktsz: 1, alloc: 0, deq: 0 }],
+        keys: vec![key],
+        cluster: 0,
+    };
+    let recs: Vec<Vec<u8>> = [("AAAA", 40), ("ABBB", 5), ("CCCC", 40)]
+        .iter()
+        .flat_map(|&(k, n)| vec![format!("{k}data").into_bytes(); n])
+        .collect();
+    let mut data = rms::build(&spec, &recs).unwrap();
+    let attrs = spec.record_attrs((data.len() / 512) as u32);
+    assert_clean("built", &rms::check(&data, &attrs));
+    // The root's second entry out: its key, and its pointer, the ones
+    // below moving up.
+    let root = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
+    let b = &mut data[at(root)..at(root) + 512];
+    assert_eq!(b[12], 1, "the root leads to data buckets");
+    let ps = (b[13] >> 3 & 3) as usize + 2;
+    let free = u16::from_le_bytes([b[4], b[5]]) as usize;
+    b.copy_within(14 + 8..free, 14 + 4);
+    b[4..6].copy_from_slice(&((free - 4) as u16).to_le_bytes());
+    let low = u16::from_le_bytes([b[508], b[509]]) as usize + 1;
+    b.copy_within(low..512 - 4 - 2 * ps, low + ps);
+    b[508..510].copy_from_slice(&((low - 1 + ps) as u16).to_le_bytes());
+    let r = rms::check(&data, &attrs);
+    assert!(r.findings.iter().any(|f| f.what.contains("key above the index key")), "{:#?}", r.findings);
+}
+
 #[test]
 fn loader_refuses_bad_input() {
     let spec = Spec {

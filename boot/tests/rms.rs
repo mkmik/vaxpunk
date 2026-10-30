@@ -362,6 +362,17 @@ fn convert() {
         None,
     )
     .unwrap();
+    // SPL.FDL: prologue 1, 8-byte FIX records, 8-block buckets, which run
+    // out of byte IDs before room.
+    let fdl = "FILE\n\tORGANIZATION\tindexed\nRECORD\n\tFORMAT\tfixed\n\tSIZE\t8\nAREA 0\n\tBUCKET_SIZE\t8\nKEY 0\n\tPROLOG\t1\n\tSEG0_LENGTH\t8\n\tSEG0_POSITION\t0\n\tTYPE\tstring\n";
+    vol.copy_in(
+        &mut fdl.as_bytes(),
+        "[000000]SPL.FDL",
+        Conversion::LinesToRecords,
+        Some(fdl.len() as u64),
+        None,
+    )
+    .unwrap();
     let fdl = fdl_text(&fixtures.join("make"), "IDX10.FDL");
     vol.copy_in(
         &mut &fdl[..],
@@ -509,6 +520,20 @@ fn convert() {
         if !said.contains("P2W done") {
             failed.push(format!("@P2W: {said}"));
         }
+        let got = vax.command("RMSDUMP SPL.IDX 0", "\n$ ");
+        let got: Vec<_> = got
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.starts_with("RMSDUMP: "))
+            .collect();
+        let want: Vec<_> = (1..=300).map(|i| format!("{i:08}")).collect();
+        if got != want {
+            failed.push(format!("SPL.IDX: {} records", got.len()));
+        }
+        let report = vax.command("ANALYZE/RMS_FILE SPL.IDX", "\n$ ");
+        if !report.contains("The analysis uncovered NO errors.") {
+            failed.push(format!("ANALYZE/RMS_FILE SPL.IDX: {report}"));
+        }
         for (file, stem, keys) in [("P2W.IDX", "p2m", 2), ("P1N.IDX", "p1", 2)] {
             for key in 0..keys {
                 let got = vax.command(&format!("RMSDUMP {file} {key}"), "\n$ ");
@@ -648,6 +673,7 @@ fn convert() {
             "RCB1R.IDX",
             "IDS.IDX",
             "P2W.IDX",
+            "SPL.IDX",
         ])
     {
         let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
@@ -736,7 +762,8 @@ KEY 0
 ";
 
 /// P2W.COM: MAKE.COM's P2M operations on P2W.IDX, then a record of
-/// P1N.IDX's put and deleted 400 times.
+/// P1N.IDX's put and deleted 400 times, and 300 records put into SPL.IDX,
+/// each first in its bucket, which runs out of byte IDs.
 fn p2w_com() -> String {
     let mut com = String::from("$ OPEN/READ/WRITE F P2W.IDX\n");
     for i in 1..=60 {
@@ -759,6 +786,14 @@ $ WRITE F "K0000001 churn"
 $ READ/KEY="K0000001"/DELETE F R
 $ I = I + 1
 $ IF I .LT. 400 THEN GOTO C1
+$ CLOSE F
+$ CREATE/FDL=SPL.FDL SPL.IDX
+$ OPEN/READ/WRITE F SPL.IDX
+$ I = 300
+$ S1:
+$ WRITE F F$FAO("!8ZL", I)
+$ I = I - 1
+$ IF I .GT. 0 THEN GOTO S1
 $ CLOSE F
 $ WRITE SYS$OUTPUT "P2W done"
 "#;
@@ -984,6 +1019,7 @@ const RMSLOCK: &[&str] = &[
     "A FREE 00010001",
     "B GET K3 00010001",
     "A PUT K3 UIF RRL 000182AA",
+    "C GET K1 after D wrote it 00000001",
     "RMSLOCK done 00010001",
 ];
 

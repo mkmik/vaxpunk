@@ -32,6 +32,7 @@
         $IFBDEF
 
         .EXTERNAL FIL$READVBN, FIL$WRITEVBN, FIL$EXTEND, FIL$WRITEHDR, RMS$ALLOCBUF
+        .EXTERNAL RMS$SYNC
 
 BLOCK = 512
 EXTEND = 8                              ; blocks a write past the allocation extends a file by
@@ -581,8 +582,9 @@ SEQ$FLUSH::
         RSB
 
 ; SEQ$WRBUF: R7 = an IFAB. Writes its buffer's block, IFB$L_BLOCK, if it
-; changed. R0 = SS$_NORMAL, or the file system's error. Keeps every other
-; register.
+; changed; an indexed file's, by block I/O, its other opens' buckets then
+; go (RMS$SYNC). R0 = SS$_NORMAL, or the file system's error. Keeps every
+; other register.
 SEQ$WRBUF::
         .JSB_ENTRY
         MOVL    #SS$_NORMAL, R0
@@ -591,6 +593,10 @@ SEQ$WRBUF::
         MOVL    IFB$L_BLOCK(R7), R1
         BSBW    WRITEBLK
         MOVL    (SP)+, R1
+        BLBC    R0, 90$
+        CMPB    IFB$B_ORG(R7), #FAB$C_IDX
+        BNEQ    90$
+        BSBW    RMS$SYNC
 90$:    RSB
 
 ; LOAD: R7 = an IFAB, R0 = a VBN. Puts that block in its buffer, first
