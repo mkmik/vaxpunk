@@ -819,6 +819,8 @@ COLW:
         BEQL    25$
         CMPB    (R9), R0
         BNEQ    22$
+        CMPB    1(R9), #^XFF            ; not one alone, whatever is next
+        BEQL    22$
         CMPB    1(R9), 1(R5)
         BNEQ    22$
         MOVL    #2, R1

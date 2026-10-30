@@ -2175,7 +2175,8 @@ UNLOCKFILE:
 ; operation, or with RAB$M_ULK until $FREE, $RELEASE, $REWIND,
 ; $DISCONNECT or $CLOSE. The locks are kernel mode sublocks of the file's
 ; access arbitration lock, named by the RFA (RLB$L_ID). R0 =
-; RMS$_NORMAL; RMS$_OK_ALK if the stream holds it already, RMS$_OK_RLK if
+; RMS$_NORMAL; RMS$_OK_ALK if the stream holds it already, another
+; record's automatic lock dropped all the same; RMS$_OK_RLK if
 ; another holds it but lets it be read, RMS$_OK_WAT after a wait, which
 ; may have changed the file; RMS$_RLK with SS$_NOTQUEUED in RAB$L_STV,
 ; RMS$_OK_RRL, RMS$_DEADLOCK, RMS$_DME, or RMS$_ENQ with the lock
@@ -2193,7 +2194,12 @@ RMS$LOCKREC::
         BSBW    FINDRLB
         TSTL    R2
         BEQL    10$
-        MOVL    #RMS$_OK_ALK, R0        ; held already
+        TSTL    R6                      ; held already: another record's
+        BNEQ    8$                      ; automatic lock goes, as it would
+        TSTB    RLB$B_AUTO(R2)          ; for any other lookup
+        BNEQ    8$
+        BSBW    RMS$UNLOCKAUTO
+8$:     MOVL    #RMS$_OK_ALK, R0
         BRW     90$
 10$:    TSTL    R6
         BNEQ    20$

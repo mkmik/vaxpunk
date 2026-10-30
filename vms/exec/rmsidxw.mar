@@ -2287,7 +2287,13 @@ IDX$PUT::
         MOVL    #1, R2
         BSBW    RMS$LOCKREC
         BLBC    R0, 18$
-        MOVQ    (SP), R1
+        MOVL    X$L_CURVBN(R11), R0     ; a lock it may write under, not
+        MOVZWL  X$W_CURID(R11), R1      ; RAB$M_RRL's none
+        BSBW    RMS$RECHELD
+        BLBS    R0, 17$
+        MOVL    #RMS$_RLK, R0
+        BRB     18$
+17$:    MOVQ    (SP), R1
         BSBW    UPDCORE
         BSBW    RMS$UNLOCKAUTO
 18$:    BRW     88$

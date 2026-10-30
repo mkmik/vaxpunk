@@ -41,7 +41,8 @@ impl Collation {
         let mut i = 0;
         while i < s.len() {
             let c = s[i];
-            let pair = s.get(i + 1).and_then(|&n| self.list.iter().find(|e| e[0] == c && e[1] == n));
+            // A pair, but not an entry for the character alone, FF next.
+            let pair = s.get(i + 1).and_then(|&n| self.list.iter().find(|e| e[0] == c && e[1] == n && n != 0xff));
             let entry =
                 pair.map(|e| (e, 2)).or_else(|| self.list.iter().find(|e| e[0] == c && e[1] == 0xff).map(|e| (e, 1)));
             match entry {
@@ -108,4 +109,22 @@ pub(crate) fn read(data: &[u8], colvbn: u32, keys: &[usize]) -> Result<Vec<(usiz
         off += 12 + size;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A character the list weighs alone, then FF: FF is the next
+    /// character, weighed, not the list's mark of an entry alone.
+    #[test]
+    fn alone_then_ff() {
+        let mut c =
+            Collation { name: Vec::new(), prim: [0; 256], sec: [0; 256], list: alloc::vec![[0xd7, 0xff, 0xd7, 0]] };
+        for i in 0..256 {
+            c.prim[i] = i as u8;
+            c.sec[i] = i as u8;
+        }
+        assert_eq!(c.compare(&[0xd7, 0xff], &[0xd7, 0x01]), Ordering::Greater);
+    }
 }

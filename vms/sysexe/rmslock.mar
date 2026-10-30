@@ -9,8 +9,10 @@
 ; it finds already held, RAB$M_RLK's lock that RAB$M_NLK may read past,
 ; RAB$M_RRL reading a locked record without its lock, so that $UPDATE has
 ; none, a $PUT's record kept locked with ULK, and RAB$M_REA's read locks,
-; which two streams may hold at once but which $UPDATE can't use, and a
-; $GET that finds nothing, which drops the lock the one before took. The
+; which two streams may hold at once but which $UPDATE can't use; a
+; $GET that finds nothing, or a record the stream holds already, which
+; drops the lock the one before took; and RAB$M_UIF's $UPDATE, which
+; RAB$M_RRL's reading past another stream's lock doesn't let write. The
 ; boot test (boot/tests/rms.rs) knows what each must say. It uses only
 ; VMS's own: STARLET's macros and LIB$PUT_OUTPUT.
 ;
@@ -140,6 +142,24 @@ REC:    .ASCII  "K0 data "              ; a record put, K and its digit first
         ROP     B, 0
         KEY     B, 6
         STEP    B, $GET, "B GET K6"
+        ROP     A, RAB$M_ULK            ; a lock held already, found again:
+        KEY     A, 1                    ; the other, automatic, goes
+        STEP    A, $GET, "A GET K1 ULK"
+        ROP     A, 0
+        KEY     A, 2
+        STEP    A, $GET, "A GET K2"
+        KEY     A, 1
+        STEP    A, $GET, "A GET K1"
+        KEY     B, 2
+        STEP    B, $GET, "B GET K2"
+        STEP    A, $FREE, "A FREE"
+        KEY     B, 3                    ; RAB$M_UIF's $UPDATE needs a lock,
+        STEP    B, $GET, "B GET K3"     ; which RRL doesn't give
+        ROP     A, RAB$M_UIF!RAB$M_RRL
+        KEY     A, 3
+        MOVB    #^A/3/, REC+1
+        MOVAB   REC, A+RAB$L_RBF
+        STEP    A, $PUT, "A PUT K3 UIF RRL"
         $CLOSE  FAB=FAB2
         $CLOSE  FAB=FAB
         MOVAB   DONE, R1
