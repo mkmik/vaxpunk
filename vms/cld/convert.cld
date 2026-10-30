@@ -1,6 +1,7 @@
 ! CONVERT input[,...] output: CONVERT.EXE copies the input files' records
 ! into the output file, made as /FDL's file says or as the first input
-! is. ponytail: VMS's /EXIT, /FIXED_CONTROL, /PROLOG, /READ_CHECK,
+! is. CONVERT/RECLAIM file frees an indexed file's empty buckets, in
+! place. ponytail: VMS's /EXIT, /FIXED_CONTROL, /PROLOG, /READ_CHECK,
 ! /SECONDARY, /SHARE, /WORK_FILES and /WRITE_CHECK aren't here.
 define verb CONVERT
 	image CONVERT
@@ -14,7 +15,15 @@ define verb CONVERT
 	qualifier KEY, value(required, type=$number)
 	qualifier MERGE
 	qualifier PAD, value
+	qualifier RECLAIM, syntax=CONVERT_RECLAIM
 	qualifier SORT, default
 	qualifier STATISTICS
 	qualifier TRUNCATE
 	disallow APPEND and MERGE
+
+define syntax CONVERT_RECLAIM
+	image CONVERT
+	parameter P1, label=INPUT, prompt="File", value(required, type=$infile)
+	qualifier KEY, value(required, list, type=$number)
+	qualifier RECLAIM
+	qualifier STATISTICS

@@ -1737,11 +1737,14 @@ DATABKT:
         CMPL    R2, BEND
         BGTRU   80$
         BRB     10$
-20$:    MOVZWL  FAB+FAB$W_MRS, R5       ; R5 = its bytes: a FIX record's
+20$:    MOVZWL  FAB+FAB$W_MRS, R5       ; R5 = its bytes: a FIX record's,
         CMPB    FAB+FAB$B_RFM, #FAB$C_FIX
         BNEQ    25$
         BITB    #KEY$M_KEY_COMPR!KEY$M_REC_COMPR, KD+KEY$B_FLAGS
-        BEQL    30$
+        BNEQ    25$
+        BBC     #2, R3, 30$             ; or a deleted one's, which keeps
+        MOVZBL  KD+KEY$B_KEYSZ, R5      ; only its key
+        BRB     30$
 25$:    ADDL3   R2, R4, R0              ; or as its size says
         ADDL2   #2, R0
         CMPL    R0, BEND

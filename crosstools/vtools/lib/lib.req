@@ -783,10 +783,10 @@ LITERAL
 ! $IDXDEF
 LITERAL
     W$K_LENGTH = 576,
-    X$K_WALK0 = 2964,  ! the walks
-    X$K_WALK1 = 3540,
-    X$K_WALK2 = 4116,
-    X$K_LENGTH = 4692,
+    X$K_WALK0 = 2968,  ! the walks
+    X$K_WALK1 = 3544,
+    X$K_WALK2 = 4120,
+    X$K_LENGTH = 4696,
     X$C_BOF = 0,  ! before the first record
     X$C_AFTER = 1,  ! after the stream's record
     X$C_AT = 2,  ! at it: a $FIND found it
@@ -794,6 +794,7 @@ LITERAL
     X$V_LASTPUT = 0,  ! X$T_LASTPUT holds a key
     X$V_OKDUP = 1,  ! a $PUT found a key it has
     X$V_WROTE = 2,  ! the service wrote a bucket or the prologue: the file's other opens get what changed
+    X$V_IDSPLIT = 3,  ! SPLIT0: the bucket has no IDs left, so the new record goes to the new one
     C$K_LISTMAX = 480,
     C$K_LENGTH = 1036,
     S$K_LENGTH = 16;
@@ -865,6 +866,7 @@ MACRO
     X$L_COLBLK = 1936, 0, 32, 0 %,  ! the block of the collating tables in IDX$AB_PLG, or 0
     X$T_COLW1 = 1940, 0, 0, 0 %,  ! two keys' weights, being compared
     X$T_COLW2 = 2452, 0, 0, 0 %,
+    X$L_NEWID = 2964, 0, 32, 0 %,  ! the next record ID of the bucket NEWBKT gave last
     C$T_PRIM = 0, 0, 0, 0 %,  ! each character's primary weight
     C$T_SEC = 256, 0, 0, 0 %,  ! and secondary
     C$T_LIST = 512, 0, 0, 0 %,  ! characters weighed otherwise, 4 bytes each: the character, the next or FF, and its primary weights, the second 0 if one; FF FF after the last

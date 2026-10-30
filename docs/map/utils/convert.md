@@ -47,9 +47,9 @@ note = "convert.mar ponytail"
 [[feature]]
 id = "reclaim"
 title = "CONVERT/RECLAIM: free a prologue 3 file's empty buckets in place"
-status = "todo"
+status = "done"
 needs = ["/rms/indexed#reclaim"]
-note = "PRD-0008 lists it"
+note = "Frees what OpenVMS's frees, in the same order (rc1, rcb1); /KEY and /STATISTICS"
 
 [[feature]]
 id = "callable"
@@ -115,5 +115,9 @@ output loaded in primary key order through an indexed work file,
 `SYS$SCRATCH:CONVWORK`, rather than SORT; `/APPEND`, `/MERGE`, `/PAD`,
 `/TRUNCATE`, `/EXCEPTIONS_FILE` and `/STATISTICS`. The boot test
 converts a text file into an indexed file that `ANALYZE/RMS_FILE`
-passes. Missing: `/RECLAIM`, the callable `CONV$` routines, and the
-counts `/STATISTICS` needs from the executive.
+passes. `CONVERT/RECLAIM` works on the file in place, block by block:
+it takes each level 0 bucket that holds no live record out of its index
+and chain and puts it on its area's list of available buckets, which
+`$PUT` uses before growing the file; on OpenVMS's own files it frees the
+same buckets in the same order. Missing: the callable `CONV$` routines,
+and the counts `/STATISTICS` needs from the executive.

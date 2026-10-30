@@ -158,6 +158,7 @@ impl Indexed<'_> {
             c.r.keys.push(stats);
         }
         c.rrvs();
+        c.avail();
         c.r
     }
 }
@@ -232,6 +233,41 @@ impl Checker<'_, '_> {
             Some(_) => {}
             None => self.r.error(format!("bucket in area {area}, which the file doesn't have"), key, vbn),
         }
+        self.claim(key, vbn, end);
+    }
+
+    /// Whether level 0 bucket `vbn` of key `n` goes on with the key the
+    /// one before it, `prev`, ends with: OpenVMS gives such a bucket, the
+    /// rest of a SIDR or of a run of duplicates, no index entry of its own
+    /// (`rc4.idx`).
+    fn continues(&self, n: usize, prev: u32, vbn: u32) -> bool {
+        let k = &self.x.keys[n];
+        let keys = |v: u32| -> Option<Vec<Vec<u8>>> {
+            let b = self.x.bucket(v, k.datbktsz()).ok()?;
+            Some(if n == 0 {
+                let items = self.x.data_bucket(k, v, b).ok()?;
+                items
+                    .into_iter()
+                    .filter_map(|i| match i {
+                        Item::Rec(r) => Some(r.key),
+                        Item::Rrv { .. } => None,
+                    })
+                    .collect()
+            } else {
+                self.x.sidr_bucket(k, v, b).ok()?.into_iter().map(|s| s.key).collect()
+            })
+        };
+        match (keys(prev), keys(vbn)) {
+            (Some(p), Some(b)) => {
+                matches!((p.last(), b.first()), (Some(a), Some(c)) if self.x.compare(n, a, c) == Ordering::Equal)
+            }
+            _ => false,
+        }
+    }
+
+    /// Claims a bucket's blocks, `vbn` up to `end`, unless another bucket
+    /// or the prologue has.
+    fn claim(&mut self, key: Option<u8>, vbn: u32, end: u64) {
         let mut overlap = false;
         for blk in vbn as usize..end as usize {
             if let Some(o) = self.owned.get_mut(blk) {
@@ -241,6 +277,43 @@ impl Checker<'_, '_> {
         }
         if overlap {
             self.r.error("bucket overlaps another bucket or the prologue", key, vbn);
+        }
+    }
+
+    /// Walks each area's list of available buckets, which CONVERT/RECLAIM
+    /// freed, from `AVAIL` through `NXTBKT` to 0: each claims its blocks as
+    /// any bucket does, and the last says it is.
+    fn avail(&mut self) {
+        let x = self.x;
+        for (i, a) in x.areas.iter().enumerate() {
+            let at = x.avbn + i as u32 / 8;
+            let mut vbn = a.avail();
+            let mut seen = BTreeSet::new();
+            while vbn != 0 {
+                if !seen.insert(vbn) {
+                    self.r.error(format!("area {i}'s available buckets go round"), None, at);
+                    break;
+                }
+                let b = match x.bucket(vbn, a.arbktsz()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.r.error(e.to_string(), None, vbn);
+                        break;
+                    }
+                };
+                let h = BucketHeader(&b[..BKT_HDR]);
+                if b[0] != b[b.len() - 1] {
+                    self.r.error("check characters differ", None, vbn);
+                }
+                if h.adrsample() != vbn as u16 {
+                    self.r.error(format!("address sample {} is not the bucket's VBN", h.adrsample()), None, vbn);
+                }
+                if (h.nxtbkt() == 0) != (h.bktcb() & bktcb::LASTBKT != 0) {
+                    self.r.error(format!("area {i}'s available buckets: last bucket not marked so"), None, vbn);
+                }
+                self.claim(None, vbn, vbn as u64 + a.arbktsz() as u64);
+                vbn = h.nxtbkt();
+            }
         }
     }
 
@@ -321,7 +394,10 @@ impl Checker<'_, '_> {
                 self.r.error(format!("last bucket of level {l} doesn't point back to the first"), key, last);
             }
             if chain != *list {
-                for &v in chain.iter().filter(|v| !list.contains(v)) {
+                for (i, &v) in chain.iter().enumerate().filter(|(_, v)| !list.contains(v)) {
+                    if l == 0 && i > 0 && self.continues(n, chain[i - 1], v) {
+                        continue;
+                    }
                     self.r.error(format!("level {l} bucket the index doesn't reach"), key, v);
                 }
                 for &v in list.iter().filter(|v| !chain.contains(v)) {
@@ -471,7 +547,8 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Checks a primary data bucket's records and RRVs; returns their keys.
+    /// Checks a primary data bucket's records and RRVs; returns the keys of
+    /// those not deleted.
     fn data_items(&mut self, k: &Key, vbn: u32, b: &[u8], items: Vec<Item>) -> Vec<Vec<u8>> {
         let key = Some(0);
         // The next ID; 0 when every one up to 65535 was given. Before
@@ -520,7 +597,11 @@ impl Checker<'_, '_> {
                     if self.by_rfa.insert(r.rfa, Placed { vbn, id: r.id, live, rec: r.rec }).is_some() {
                         self.r.error(format!("RFA ({},{}) used twice", r.rfa.0, r.rfa.1), key, vbn);
                     }
-                    keys.push(r.key);
+                    // A deleted record OpenVMS left keeps its key, which a
+                    // record put since may have too (rid).
+                    if live {
+                        keys.push(r.key);
+                    }
                 }
             }
         }

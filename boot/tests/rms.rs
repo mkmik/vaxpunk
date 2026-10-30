@@ -24,7 +24,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use ods_image::rms::fdl;
+use ods_image::rms::{self, fdl};
 use ods_image::{Conversion, Image, InitParams, Mode, Severity};
 
 /// The fixtures: file, its keys.
@@ -45,6 +45,12 @@ const FILES: &[(&str, usize)] = &[
     ("col6c.idx", 2),
     ("col8.idx", 4),
     ("col9.idx", 2),
+    ("rc1.idx", 3),
+    ("rc2.idx", 3),
+    ("rc4.idx", 3),
+    ("rcb1.idx", 3),
+    ("rcb2.idx", 3),
+    ("rcb3.idx", 3),
     ("pd1.idx", 3),
     ("pd2.idx", 2),
     ("pd3.idx", 1),
@@ -298,6 +304,43 @@ fn convert() {
         )
         .unwrap();
     }
+    // RC1 and RCB1, OpenVMS's files with deleted records, for RECLAIM.
+    for name in ["rc1", "rcb1"] {
+        let data = fs::read(fixtures.join(format!("{name}.idx"))).unwrap();
+        let text = fs::read_to_string(fixtures.join(format!("{name}.fdl"))).unwrap();
+        vol.copy_in(
+            &mut &data[..],
+            &format!("[000000]{}.IDX", name.to_uppercase()),
+            Conversion::Binary,
+            Some(data.len() as u64),
+            Some(fdl::parse(&text).unwrap().record_attrs()),
+        )
+        .unwrap();
+    }
+    // IDS.IDX: a bucket with three records, which has given IDs up to
+    // 65532 (BKT$W_NXTRECID patched): its last IDs, then splits.
+    let spec = fdl::parse(IDS_FDL).unwrap().spec;
+    let recs: Vec<_> = [10, 20, 30].map(|k| format!("B{k:07} ids")).to_vec();
+    let mut data = rms::build(&spec, &recs).unwrap();
+    let ldvbn = u32::from_le_bytes(data[84..88].try_into().unwrap()) as usize;
+    data[(ldvbn - 1) * 512 + 6..][..2].copy_from_slice(&65533u16.to_le_bytes());
+    vol.copy_in(
+        &mut &data[..],
+        "[000000]IDS.IDX",
+        Conversion::Binary,
+        Some(data.len() as u64),
+        Some(spec.record_attrs((data.len() / 512) as u32)),
+    )
+    .unwrap();
+    let com = reclaim_com();
+    vol.copy_in(
+        &mut com.as_bytes(),
+        "[000000]RECLAIM.COM",
+        Conversion::LinesToRecords,
+        Some(com.len() as u64),
+        None,
+    )
+    .unwrap();
     let com = idxm_com();
     vol.copy_in(
         &mut com.as_bytes(),
@@ -383,6 +426,80 @@ fn convert() {
                 }
             }
         }
+        // CONVERT/RECLAIM frees the buckets OpenVMS's does, counts them
+        // as it does, and the records put back go into them.
+        for (file, counts) in [
+            ("RC1.IDX", ["27", "10", "0", "10"]),
+            ("RCB1.IDX", ["105", "46", "1", "47"]),
+        ] {
+            let said = vax.command(&format!("CONVERT/RECLAIM/STATISTICS {file}"), "\n$ ");
+            let want: Vec<String> = [
+                "Total Data Bkts Scanned:",
+                "Data Buckets Reclaimed:",
+                "Index Buckets Reclaimed:",
+                "Total Buckets Reclaimed:",
+            ]
+            .iter()
+            .zip(counts)
+            .map(|(label, n)| format!("{label}{n:>w$}", w = 36 - label.len()))
+            .collect();
+            let got: Vec<String> = said
+                .lines()
+                .filter(|l| l.contains("Bkts") || l.contains("Buckets"))
+                .map(|l| l.chars().take(36).collect())
+                .collect();
+            if got != want {
+                failed.push(format!("CONVERT/RECLAIM {file}: {said}"));
+            }
+            vax.command(&format!("COPY {file} {}", file.replace('1', "1R")), "\n$ ");
+        }
+        vax.command("@RECLAIM", "\n$ ");
+        // IDS.IDX: IDs 65533 to 65535, then a split for each new record,
+        // that goes first in the new bucket, but before them all.
+        vax.command("OPEN/READ/WRITE F IDS.IDX", "\n$ ");
+        for k in [40, 50, 60, 70, 25, 5] {
+            let said = vax.command(&format!("WRITE F \"B{k:07} ids\""), "\n$ ");
+            if said.contains('%') {
+                failed.push(format!("IDS.IDX: B{k:07}: {said}"));
+            }
+        }
+        vax.command("CLOSE F", "\n$ ");
+        let got = vax.command("RMSDUMP IDS.IDX 0", "\n$ ");
+        let got: Vec<_> = got
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.starts_with("RMSDUMP: "))
+            .collect();
+        let want: Vec<_> = [5, 10, 20, 25, 30, 40, 50, 60, 70]
+            .iter()
+            .map(|k| format!("B{k:07} ids"))
+            .collect();
+        if got != want {
+            failed.push(format!("IDS.IDX: {got:?}"));
+        }
+        let report = vax.command("ANALYZE/RMS_FILE IDS.IDX", "\n$ ");
+        if !report.contains("The analysis uncovered NO errors.") {
+            failed.push(format!("ANALYZE/RMS_FILE IDS.IDX: {report}"));
+        }
+        for (file, stem) in [("RC1.IDX", "rc4"), ("RCB1.IDX", "rcb3")] {
+            for key in 0..3 {
+                let got = vax.command(&format!("RMSDUMP {file} {key}"), "\n$ ");
+                let got: Vec<_> = got
+                    .lines()
+                    .skip(1)
+                    .take_while(|l| !l.starts_with("RMSDUMP: "))
+                    .collect();
+                let want =
+                    fs::read_to_string(fixtures.join(format!("{stem}_key{key}.dump"))).unwrap();
+                if got != want.lines().collect::<Vec<_>>() {
+                    failed.push(format!("{file} key {key} put back: {} records", got.len()));
+                }
+            }
+            let report = vax.command(&format!("ANALYZE/RMS_FILE {file}"), "\n$ ");
+            if !report.contains("The analysis uncovered NO errors.") {
+                failed.push(format!("ANALYZE/RMS_FILE {file}: {report}"));
+            }
+        }
         // COPY copies an indexed file block by block, records and keys.
         vax.command("COPY IDXF.IDX COPY.IDX", "\n$ ");
         let got = vax.command("RMSDUMP COPY.IDX 1", "\n$ ");
@@ -428,11 +545,11 @@ fn convert() {
         }
     }
     let mut vol = Image::open(&disk, Mode::ReadOnly).unwrap();
-    for out in
-        CONVERSIONS
-            .iter()
-            .map(|c| c.0)
-            .chain(["COPY.IDX", "IDXM.IDX", "COL8C.IDX", "COL8M.IDX"])
+    for out in CONVERSIONS
+        .iter()
+        .map(|c| c.0)
+        .chain(["COPY.IDX", "IDXM.IDX", "COL8C.IDX", "COL8M.IDX"])
+        .chain(["RC1.IDX", "RC1R.IDX", "RCB1.IDX", "RCB1R.IDX", "IDS.IDX"])
     {
         let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
         let report = vol.check_file(fid).unwrap();
@@ -440,7 +557,95 @@ fn convert() {
             failed.push(format!("{out}: {:?}", report.findings));
         }
     }
+    // What RECLAIM freed is what OpenVMS's did: the same first buckets,
+    // and the same available buckets in the same order.
+    for (out, vms) in [("RC1R.IDX", "rc2.idx"), ("RCB1R.IDX", "rcb2.idx")] {
+        let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
+        let mut got = Vec::new();
+        vol.copy_out(fid, &mut got, Conversion::Binary).unwrap();
+        let want = fs::read(fixtures.join(vms)).unwrap();
+        if freed(&got) != freed(&want) {
+            failed.push(format!(
+                "{out}: {:?}, OpenVMS's {vms} {:?}",
+                freed(&got),
+                freed(&want)
+            ));
+        }
+    }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// An indexed file's keys' first data buckets, and each area's available
+/// buckets, from AREA$L_AVAIL along their BKT$L_NXTBKT.
+fn freed(file: &[u8]) -> (Vec<u32>, Vec<Vec<u32>>) {
+    let long = |at: usize| u32::from_le_bytes(file[at..at + 4].try_into().unwrap());
+    let (mut ldvbn, mut vbn, mut off) = (Vec::new(), 1usize, 0usize);
+    loop {
+        let at = (vbn - 1) * 512 + off;
+        ldvbn.push(long(at + 84));
+        vbn = long(at) as usize;
+        off = u16::from_le_bytes(file[at + 4..at + 6].try_into().unwrap()) as usize;
+        if vbn == 0 {
+            break;
+        }
+    }
+    let (avbn, amax) = (file[0x66] as usize, file[0x67] as usize);
+    let avail = (0..amax)
+        .map(|a| {
+            let at = (avbn - 1 + a / 8) * 512 + a % 8 * 64;
+            let mut list = Vec::new();
+            let mut v = long(at + 8);
+            while v != 0 && list.len() < 1000 {
+                list.push(v);
+                v = long((v as usize - 1) * 512 + 8);
+            }
+            list
+        })
+        .collect();
+    (ldvbn, avail)
+}
+
+/// IDS.IDX's FDL: one key, nothing compressed, one-block buckets.
+const IDS_FDL: &str = "FILE
+\tORGANIZATION\tindexed
+RECORD
+\tFORMAT\tvariable
+\tSIZE\t100
+AREA 0
+\tBUCKET_SIZE\t1
+KEY 0
+\tSEG0_LENGTH\t8
+\tSEG0_POSITION\t0
+\tTYPE\tstring
+\tDATA_KEY_COMPRESSION\tno
+\tDATA_RECORD_COMPRESSION\tno
+\tINDEX_COMPRESSION\tno
+";
+
+/// RECLAIM.COM: make/reclaim.com's records put back into RC1.IDX and
+/// RCB1.IDX after RECLAIM.
+fn reclaim_com() -> String {
+    r#"$ OPEN/READ/WRITE F RC1.IDX
+$ I = 300
+$ P1:
+$ WRITE F F$FAO("K!7ZL OMEGA new record number !UL", I, I)
+$ I = I + 1
+$ IF I .LT. 360 THEN GOTO P1
+$ I = 700
+$ P2:
+$ WRITE F F$FAO("K!7ZL OMEGA new record number !UL", I, I)
+$ I = I + 1
+$ IF I .LT. 760 THEN GOTO P2
+$ CLOSE F
+$ OPEN/READ/WRITE F RCB1.IDX
+$ I = 50
+$ T3:
+$ WRITE F F$FAO("!30AS!30AS!30AS!10AS", F$FAO("K!7ZL", I), F$FAO("S!7ZL", I), F$FAO("D!7ZL", I/10), "again")
+$ I = I + 1
+$ IF I .LE. 120 THEN GOTO T3
+$ CLOSE F
+"#
+    .to_string()
 }
 
 /// IDXM.COM: MAKE.COM's IDXM, without its lexical functions, then a

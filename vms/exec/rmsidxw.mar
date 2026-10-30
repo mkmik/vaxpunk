@@ -26,9 +26,9 @@
 ; index yet, and after it each collated key's table, XAB$L_COLTBL's; the
 ; first $PUT along each key makes its first data or SIDR bucket and a
 ; root above it.
-; ponytail: no reclaimed buckets, CONVERT/RECLAIM's; an emptied bucket
-; stays in its chain. Record IDs aren't reused, so a bucket that has had
-; 65535 has no more.
+; A split takes its new bucket from the area's available ones, which
+; CONVERT/RECLAIM freed, before the area's extent (NEWBKT).
+; ponytail: an emptied bucket stays in its chain until CONVERT/RECLAIM.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -134,17 +134,33 @@ ROOM:
         RSB
 
 ; NEWBKT: R7 = an IFAB, R11 = its state, R0 = an area, R1 = a bucket
-; size in blocks. Takes a bucket from the area: R1 = its VBN. The area's
-; extent gives it, or the file grows by the area's default extension, at
-; least EXTMIN blocks, a new extent; the area's descriptor is written. R0
-; = RMS$_NORMAL, or RMS$_FUL with the file system's error in R1. Uses
-; R0-R5.
+; size in blocks. Takes a bucket from the area: R1 = its VBN, and
+; X$L_NEWID the next record ID it is to give. The first of the area's
+; available buckets, which CONVERT/RECLAIM freed, chained from AREA$L_AVAIL
+; through BKT$L_NXTBKT, gives it, with the next ID it had, as VMS's; else
+; the area's extent, or the file grows by the area's default extension,
+; at least EXTMIN blocks, a new extent. The area's descriptor is written.
+; R0 = RMS$_NORMAL, RMS$_FUL with the file system's error in R1, or the
+; disk's error. Uses R0-R5.
 NEWBKT:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    R0, R5
+        MOVL    #1, X$L_NEWID(R11)
         MULL3   #AREA$K_BLN, R0, R2
         ADDL2   X$L_AREAS(R11), R2
-        ADDL3   AREA$L_USED(R2), R1, R0 ; in the extent?
+        MOVL    AREA$L_AVAIL(R2), R0    ; an available bucket?
+        BEQL    5$
+        PUSHL   R0
+        BSBW    IDX$RDPLG               ; its header: the next, its ID
+        BLBC    R0, 4$
+        MULL3   #AREA$K_BLN, R5, R2
+        ADDL2   X$L_AREAS(R11), R2
+        MOVZWL  IDX$AB_PLG+BKT$W_NXTRECID, X$L_NEWID(R11)
+        MOVL    IDX$AB_PLG+BKT$L_NXTBKT, AREA$L_AVAIL(R2)
+        BRW     45$
+4$:     TSTL    (SP)+
+        RSB
+5$:     ADDL3   AREA$L_USED(R2), R1, R0 ; in the extent?
         CMPL    R0, AREA$L_CNBLK(R2)
         BGTRU   10$
         TSTL    AREA$L_CVBN(R2)
@@ -179,7 +195,7 @@ NEWBKT:
 40$:    PUSHL   AREA$L_NXTVBN(R2)       ; the next bucket
         ADDL2   R1, AREA$L_NXTVBN(R2)
         ADDL2   R1, AREA$L_USED(R2)
-        MOVL    R5, R0
+45$:    MOVL    R5, R0
         BSBW    WRAREA
         MOVL    (SP)+, R1
         BLBC    R0, 90$
@@ -239,11 +255,11 @@ WRPLG:
         BSBW    RMS$WRITEBKT
         RSB
 
-; INITW: R8 = a walk, R0 = a VBN, R1 = a bucket size in blocks, R2 = a
-; key of reference, R3 = a level. Makes an empty bucket in its room: no
-; entries, next record ID 1, linked to itself as the last of its level,
-; and an index bucket's pointers, none, 2 bytes each. Keeps every
-; register.
+; INITW: R8 = a walk, R11 = the state, R0 = a VBN, R1 = a bucket size
+; in blocks, R2 = a key of reference, R3 = a level. Makes an empty bucket
+; in its room: no entries, the next record ID NEWBKT gave, linked to
+; itself as the last of its level, and an index bucket's pointers, none,
+; 2 bytes each. Keeps every register.
 INITW:
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4, R5>
@@ -255,7 +271,7 @@ INITW:
         MOVB    R2, BKT$B_INDEXNO(R4)
         MOVW    R0, BKT$W_ADRSAMPLE(R4)
         MOVW    #BKT$K_OVERHDSZ, BKT$W_FREESPACE(R4)
-        MOVW    #1, BKT$W_NXTRECID(R4)
+        MOVW    X$L_NEWID(R11), BKT$W_NXTRECID(R4)
         MOVL    R0, BKT$L_NXTBKT(R4)
         MOVB    R3, BKT$B_LEVEL(R4)
         MOVB    #1@BKT$V_LASTBKT, BKT$B_BKTCB(R4)
@@ -770,11 +786,6 @@ INITKEY:
         BSBW    NEWBKT
         BLBC    R0, 90$
         MOVL    R1, R6
-        MOVZBL  KEY$B_LANUM(R9), R0     ; the root
-        MOVZBL  KEY$B_IDXBKTSZ(R9), R1
-        BSBW    NEWBKT
-        BLBC    R0, 90$
-        MOVL    R1, R5
         MOVAB   X$K_WALK1(R11), R8
         MOVL    X$L_BUF1(R11), W$L_BUF(R8)
         MOVL    R6, R0
@@ -784,6 +795,11 @@ INITKEY:
         BSBW    INITW
         BSBW    WRW
         BLBC    R0, 90$
+        MOVZBL  KEY$B_LANUM(R9), R0     ; the root
+        MOVZBL  KEY$B_IDXBKTSZ(R9), R1
+        BSBW    NEWBKT
+        BLBC    R0, 90$
+        MOVL    R1, R5
         MOVL    R5, R0
         MOVZBL  KEY$B_IDXBKTSZ(R9), R1
         MOVZBL  KEY$B_KEYREF(R9), R2
@@ -1104,7 +1120,10 @@ SPLIT0:
         MOVL    X$L_N(R11), R5
         BNEQ    5$
         RSB
-5$:     MOVL    R5, X$L_M(R11)          ; X$L_M = the first that goes:
+5$:     BBC     #X$V_IDSPLIT, X$W_FLAGS(R11), 6$       ; no IDs left: the
+        MOVL    X$L_Q(R11), X$L_M(R11)  ; new record's place
+        BRB     20$
+6$:     MOVL    R5, X$L_M(R11)          ; X$L_M = the first that goes:
         CMPL    X$L_Q(R11), R5          ; after them all, none
         BEQL    20$
         CLRL    X$L_M(R11)              ; before the only one, it
@@ -1250,6 +1269,36 @@ SPLIT0:
         BSBW    IXINS
 90$:    RSB
 
+; FREEID: R11 = an indexed file's state, R9 = key 0's descriptor, R8 = a
+; walk in a primary data bucket. R0 = the lowest record ID, from 1, that
+; no record, stub or RRV there has, or 0 if it has them all. Keeps every
+; other register.
+FREEID:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R8>
+        MOVAB   X$K_WALK2(R11), R0      ; in walk 2, on the same bucket
+        MOVQ    W$L_BUF(R8), W$L_BUF(R0)
+        MOVQ    W$L_SIZE(R8), W$L_SIZE(R0)
+        MOVL    W$L_FREE(R8), W$L_FREE(R0)
+        MOVL    R0, R8
+        MOVL    #1, R5                  ; R5 = the ID tried
+10$:    MOVL    #BKT$K_OVERHDSZ, W$L_OFF(R8)
+        CLRL    W$L_INDEX(R8)
+20$:    BSBW    IDX$ENTRY
+        TSTL    R0
+        BEQL    80$                     ; nothing has it
+        CMPL    R0, #2
+        BGTRU   70$
+        CMPW    W$L_ID(R8), R5
+        BEQL    30$
+        BSBW    IDX$NEXTW
+        BRB     20$
+30$:    ACBL    #65535, #1, R5, 10$     ; taken: the next
+70$:    CLRL    R5
+80$:    MOVL    R5, R0
+        POPR    #^M<R1, R2, R3, R4, R5, R8>
+        RSB
+
 ; SETRRV: R7 = an IFAB, R11 = its state, R0 = a bucket's VBN, R1 = an
 ; RRV's ID in it, R3 = an ID and R4 = a VBN, where its record is now.
 ; Changes the RRV to say so, or, with R4 = 0, takes it out. R0 =
@@ -1352,6 +1401,12 @@ GROWS:
 ; whose RRV it then takes out, or which then says where it is: its RFA
 ; in X$L_RFAVBN and X$W_RFAID. R0 = RMS$_NORMAL, RMS$_RSZ if it doesn't
 ; fit a bucket, or a bucket's error. Uses R0-R6, R8, R9.
+;
+; A bucket that has given ID 65535 has none left (BKT$W_NXTRECID 0): a
+; new record splits it, as VMS's does, and goes first in the new bucket,
+; with the records after it. ponytail: one that goes first in such a
+; bucket takes the lowest ID nothing there has (FREEID), where VMS would
+; split before it, so an RFA kept from a deleted record there may find it.
 PUTPRI:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9>
         PUSHR   #^M<R1, R2>             ; 0 the record, 4 its size
@@ -1383,10 +1438,22 @@ PUTPRI:
         BGEQU   27$
         BSBW    GROWS
 27$:    MOVL    R0, R5
-        BSBW    ROOM
+        MOVL    W$L_BUF(R8), R0         ; no IDs left for a new record?
+        TSTW    BKT$W_NXTRECID(R0)
+        BNEQ    28$
+        TSTL    X$L_Q(R11)
+        BEQL    28$
+        MOVL    X$L_RFAVBN(R11), R0     ; going home it needs none
+        BEQL    29$
+        CMPL    R0, W$L_VBN(R8)
+        BEQL    28$
+29$:    BISW2   #1@X$V_IDSPLIT, X$W_FLAGS(R11)  ; then split, as VMS
+        BRB     31$
+28$:    BSBW    ROOM
         CMPL    R5, R0
         BLEQ    30$
-        BSBW    SPLIT0                  ; no room: split, and again
+31$:    BSBW    SPLIT0                  ; no room: split, and again
+        BICW2   #1@X$V_IDSPLIT, X$W_FLAGS(R11)
         BLBS    R0, 10$
         BRW     90$
 30$:    MOVL    X$L_RFAVBN(R11), R4     ; going home? its RRV goes
@@ -1415,8 +1482,13 @@ PUTPRI:
         BNEQ    50$
         MOVW    X$W_RFAID(R11), IRC$W_ID(R3)    ; home: its ID
         BRB     60$
-50$:    MOVW    BKT$W_NXTRECID(R2), IRC$W_ID(R3)
+50$:    CLRW    IRC$W_ID(R3)            ; a new ID
+        MOVZWL  BKT$W_NXTRECID(R2), R0
+        BEQL    55$
         INCW    BKT$W_NXTRECID(R2)
+        BRB     57$
+55$:    BSBW    FREEID                  ; none left, first in the bucket
+57$:    MOVW    R0, IRC$W_ID(R3)
         TSTL    R4
         BNEQ    60$
         MOVW    IRC$W_ID(R3), IRC$W_RRV_ID(R3)

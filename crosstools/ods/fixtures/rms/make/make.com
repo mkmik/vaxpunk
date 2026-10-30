@@ -116,9 +116,12 @@ $ WRITE/UPDATE F "K0000600 BETA changed"
 $ CLOSE F
 $ ! Packed decimal and collated keys
 $ @'IN'KEYS 'IN'
+$ ! CONVERT/RECLAIM: freed buckets and their reuse
+$ @'IN'RECLAIM 'IN'
 $ ! Their FDL, /CHECK and dumps
 $ L = "IDX1/2,IDXC/2,IDXF/3,IDXB/1,COMP/1,IDXM/2,UAF/4,P1/2,P2/2,P2B/1,P2I/3,P2M/2"
 $ L = L + ",PD1/3,PD2/2,PD3/1,PKN/8,COL1C/2,COL6C/2,COL8/4,COL9/2"
+$ L = L + ",RC1/3,RC2/3,RC4/3,RCB1/3,RCB2/3,RCB3/3"
 $ I = 0
 $ A1:
 $ E = F$ELEMENT(I, ",", L)

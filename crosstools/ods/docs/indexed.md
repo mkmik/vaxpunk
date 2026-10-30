@@ -113,7 +113,8 @@ collated key compares by its collating sequence (*Collated keys*).
 | 44 | 6 | `RFI` | related file |
 | 50 | 4 | `TOTAL_ALLOC` | blocks the area has |
 
-A new bucket comes from `NXTVBN`; when the extent runs out, the file is
+A new bucket comes from the area's available buckets first (*Available
+buckets*), then from `NXTVBN`; when the extent runs out, the file is
 extended by at least `DEQ` blocks (rounded up to whole buckets) and the
 new blocks become the current extent.
 
@@ -137,7 +138,14 @@ reader that finds them different read half a bucket.
 | 13 | 1 | `BKTCB` | bit 0 `LASTBKT`, the last of its level; bit 1 `ROOTBKT`; bits 3-4 `PTR_SZ`, index buckets' pointer size less 2 |
 
 Each level is a chain from its first bucket (the key descriptor's `LDVBN`
-for level 0) to the one with `LASTBKT`.
+for level 0) to the one with `LASTBKT`. A level 0 bucket that carries on
+the last key of the one before it, the rest of a SIDR or of a run of
+duplicates, may have no index entry of its own: OpenVMS made one, the
+last of key 1's SIDR buckets in `rc4.idx`.
+
+`NXTRECID` 0 means every ID up to 65535 was given: IDs are never given
+twice in a prologue 3 bucket, so the next record put there splits it,
+and goes into the new bucket.
 
 ### Index buckets
 
@@ -247,6 +255,26 @@ no fixture has one. RMS writes the smallest pointer that holds the VBN; `CONVERT
 always 4 bytes. `$DELETE`, or an `$UPDATE` that changes the key, marks the
 pointer: the first keeps its bytes with `DELETED` set, another shrinks to
 its control byte alone, `0x14`, `DELETED` and `NOPTRSZ`.
+
+## Available buckets
+
+`CONVERT/RECLAIM` frees each level 0 bucket but the last of its level
+that holds no live record: only deleted records and RRVs, or SIDRs whose
+pointers are all deleted (`rcb1.idx` to `rcb2.idx`, `rc1.idx` to
+`rc2.idx`). It takes the bucket's entry out of the level above, unless
+it is the last of several in its index bucket, and then the bucket stays;
+at level 1, if the next entry doesn't lead to the next bucket, which then
+has none of its own, the entry is made to lead there instead. An index
+bucket left without entries goes the same way. The bucket before it in
+its chain, or `LDVBN`, then leads past it.
+
+A freed bucket goes first on its area's list: `AVAIL` holds the first,
+each one's `NXTBKT` the next, and the last has `NXTBKT` 0 and `BKTCB` 1.
+Its header otherwise stays, `NXTRECID` included; OpenVMS fills the rest
+with spaces and a note of when it was freed, ours with zeros. A split
+takes the list's first bucket before the extent, for any key and level
+in the area, and its records' IDs go on from that `NXTRECID` (`rc4.idx`,
+`rcb3.idx`).
 
 ## Collated keys
 

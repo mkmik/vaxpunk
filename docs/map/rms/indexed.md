@@ -43,8 +43,8 @@ note = "IDX$NEXT goes on from the record, by its RFA, or from the SIDR bucket it
 [[feature]]
 id = "reclaim"
 title = "Emptied buckets reclaimed and record IDs reused; CONVERT/RECLAIM"
-status = "todo"
-note = "rmsidxw.mar ponytail"
+status = "done"
+note = "$PUT takes buckets from AREA$L_AVAIL first; a bucket out of IDs splits; ponytail: one whose new record goes first takes a free ID"
 
 [[feature]]
 id = "big-buckets"
@@ -127,3 +127,8 @@ is ordered by a collating sequence of NCS's that `$CREATE` takes from
 system space, `$DISPLAY` copies the table to the buffer `XAB$L_COLTBL`
 gives instead of returning its address, which is how `CONVERT` makes a
 collated file again.
+`CONVERT/RECLAIM` puts the buckets deletions emptied on their area's list
+of available buckets, and a split takes its new bucket from there before
+growing the file, its record IDs going on from where they were. A bucket
+that has given all 65,535 IDs splits when a new record comes, as on
+OpenVMS, so an RFA never finds another record.
