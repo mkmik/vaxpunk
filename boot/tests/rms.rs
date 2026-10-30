@@ -190,13 +190,27 @@ fn fixtures() {
 
 /// make.com's conversions: output, FDL, input, qualifiers, keys. Not
 /// REL.REL's, which DCL's READ/DELETE and WRITE/UPDATE change after.
+/// IDX63 is IDX1 in buckets of 63 blocks, the most a prologue allows,
+/// with IDX1's records.
 const CONVERSIONS: &[(&str, &str, &str, &str, usize)] = &[
     ("IDX1.IDX", "IDX1.FDL", "DATA.TXT", "", 2),
     ("IDXC.IDX", "IDXC.FDL", "DATA.TXT", "", 2),
     ("IDXF.IDX", "IDXF.FDL", "FIXD.TXT", "/PAD", 3),
     ("COMP.IDX", "COMP.FDL", "COMP.TXT", "", 1),
     ("RELF.REL", "RELF.FDL", "FIXD.TXT", "/PAD", 1),
+    ("IDX63.IDX", "IDX63.FDL", "DATA.TXT", "", 2),
 ];
+
+/// An FDL file of make's, or IDX63.FDL, IDX1.FDL with 63-block buckets.
+fn fdl_text(make: &Path, name: &str) -> Vec<u8> {
+    if name == "IDX63.FDL" {
+        let idx1 = fs::read_to_string(make.join("idx1.fdl")).unwrap();
+        return idx1
+            .replace("BUCKET_SIZE\t1", "BUCKET_SIZE\t63")
+            .into_bytes();
+    }
+    fs::read(make.join(name.to_lowercase())).unwrap()
+}
 
 #[test]
 fn convert() {
@@ -216,7 +230,7 @@ fn convert() {
             if vol.lookup(&spec).is_ok() {
                 continue;
             }
-            let data = fs::read(fixtures.join("make").join(file.to_lowercase())).unwrap();
+            let data = fdl_text(&fixtures.join("make"), file);
             vol.copy_in(
                 &mut &data[..],
                 &spec,
@@ -248,7 +262,10 @@ fn convert() {
             if said.contains("-F-") {
                 failed.push(format!("CONVERT {out}: {said}"));
             }
-            let stem = out.split('.').next().unwrap().to_lowercase();
+            let stem = match out.split('.').next().unwrap() {
+                "IDX63" => "idx1".to_string(),
+                stem => stem.to_lowercase(),
+            };
             for key in 0..*keys {
                 let got = vax.command(&format!("RMSDUMP {out} {key}"), "\n$ ");
                 let got: Vec<_> = got

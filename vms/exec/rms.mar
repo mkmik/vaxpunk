@@ -92,7 +92,7 @@
         .EXTERNAL REL$OPEN, REL$CREATE, REL$CONNECT, REL$GET, REL$FIND, REL$PUT
         .EXTERNAL REL$UPDATE, REL$DELETE, REL$REWIND, REL$FLUSH
         .EXTERNAL IDX$OPEN, IDX$CREATE, IDX$CONNECT, IDX$GET, IDX$FIND, IDX$PUT
-        .EXTERNAL IDX$UPDATE, IDX$DELETE, IDX$REWIND, IDX$FLUSH
+        .EXTERNAL IDX$UPDATE, IDX$DELETE, IDX$REWIND, IDX$FLUSH, IDX$PEER
 
 BLOCK = 512
 MFD = 4                                 ; the MFD's file number
@@ -2167,6 +2167,86 @@ MARKDEL:
 30$:    AOBLEQ  #MAXIFI, R5, 20$
 40$:    SOBGTR  R3, 10$
         ENBINT
+        RSB
+
+; PEER: R7 = an IFAB, R2 = 0, or what PEER gave last. R1 = the next
+; other IFAB with R7's file open, in any process, and R2 where it is, a
+; process's index times 16 and the IFI; or R1 = 0 when there is none
+; left. Holding FIL$LOCK, so none comes or goes between calls. Keeps
+; every other register.
+PEER:
+        .JSB_ENTRY  OUTPUT=<R1, R2>
+        PUSHR   #^M<R0, R3, R4>
+        DSBINT  #IPL$_SYNCH
+        EXTZV   #4, #28, R2, R3         ; R3 = the process, R2 = the file
+        BICL2   #^C15, R2
+10$:    INCL    R2
+        CMPL    R2, #MAXIFI
+        BLEQU   20$
+        MOVL    #1, R2                  ; the next process's first
+        INCL    R3
+20$:    CMPL    R3, SCH$GL_MAXPIX
+        BGEQU   80$
+        TSTL    R3                      ; slot 0 is no process
+        BEQL    10$
+        MOVL    @SCH$GL_PCBVEC[R3], R4
+        BEQL    10$
+        BBC     R2, PCB$L_FILES(R4), 10$
+        MOVL    PCB$A_IFAB(R4)[R2], R1
+        CMPL    R1, R7
+        BEQL    10$
+        CMPL    IFB$L_VCB(R1), IFB$L_VCB(R7)
+        BNEQ    10$
+        CMPL    IFB$AB_HDR+FH2$W_FID(R1), IFB$AB_HDR+FH2$W_FID(R7)
+        BNEQ    10$
+        CMPW    IFB$AB_HDR+FH2$W_FID+4(R1), IFB$AB_HDR+FH2$W_FID+4(R7)
+        BNEQ    10$
+        ASHL    #4, R3, R3
+        BISL2   R3, R2
+        BRB     90$
+80$:    CLRL    R1
+90$:    ENBINT
+        POPR    #^M<R0, R3, R4>
+        RSB
+
+; RMS$SYNC: R7 = an IFAB whose stream changed its file. Gives every other
+; open of the file, in any process, its copy of the header, and, if both
+; are an indexed file's by record I/O, its key and area descriptors,
+; and empties the other's slots (IDX$PEER): each open keeps the file's
+; header and prologue, and a stream changes them only holding FIL$LOCK.
+; Keeps every register.
+RMS$SYNC::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        CLRL    R2
+10$:    BSBW    PEER
+        TSTL    R1
+        BEQL    90$
+        PUSHR   #^M<R1, R2>
+        MOVC3   #BLOCK, IFB$AB_HDR(R7), IFB$AB_HDR(R1)
+        POPR    #^M<R1, R2>
+        TSTL    IFB$L_IDX(R7)
+        BEQL    10$
+        TSTL    IFB$L_IDX(R1)
+        BEQL    10$
+        BSBW    IDX$PEER
+        BRB     10$
+90$:    POPR    #^M<R0, R1, R2, R3, R4, R5>
+        RSB
+
+; RMS$TAKEHDR: R7 = an IFAB just opened, with its file's header as the
+; disk has it. If another stream has the file open, takes its copy
+; instead, which is newer: a writer writes its header when it closes.
+; Keeps every register.
+RMS$TAKEHDR::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        CLRL    R2
+        BSBW    PEER
+        TSTL    R1
+        BEQL    90$
+        MOVC3   #BLOCK, IFB$AB_HDR(R1), IFB$AB_HDR(R7)
+90$:    POPR    #^M<R0, R1, R2, R3, R4, R5>
         RSB
 
 ; DELLAST: R7 = an IFAB of a file marked for delete. Gives back its access

@@ -762,16 +762,18 @@ LITERAL
 ! $IDXDEF
 LITERAL
     W$K_LENGTH = 576,
-    X$K_WALK0 = 1908,  ! the walks
-    X$K_WALK1 = 2484,
-    X$K_WALK2 = 3060,
-    X$K_LENGTH = 3636,
+    X$K_WALK0 = 1924,  ! the walks
+    X$K_WALK1 = 2500,
+    X$K_WALK2 = 3076,
+    X$K_LENGTH = 3652,
     X$C_BOF = 0,  ! before the first record
     X$C_AFTER = 1,  ! after the stream's record
     X$C_AT = 2,  ! at it: a $FIND found it
     X$C_EOF = 3,  ! past the last
     X$V_LASTPUT = 0,  ! X$T_LASTPUT holds a key
-    X$V_OKDUP = 1;  ! a $PUT found a key it has
+    X$V_OKDUP = 1,  ! a $PUT found a key it has
+    X$V_WROTE = 2,  ! the service wrote a bucket or the prologue: the file's other opens get what changed
+    S$K_LENGTH = 16;
 MACRO
     W$L_BUF = 0, 0, 32, 0 %,  ! the bucket's room
     W$L_VBN = 4, 0, 32, 0 %,  ! the bucket
@@ -829,7 +831,15 @@ MACRO
     X$W_RFAID = 1892, 0, 16, 0 %,  ! and ID
     X$L_PRREC = 1896, 0, 32, 0 %,  ! a record being packed,
     X$L_PRLEN = 1900, 0, 32, 0 %,  ! and its size
-    X$L_M = 1904, 0, 32, 0 %;  ! a split's first entry that goes
+    X$L_M = 1904, 0, 32, 0 %,  ! a split's first entry that goes
+    X$L_CTXSVBN = 1908, 0, 32, 0 %,  ! the SIDR bucket the stream's record's pointer was in, or 0
+    X$L_NSLOT = 1912, 0, 32, 0 %,  ! buckets kept between services
+    X$L_SLOTS = 1916, 0, 32, 0 %,  ! their slots, S$K_LENGTH each
+    X$L_TICK = 1920, 0, 32, 0 %,  ! uses of them so far, for the least recently used
+    S$L_VBN = 0, 0, 32, 0 %,  ! the bucket, 0 if the slot is empty
+    S$L_SIZE = 4, 0, 32, 0 %,  ! its bytes
+    S$L_USE = 8, 0, 32, 0 %,  ! X$L_TICK when it was last used
+    S$L_BUF = 12, 0, 32, 0 %;  ! its room
 
 ! $UAFDEF
 LITERAL

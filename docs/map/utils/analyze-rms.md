@@ -38,10 +38,10 @@ note = "analyzrms.mar ponytail"
 
 [[feature]]
 id = "big-buckets"
-title = "Buckets larger than MAXBKT blocks"
-status = "todo"
+title = "Buckets up to the prologue's 63 blocks"
+status = "done"
 needs = ["/rms/indexed#big-buckets"]
-note = "analyzrms.mar ponytail"
+note = "MAXBKT is 63, the most a prologue allows"
 
 [[feature]]
 id = "interactive"

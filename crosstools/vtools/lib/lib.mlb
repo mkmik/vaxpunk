@@ -911,8 +911,9 @@ DLC$V_REC = 3                           ; it has a record
         .ENDM   $DLCDEF
 
 ; $IDXDEF: an indexed file's state, in its IFAB's buffer: its keys and
-; areas, the stream's place, the keys being worked on, and walks, each a
-; place in a bucket. rmsidx.mar and rmsidxw.mar's.
+; areas, the stream's place, the keys being worked on, walks, each a
+; place in a bucket, and the buckets kept between services, each in a
+; slot. rmsidx.mar and rmsidxw.mar's.
         .MACRO  $IDXDEF
 ; A walk: a bucket, an entry in it, what the entry is, and the keys
 ; before it and of it, expanded.
@@ -974,16 +975,27 @@ X$W_RFAID = 1892                        ; and ID
 X$L_PRREC = 1896                        ; a record being packed,
 X$L_PRLEN = 1900                        ; and its size
 X$L_M = 1904                            ; a split's first entry that goes
-X$K_WALK0 = 1908                        ; the walks
-X$K_WALK1 = 1908+W$K_LENGTH
-X$K_WALK2 = 1908+<2*W$K_LENGTH>
-X$K_LENGTH = 1908+<3*W$K_LENGTH>
+X$L_CTXSVBN = 1908                      ; the SIDR bucket the stream's record's pointer was in, or 0
+X$L_NSLOT = 1912                        ; buckets kept between services
+X$L_SLOTS = 1916                        ; their slots, S$K_LENGTH each
+X$L_TICK = 1920                         ; uses of them so far, for the least recently used
+X$K_WALK0 = 1924                        ; the walks
+X$K_WALK1 = 1924+W$K_LENGTH
+X$K_WALK2 = 1924+<2*W$K_LENGTH>
+X$K_LENGTH = 1924+<3*W$K_LENGTH>
 X$C_BOF = 0                             ; before the first record
 X$C_AFTER = 1                           ; after the stream's record
 X$C_AT = 2                              ; at it: a $FIND found it
 X$C_EOF = 3                             ; past the last
 X$V_LASTPUT = 0                         ; X$T_LASTPUT holds a key
 X$V_OKDUP = 1                           ; a $PUT found a key it has
+X$V_WROTE = 2                           ; the service wrote a bucket or the prologue: the file's other opens get what changed
+; A slot: a bucket kept, by VBN.
+S$L_VBN = 0                             ; the bucket, 0 if the slot is empty
+S$L_SIZE = 4                            ; its bytes
+S$L_USE = 8                             ; X$L_TICK when it was last used
+S$L_BUF = 12                            ; its room
+S$K_LENGTH = 16
         .ENDM   $IDXDEF
 
 ; $UAFDEF: a SYSUAF.DAT record, VMS's layout: the user's name, UIC,

@@ -31,14 +31,14 @@ note = "PRD-0008 step 6"
 [[feature]]
 id = "bucket-cache"
 title = "Buckets kept in buffers between services, not read each time"
-status = "todo"
-note = "rmsidx.mar ponytail; PRD-0008 open question on buffers"
+status = "done"
+note = "rmsidx.mar: the last 8 buckets read or written, by VBN; ponytail: 8 whatever RAB$B_MBF says"
 
 [[feature]]
 id = "duplicates"
 title = "A $GET along duplicates that doesn't walk every one before the current"
-status = "todo"
-note = "rmsidx.mar ponytail"
+status = "done"
+note = "IDX$NEXT goes on from the record, by its RFA, or from the SIDR bucket its pointer was in"
 
 [[feature]]
 id = "reclaim"
@@ -49,8 +49,8 @@ note = "rmsidxw.mar ponytail"
 [[feature]]
 id = "big-buckets"
 title = "Buckets up to the prologue's 63 blocks, not 32"
-status = "todo"
-note = "PRD-0008 Limits: RMS$_BKS past what fits in pool"
+status = "done"
+note = "Pool grows as needed (t8y:/exec/capacity#pool); the boot test's IDX63.IDX"
 
 [[feature]]
 id = "key-types"
@@ -116,5 +116,8 @@ every key and prints the same dumps, and `RMSRAND` runs a long random mix
 of operations against a model, after which the file passes the `ods`
 checker and `ANALYZE/RMS_FILE/CHECK`. `SYSUAF.DAT` is one, with
 OpenVMS's four keys
-([ADR-0029](../../adr/0029-loginout-and-sysuaf.md)). Buckets are read
-again each time they are wanted.
+([ADR-0029](../../adr/0029-loginout-and-sysuaf.md)). Each open keeps
+the last buckets it read or wrote; a service that changes the file
+gives its other opens the header and descriptors it changed, and they
+forget their buckets. A `$GET` goes on from the stream's record, found
+by its RFA, so a long run of duplicates costs no more than any other.

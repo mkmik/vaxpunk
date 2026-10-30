@@ -18,8 +18,9 @@
 ; $UPDATE rewrites the current record in place if it fits, else takes it
 ; out, leaving an RRV in its home bucket, and puts it again; its RFA
 ; stays. $DELETE takes the record out, its RRV and its SIDR pointers.
-; Every bucket is written when it changes, its check characters one up;
-; a key's or area's descriptor when it does.
+; Every bucket is written when it changes, its check characters one up,
+; and kept in a slot (IDX$KEEP); a key's or area's descriptor when it
+; does. Then the file's other opens get what changed (RMS$SYNC).
 ;
 ; $CREATE writes a prologue from the FAB's XABKEYs and XABALLs, with no
 ; index yet; the first $PUT along each key makes its first data or SIDR
@@ -45,14 +46,15 @@
         $XABKEYDEF
         $XABALLDEF
 
-        .EXTERNAL RMS$WRITEBKT, RMS$CHECKSUM, RMS$FINDXAB, FIL$EXTEND, FIL$WRITEHDR
+        .EXTERNAL RMS$WRITEBKT, RMS$CHECKSUM, RMS$FINDXAB, RMS$SYNC, FIL$EXTEND, FIL$WRITEHDR
         .EXTERNAL IDX$OPEN, IDX$KEYDESC, IDX$GETKEY, IDX$KEYCMP, IDX$ISNULL
         .EXTERNAL IDX$EXPKEY, IDX$LOADW, IDX$ENTRY, IDX$NEXTW, IDX$IXENTRY
         .EXTERNAL IDX$IXPTR, IDX$DESCEND, IDX$FINDKEY, IDX$SCAN, IDX$FETCH
         .EXTERNAL IDX$PTRNEXT, IDX$MATCHKEY, IDX$RDPLG, IDX$AB_PLG, IDX$NEXT
-        .EXTERNAL IDX$DECODE
+        .EXTERNAL IDX$DECODE, IDX$KEEP, IDX$SETCTX
 
 BLOCK = 512
+MAXBKS = 63                             ; the largest bucket, blocks
 FAT$L_HIBLK = 20+4                      ; in the header: high word first
 FAT$L_EFBLK = 20+8                      ; high word first
 FAT$W_FFBYTE = 20+12
@@ -63,13 +65,15 @@ EXTMIN = 8                              ; blocks an area grows by, at least
         .PSECT  $CODE$
 
 ; WRW: R7 = an IFAB, R8 = a walk. Writes its bucket, with its free space
-; offset and both check characters one up; the file's end of file moves
-; past its last block when it closes. R0 = RMS$_NORMAL or the file
-; system's error. Keeps every other register.
+; offset and both check characters one up, and keeps a copy (IDX$KEEP);
+; the file's end of file moves past its last block when it closes. R0 =
+; RMS$_NORMAL or the file system's error. Keeps every other register.
 WRW:
         .JSB_ENTRY
         BISL2   #<1@IFB$V_HDR>!<1@IFB$V_DATA>, IFB$L_FLAGS(R7)
-        PUSHR   #^M<R1, R2>
+        PUSHR   #^M<R1, R2, R11>
+        MOVL    IFB$L_IDX(R7), R11
+        BISW2   #1@X$V_WROTE, X$W_FLAGS(R11)
         MOVL    W$L_BUF(R8), R2
         INCB    BKT$B_CHECKCHAR(R2)
         ADDL3   W$L_SIZE(R8), R2, R1
@@ -78,8 +82,22 @@ WRW:
         MOVL    W$L_VBN(R8), R0
         DIVL3   #BLOCK, W$L_SIZE(R8), R1
         BSBW    RMS$WRITEBKT
-        POPR    #^M<R1, R2>
+        BLBC    R0, 90$
+        MOVL    W$L_VBN(R8), R0
+        MOVL    W$L_SIZE(R8), R1
+        BSBW    IDX$KEEP
+        MOVL    #RMS$_NORMAL, R0
+90$:    POPR    #^M<R1, R2, R11>
         RSB
+
+; SYNC: R7 = an indexed file's IFAB, R11 = its state. If the service
+; wrote the file, gives its other opens what changed (RMS$SYNC). Keeps
+; every register.
+SYNC:
+        .JSB_ENTRY
+        BBCC    #X$V_WROTE, X$W_FLAGS(R11), 90$
+        BSBW    RMS$SYNC
+90$:    RSB
 
 ; GAP: R8 = a walk, R0 = an offset in its bucket, R1 = a count of bytes,
 ; negative to close. Moves the bytes from there to W$L_FREE that far, and
@@ -174,6 +192,7 @@ NEWBKT:
 ; Uses R0-R5.
 WRAREA:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BISW2   #1@X$V_WROTE, X$W_FLAGS(R11)
         MOVL    R0, R5
         DIVL3   #8, R5, R4              ; eight to a block
         ADDL2   X$L_AVBN(R11), R4
@@ -194,6 +213,7 @@ WRAREA:
 ; back to the prologue. R0 = RMS$_NORMAL or the disk's error. Uses R0-R5.
 WRKEY:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        BISW2   #1@X$V_WROTE, X$W_FLAGS(R11)
         SUBL3   X$L_KEYS(R11), R9, R5   ; the key: where its descriptor is
         DIVL2   #KEY$K_BLN, R5
         MOVAQ   @X$L_KLOC(R11)[R5], R5
@@ -1864,7 +1884,8 @@ IDX$PUT::
         BBC     #X$V_OKDUP, X$W_FLAGS(R11), 88$
         MOVL    #RMS$_OK_DUP, R0
 88$:    ADDL2   #8, SP
-90$:    RSB
+90$:    BSBW    SYNC
+        RSB
 
 ; IDX$UPDATE: R7 = an IFAB, R10 = a RAB. Rewrites the current record
 ; with the one RAB$L_RBF points at, RAB$W_RSZ bytes, keeping its RFA
@@ -1885,6 +1906,7 @@ IDX$UPDATE::
         BEQL    90$
         BICW2   #1@X$V_OKDUP, X$W_FLAGS(R11)
         BSBW    UPDCORE
+        BSBW    SYNC
         CLRL    X$L_CURVBN(R11)         ; not current any more, as VMS's
         CMPL    R0, #RMS$_NORMAL        ; a new key another record has?
         BNEQ    90$
@@ -2132,13 +2154,7 @@ IDX$DELETE::
         BNEQ    20$
         BSBW    IDX$NEXT
         BLBC    R0, 10$
-        MOVL    W$L_RRVVBN(R8), X$L_CTXVBN(R11)
-        MOVW    W$L_RRVID(R8), X$W_CTXID(R11)
-        MOVAB   W$T_CUR(R8), R1
-        TSTB    X$B_KRF(R11)
-        BEQL    8$
-        MOVAB   X$K_WALK0+W$T_CUR(R11), R1
-8$:     MOVC3   #256, (R1), X$T_CTXKEY(R11)
+        BSBW    IDX$SETCTX
         MOVB    #X$C_AT, X$B_STATE(R11)
         BRB     20$
 10$:    CMPL    R0, #RMS$_EOF
@@ -2189,12 +2205,14 @@ IDX$DELETE::
 50$:    CLRL    X$L_CURVBN(R11)
         MOVL    #RMS$_NORMAL, R0
 88$:    TSTL    (SP)+
-90$:    RSB
+90$:    BSBW    SYNC
+        RSB
 
 ; IDX$FLUSH: R7 = an IFAB. Every bucket is written when it changes;
 ; writes the header if it changed, with its end of file past its last
-; block once a bucket was written; a new file's stays 0, as VMS's. R0 =
-; RMS$_NORMAL or the disk's error. Uses R0 and R1.
+; block once a bucket was written; a new file's stays 0, as VMS's; and
+; the file's other opens get it (RMS$SYNC). R0 = RMS$_NORMAL or the
+; disk's error. Uses R0 and R1.
 IDX$FLUSH::
         .JSB_ENTRY
         MOVL    #RMS$_NORMAL, R0
@@ -2206,6 +2224,7 @@ IDX$FLUSH::
         CLRW    IFB$AB_HDR+FAT$W_FFBYTE(R7)
 10$:    MOVAB   IFB$AB_HDR(R7), R1
         BSBW    FIL$WRITEHDR
+        BSBW    RMS$SYNC
 90$:    RSB
 
 ; IDX$CREATE: R7 = an IFAB with a new indexed file's header and
@@ -2219,7 +2238,7 @@ IDX$FLUSH::
 ; for keys not numbered from 0 in turn, RMS$_KSZ for a key of no bytes,
 ; over 255, more than 8 segments, or an integer not one segment of its
 ; size, RMS$_DTP for a data type RMS hasn't, RMS$_AID, RMS$_IAN or
-; RMS$_DAN for an area there isn't, RMS$_BKS for a bucket over 32 blocks,
+; RMS$_DAN for an area there isn't, RMS$_BKS for a bucket over 63 blocks,
 ; RMS$_XAB, or the file system's error. Uses R0-R6, R8, R9, R11.
 IDX$CREATE::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
@@ -2394,8 +2413,8 @@ KEYXAB:
 ; AREAXAB: R10 = a FAB, R0 = an area. R1 = its XABALL in the chain, the
 ; one whose XAB$B_AID it is, or 0 if the chain has none at all; R2 = its
 ; bucket size: the XABALL's, or FAB$B_BKS, or 2. R0 = RMS$_NORMAL,
-; RMS$_AID if there is none but others, RMS$_BKS for a bucket over 32
-; blocks. Keeps every other register.
+; RMS$_AID if there is none but others, RMS$_BKS for a bucket over
+; MAXBKS blocks. Keeps every other register.
 AREAXAB:
         .JSB_ENTRY  OUTPUT=<R1, R2>
         PUSHR   #^M<R3, R4>
@@ -2424,7 +2443,7 @@ AREAXAB:
         BNEQ    60$
         MOVL    #2, R2
 60$:    MOVL    #RMS$_BKS, R0
-        CMPL    R2, #32
+        CMPL    R2, #MAXBKS
         BGTRU   90$
         MOVL    #RMS$_NORMAL, R0
 90$:    POPR    #^M<R3, R4>
