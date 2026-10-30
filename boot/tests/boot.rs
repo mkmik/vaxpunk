@@ -1088,19 +1088,52 @@ const BACKUP: Phase = Phase {
 /// SPILLTEST.COM, a name with more versions than one directory record
 /// holds, on DKB0:; then RMSTEST in a directory of its own there, whose
 /// output must be OpenVMS's, vms/sysexe/rmstest.out (checked after the
-/// session).
+/// session). SET RMS_DEFAULT sets the process's multiblock count and
+/// indexed files' buffers, and the system's extension; a prologue that
+/// isn't one sets nothing; SHOW RMS_DEFAULT shows them as OpenVMS's does.
 const RMS: Phase = Phase {
     name: "rms",
     secs: 90,
-    steps: &[(
-        "NEW.TXT;2            [SYSTEM]                         (RWED,RWED,RE,RE)",
-        1,
-        concat!(
-            "@SYS$MANAGER:SPILLTEST\r",
-            "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\rSET DEFAULT DKB0:[000000]\r",
+    steps: &[
+        (
+            "NEW.TXT;2            [SYSTEM]                         (RWED,RWED,RE,RE)",
+            1,
+            concat!(
+                "@SYS$MANAGER:SPILLTEST\r",
+                "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\rSET DEFAULT DKB0:[000000]\r",
+            ),
         ),
-    )],
-    lines: &["SPILLTEST: ok", "RMSTEST done"],
+        (
+            "RMSTEST done",
+            1,
+            concat!(
+                "SET RMS_DEFAULT/BLOCK_COUNT=24/BUFFER_COUNT=-5/INDEXED\r",
+                "SET RMS_DEFAULT/EXTEND_QUANTITY=100/PROLOG=1\r",
+                "SET RMS_DEFAULT/SYSTEM/EXTEND_QUANTITY=7\r",
+            ),
+        ),
+        (
+            "%SET-E-VALERR, specified value is out of legal range",
+            1,
+            concat!(
+                "SHOW RMS_DEFAULT\r",
+                "SET RMS_DEFAULT/BLOCK_COUNT=0/BUFFER_COUNT=0/INDEXED\r",
+                "SET RMS_DEFAULT/SYSTEM/EXTEND_QUANTITY=0\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "SPILLTEST: ok",
+        "RMSTEST done",
+        "%SET-E-VALERR, specified value is out of legal range",
+        concat!(
+            "Process    24     |    5         0        0       0         0       |    0\n",
+            "System     32     |    0         0        0       0         0       |    8\n\n",
+            "          Prolog    Extend Quantity     PATH_TIMEOUT\n",
+            "Process     0              0                  0\n",
+            "System      0              7                 10\n",
+        ),
+    ],
 };
 
 /// EDIT/TPU/NODISPLAY runs a command file CREATE makes on DKB0:: TPU

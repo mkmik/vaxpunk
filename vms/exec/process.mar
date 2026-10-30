@@ -122,6 +122,9 @@ KNOWN:  .ASCIC  "SETPWD.EXE"            ; SET PASSWORD writes SYSUAF.DAT
         .ASCIC  "PHONE.EXE"             ; PHONE rings others, through their mailboxes
         .ASCIC  "_DKA0:[SYSEXE]PHONE.EXE"
         .LONG   PRV$M_OPER!PRV$M_PRMMBX!PRV$M_SYSNAM!PRV$M_WORLD, 0
+        .ASCIC  "SET.EXE"               ; SET RMS_DEFAULT and SET VOLUME change them in kernel mode
+        .ASCIC  "_DKA0:[SYSEXE]SET.EXE"
+        .LONG   PRV$M_CMKRNL, 0
         .ASCIC  "SHOW.EXE"              ; SHOW LOGICAL reads the tables in kernel mode
         .ASCIC  "_DKA0:[SYSEXE]SHOW.EXE"
         .LONG   PRV$M_CMKRNL!<1@PRV$V_NETMBX>!PRV$M_WORLD, 0

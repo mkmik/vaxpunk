@@ -3,7 +3,8 @@
 //!
 //! - VAR: a 16-bit length, the data, a pad byte if the length is odd. In
 //!   files where records may not span blocks (the BLK attribute), a length
-//!   of 0xFFFF means "the rest of this block is unused".
+//!   of 0xFFFF means "the rest of this block is unused". The length is
+//!   little-endian, or big-endian with the MSB attribute.
 //! - VFC: VAR with a fixed-size control area (print control) at the front
 //!   of each record.
 //! - FIX: records of the file's record size, padded to even length.
@@ -16,7 +17,7 @@ use ods_core::{BLOCK, RecordAttrs, rat, rfm};
 /// Record layout, from a file's record attributes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
-    Var { vfc: usize },
+    Var { vfc: usize, msb: bool },
     Fix(usize),
     Stream(&'static [u8]),
 }
@@ -29,8 +30,8 @@ impl Format {
             return None;
         }
         match r.rtype & 0xf {
-            rfm::VAR => Some(Format::Var { vfc: 0 }),
-            rfm::VFC => Some(Format::Var { vfc: if r.vfcsize == 0 { 2 } else { r.vfcsize as usize } }),
+            rfm::VAR => Some(Format::Var { vfc: 0, msb: r.rattrib & rat::MSBRCW != 0 }),
+            rfm::VFC => Some(Format::Var { vfc: if r.vfcsize == 0 { 2 } else { r.vfcsize as usize }, msb: false }),
             rfm::FIX if r.rsize > 0 => Some(Format::Fix(r.rsize as usize)),
             rfm::STMLF => Some(Format::Stream(b"\n")),
             rfm::STMCR => Some(Format::Stream(b"\r")),
@@ -81,7 +82,7 @@ impl<R: Read> Records<R> {
     /// The control area size, to skip when printing a record as text.
     pub fn control_size(&self) -> usize {
         match self.format {
-            Format::Var { vfc } => vfc,
+            Format::Var { vfc, .. } => vfc,
             _ => 0,
         }
     }
@@ -124,10 +125,11 @@ impl<R: Read> Iterator for Records<R> {
     fn next(&mut self) -> Option<Self::Item> {
         let r = (|| -> io::Result<Option<Vec<u8>>> {
             match self.format {
-                Format::Var { .. } => loop {
-                    let Some(lo) = self.byte()? else { return Ok(None) };
-                    let hi = self.byte()?.ok_or_else(truncated)?;
-                    let len = u16::from_le_bytes([lo, hi]);
+                Format::Var { msb, .. } => loop {
+                    let Some(first) = self.byte()? else { return Ok(None) };
+                    let second = self.byte()?.ok_or_else(truncated)?;
+                    let len =
+                        if msb { u16::from_be_bytes([first, second]) } else { u16::from_le_bytes([first, second]) };
                     if len == 0xffff {
                         self.skip((BLOCK as u64 - self.pos % BLOCK as u64) % BLOCK as u64)?;
                         continue;
@@ -242,7 +244,7 @@ mod tests {
         let (bytes, longest) = w.finish().unwrap();
         assert_eq!(longest, 5);
         assert_eq!(bytes, b"\x05\0hello\0\x03\0odd\0\0\0\x04\0last");
-        let r = lines(Format::Var { vfc: 0 }, &bytes);
+        let r = lines(Format::Var { vfc: 0, msb: false }, &bytes);
         assert_eq!(r, [&b"hello"[..], b"odd", b"", b"last"]);
     }
 
@@ -251,8 +253,16 @@ mod tests {
         let mut data = vec![0u8; 1024];
         data[..6].copy_from_slice(b"\x02\0hi\xff\xff");
         data[512..516].copy_from_slice(b"\x01\0x\0");
-        let r = lines(Format::Var { vfc: 0 }, &data[..516]);
+        let r = lines(Format::Var { vfc: 0, msb: false }, &data[..516]);
         assert_eq!(r, [&b"hi"[..], b"x"]);
+    }
+
+    #[test]
+    fn var_msb() {
+        // VARMSB.SEQ, as RMSTEST leaves it on OpenVMS (vms/sysexe/rmstest.out).
+        let data = b"\0\x15the first record    1\0\0\x09a new one9";
+        let r = lines(Format::Var { vfc: 0, msb: true }, data);
+        assert_eq!(r, [&b"the first record    1"[..], b"a new one"]);
     }
 
     #[test]
@@ -260,6 +270,6 @@ mod tests {
         assert_eq!(lines(Format::Fix(3), b"abc\0def\0"), [&b"abc"[..], b"def"]);
         assert_eq!(lines(Format::Stream(b"\n"), b"a\nb"), [&b"a"[..], b"b"]);
         assert_eq!(lines(Format::Stream(b"\r\n"), b"a\r\nb\n"), [&b"a"[..], b"b"]);
-        assert!(Records::new(&b"\x05\0ab"[..], Format::Var { vfc: 0 }).next().unwrap().is_err());
+        assert!(Records::new(&b"\x05\0ab"[..], Format::Var { vfc: 0, msb: false }).next().unwrap().is_err());
     }
 }

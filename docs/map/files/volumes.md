@@ -91,7 +91,7 @@ needs = ["/drivers/interrupt-io"]
 id = "set-volume"
 title = "SET VOLUME: label, owner, protection, default file protection"
 status = "done"
-note = "FIL$SETVOLUME, in kernel mode through $CMKRNL, rewrites each home block (ADR-0039); SET.EXE has no CMKRNL of its own, as VMS's is installed with: t8y:/utils/set-show#set-privileged"
+note = "FIL$SETVOLUME, in kernel mode through $CMKRNL, rewrites each home block (ADR-0039); SET.EXE is a known image with CMKRNL, as VMS installs it: t8y:/utils/set-show#set-privileged"
 
 [[feature]]
 id = "volume-characteristics"
