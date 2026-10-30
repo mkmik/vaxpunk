@@ -9,6 +9,7 @@
 //! never a panic.
 
 mod check;
+mod collate;
 pub mod fdl;
 mod load;
 mod read;
@@ -21,6 +22,7 @@ use core::fmt;
 use crate::layout::{BLOCK, Field, checksum, layout};
 
 pub use check::{Finding, KeyStats, Report, check};
+pub use collate::Collation;
 pub use load::{AreaSpec, KeySpec, Spec, build};
 pub use read::{Indexed, Relative, RmsFile, open};
 

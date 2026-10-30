@@ -366,7 +366,7 @@ impl Checker<'_, '_> {
                             pointers.extend(s.ptrs.iter().map(|&(c, rfa)| (vbn, c, rfa, s.key.clone())));
                             ks.push(s.key);
                         }
-                        if ks.windows(2).any(|w| k.compare(&w[0], &w[1]) != Ordering::Less) {
+                        if ks.windows(2).any(|w| self.x.compare(n, &w[0], &w[1]) != Ordering::Less) {
                             self.r.error("SIDR keys out of order or repeated in a bucket", key, vbn);
                         }
                         ks
@@ -380,16 +380,16 @@ impl Checker<'_, '_> {
             stats.entries.push(keys.len());
             for kv in keys {
                 if let Some(p) = &prev {
-                    match k.compare(p, &kv) {
+                    match self.x.compare(n, p, &kv) {
                         Ordering::Greater => self.r.error("keys out of order", key, vbn),
                         Ordering::Equal if !k.has(keyflag::DUPKEYS) => self.r.error("duplicate key", key, vbn),
                         _ => {}
                     }
                 }
-                if hi.as_ref().is_some_and(|h| k.compare(&kv, h) == Ordering::Greater) {
+                if hi.as_ref().is_some_and(|h| self.x.compare(n, &kv, h) == Ordering::Greater) {
                     self.r.error("key above the index key for its bucket", key, vbn);
                 }
-                if lo.as_ref().is_some_and(|l| k.compare(&kv, l) == Ordering::Less) {
+                if lo.as_ref().is_some_and(|l| self.x.compare(n, &kv, l) == Ordering::Less) {
                     self.r.error("key below the index key for the bucket before", key, vbn);
                 }
                 prev = Some(kv);
@@ -456,11 +456,11 @@ impl Checker<'_, '_> {
         if self.x.plg == 3 && vfree + 1 + keys.len() * ps + 4 != b.len() {
             self.r.error(format!("VBN free space {vfree} doesn't fit {} pointers", keys.len()), key, vbn);
         }
-        if keys.windows(2).any(|w| k.compare(&w[0], &w[1]) == Ordering::Greater) {
+        if keys.windows(2).any(|w| self.x.compare(n, &w[0], &w[1]) == Ordering::Greater) {
             self.r.error("index keys out of order", key, vbn);
         }
         if let Some(h) = hi
-            && keys.iter().any(|kv| k.compare(kv, h) == Ordering::Greater)
+            && keys.iter().any(|kv| self.x.compare(n, kv, h) == Ordering::Greater)
         {
             self.r.error("index key above the one leading here", key, vbn);
         }
@@ -538,7 +538,7 @@ impl Checker<'_, '_> {
             if c & (irc::DELETED | irc::NOPTRSZ) != 0 {
                 continue;
             }
-            if !k.has(keyflag::DUPKEYS) && last_key.is_some_and(|l| k.compare(l, kv) == Ordering::Equal) {
+            if !k.has(keyflag::DUPKEYS) && last_key.is_some_and(|l| self.x.compare(n, l, kv) == Ordering::Equal) {
                 self.r.error("duplicate key", key, *vbn);
             }
             last_key = Some(kv);
@@ -546,7 +546,7 @@ impl Checker<'_, '_> {
                 None => self.r.error(format!("SIDR pointer to ({},{}), no record", rfa.0, rfa.1), key, *vbn),
                 Some(p) if !p.live => self.r.error("SIDR pointer to a deleted record", key, *vbn),
                 Some(p) => {
-                    if k.key_of(&p.rec).is_none_or(|rk| k.compare(&rk, kv) != Ordering::Equal) {
+                    if k.key_of(&p.rec).is_none_or(|rk| self.x.compare(n, &rk, kv) != Ordering::Equal) {
                         self.r.error(format!("SIDR key differs from record ({},{})'s", rfa.0, rfa.1), key, *vbn);
                     }
                     *times.entry(*rfa).or_default() += 1;

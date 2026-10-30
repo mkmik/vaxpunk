@@ -72,6 +72,7 @@ Decisions this PRD rests on:
   with `RMS$_PLV`. `CONVERT` on OpenVMS turns them into prologue 3.
 - **Collated keys and packed decimal keys** at first. String, signed and
   unsigned integer of 2, 4 and 8 bytes, and their descending forms, are in.
+  Both came later ([t8y:/rms/indexed#key-types](../map/rms/indexed.md)).
 - **RMS Journaling**: after-image, before-image and recovery units. No
   `SET FILE/AI_JOURNALING`, no DECdtm.
 - **Global buffers**, `SET FILE/GLOBAL_BUFFERS`, and deferred write across

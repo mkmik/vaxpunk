@@ -9,8 +9,9 @@ use ods_core::RecordAttrs;
 use ods_core::rms::{self, AreaSpec, KeySpec, Spec, dtype, fdl};
 use ods_core::{rat, rfm};
 
-const INDEXED: [&str; 16] = [
+const INDEXED: [&str; 20] = [
     "idx1", "idxc", "idxf", "idxb", "comp", "idxm", "uaf", "p1", "p2", "p2b", "p2i", "p2m", "pd1", "pd2", "pd3", "pkn",
+    "col1c", "col6c", "col8", "col9",
 ];
 const RELATIVE: [&str; 2] = ["rel", "relf"];
 

@@ -23,8 +23,9 @@
 ; does. Then the file's other opens get what changed (RMS$SYNC).
 ;
 ; $CREATE writes a prologue from the FAB's XABKEYs and XABALLs, with no
-; index yet; the first $PUT along each key makes its first data or SIDR
-; bucket and a root above it.
+; index yet, and after it each collated key's table, XAB$L_COLTBL's; the
+; first $PUT along each key makes its first data or SIDR bucket and a
+; root above it.
 ; ponytail: no reclaimed buckets, CONVERT/RECLAIM's; an emptied bucket
 ; stays in its chain. Record IDs aren't reused, so a bucket that has had
 ; 65535 has no more.
@@ -2359,6 +2360,7 @@ IDX$CREATE::
         BLBS    R0, 30$
         RSB
 30$:    AOBLSS  R6, R4, 29$
+        CLRQ    -(SP)                   ; 8 the collating tables' VBN
         PUSHR   #^M<R5, R6>             ; 0 the keys, 4 the areas
         SUBL3   #1, R5, R2              ; the prologue's blocks
         ADDL2   #4, R2
@@ -2371,7 +2373,16 @@ IDX$CREATE::
         ADDL2   R8, R0
         DECL    R0
         MOVL    R0, R9                  ; R9 = its blocks
-        CLRL    R0                      ; area 0's extent: them, or its
+        BSBW    COLBYTES                ; and the collating tables'
+        BLBS    R0, 32$
+        BRW     88$
+32$:    TSTL    R1
+        BEQL    34$
+        ADDL3   #1, R9, 8(SP)
+        ADDL2   #BLOCK-3, R1
+        DIVL2   #BLOCK-2, R1
+        ADDL2   R1, R9
+34$:    CLRL    R0                      ; area 0's extent: them, or its
         BSBW    AREAXAB                 ; XABALL's allocation if more
         MOVL    R9, R0
         TSTL    R1
@@ -2392,13 +2403,21 @@ IDX$CREATE::
         MOVL    #1, R11                 ; R11 = the VBN being made
         CLRL    R6                      ; R6 = the key in it
 40$:    MOVC5   #0, (R7), #0, #BLOCK, IDX$AB_PLG
-        CMPL    R11, R8
+        TSTL    8(SP)                   ; a collating table's block?
+        BEQL    41$
+        CMPL    R11, 8(SP)
+        BLSSU   41$
+        SUBL3   8(SP), R11, R0
+        BSBW    COLBLOCK
+        BRW     70$
+41$:    CMPL    R11, R8
         BGEQU   60$
         CMPL    R11, #1
         BNEQ    45$
         MOVB    R8, IDX$AB_PLG+PLG$B_AVBN       ; VBN 1: key 0 and the prologue
         MOVB    4(SP), IDX$AB_PLG+PLG$B_AMAX
         MOVW    #PLG$C_VER_3, IDX$AB_PLG+PLG$W_VER_NO
+        MOVW    8(SP), IDX$AB_PLG+PLG$W_COLVBN
         MOVAB   IDX$AB_PLG, R3
         MOVL    R6, R0
         MOVL    (SP), R2
@@ -2463,10 +2482,114 @@ IDX$CREATE::
         BRB     80$
 85$:    MOVB    R6, IFB$AB_HDR+FAT$B_BKTSIZE(R7)
         MOVB    R6, IFB$B_BKS(R7)
-        ADDL2   #8, SP
+        ADDL2   #16, SP
         BSBW    IDX$OPEN
         RSB
-88$:    ADDL2   #8, SP
+88$:    ADDL2   #16, SP
+        RSB
+
+; COLBYTES: R10 = a FAB, R5 = its keys. R1 = the bytes of the collating
+; tables of its collated keys, as IDX$CREATE writes them after its
+; prologue (COLBLOCK), 0 if it has none. R0 = RMS$_NORMAL, RMS$_BOGUSCOL
+; for a collated key's XABKEY without a table of NCS's, from 600 bytes
+; to 1078, or SS$_ACCVIO if the caller can't read it. Keeps every other
+; register.
+COLBYTES:
+        .JSB_ENTRY  OUTPUT=<R1>
+        PUSHR   #^M<R2, R3, R4>
+        CLRL    R2                      ; R2 = the bytes, R3 = the key
+        CLRL    R3
+10$:    MOVL    #RMS$_NORMAL, R0
+        CMPL    R3, R5
+        BGEQU   90$
+        MOVL    R3, R0
+        BSBW    KEYXAB
+        INCL    R3
+        BICB3   #KEY$C_DESCENDING, XAB$B_DTP(R1), R0
+        CMPB    R0, #KEY$C_COLLATED
+        BNEQ    10$
+        MOVL    #RMS$_BOGUSCOL, R0
+        CMPB    XAB$B_BLN(R1), #XAB$C_KEYLEN
+        BLSSU   90$
+        MOVL    XAB$L_COLSIZ(R1), R4
+        CMPL    R4, #600
+        BLSSU   90$
+        CMPL    R4, #600+C$K_LISTMAX-2  ; as much as $OPEN reads
+        BGTRU   90$
+        MOVL    XAB$L_COLTBL(R1), R0
+        IFNORD  R4, (R0), 80$
+        ADDL2   R4, R2
+        ADDL2   #12, R2                 ; and its header
+        BRB     10$
+80$:    MOVL    #SS$_ACCVIO, R0
+90$:    MOVL    R2, R1
+        POPR    #^M<R2, R3, R4>
+        RSB
+
+; COLBLOCK: R10 = a FAB, R0 = a block of its collating tables, from 0.
+; Puts its 510 bytes in IDX$AB_PLG: for each collated key, by key, 0, 5,
+; the key, the table's kind, its size, FF FF FF 00, or 0 descending, and
+; the table its XABKEY gives (COLBYTES). Uses R0-R5.
+COLBLOCK:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MULL3   #BLOCK-2, R0, R4        ; R4 = where in the tables
+        CLRL    R5                      ; R5 = the byte in the block
+10$:    MOVL    R4, R0
+        BSBW    COLAT
+        BLBC    R0, 90$
+        MOVB    R1, IDX$AB_PLG[R5]
+        INCL    R4
+        AOBLSS  #BLOCK-2, R5, 10$
+90$:    RSB
+
+; COLAT: R10 = a FAB, R0 = an offset in its collating tables. R1 = the
+; byte there; R0 = 1, or 0 past their end. Keeps every other register.
+COLAT:
+        .JSB_ENTRY  OUTPUT=<R1>
+        PUSHR   #^M<R2, R3, R4, R5>
+        MOVL    R0, R4                  ; R4 = the offset in what is left
+        CLRL    R3                      ; R3 = the key
+10$:    MOVL    R3, R0
+        BSBW    KEYXAB
+        BLBC    R0, 90$                 ; no more keys
+        BICB3   #KEY$C_DESCENDING, XAB$B_DTP(R1), R0
+        CMPB    R0, #KEY$C_COLLATED
+        BNEQ    40$
+        MOVL    XAB$L_COLSIZ(R1), R5
+        ADDL2   #12, R5
+        CMPL    R4, R5                  ; in this key's?
+        BGEQU   30$
+        MOVL    XAB$L_COLTBL(R1), R2
+        CMPL    R4, #12
+        BGEQU   20$
+        CASEL   R4, #0, #11             ; its header
+15$:    .WORD   16$-15$, 17$-15$, 18$-15$, 19$-15$, 21$-15$, 21$-15$
+        .WORD   21$-15$, 21$-15$, 22$-15$, 22$-15$, 22$-15$, 23$-15$
+16$:    CLRL    R1
+        BRB     80$
+17$:    MOVL    #5, R1
+        BRB     80$
+18$:    MOVL    R3, R1
+        BRB     80$
+19$:    MOVZBL  65(R2), R1              ; the kind, as NCS's table has it
+        BRB     80$
+21$:    SUBL3   #4, R4, R0              ; the size
+        EXTZV   #0, #8, XAB$L_COLSIZ(R1)[R0], R1
+        BRB     80$
+22$:    BBS     #5, XAB$B_DTP(R1), 23$  ; ascending: FF FF FF 00
+        MOVZBL  #^XFF, R1
+        BRB     80$
+23$:    CLRL    R1
+        BRB     80$
+20$:    MOVZBL  -12(R2)[R4], R1         ; the table
+        BRB     80$
+30$:    SUBL2   R5, R4
+40$:    INCL    R3
+        BRB     10$
+80$:    MOVL    #1, R0
+        BRB     95$
+90$:    CLRL    R0
+95$:    POPR    #^M<R2, R3, R4, R5>
         RSB
 
 ; KEYXAB: R10 = a FAB, R0 = a key. R1 = its XABKEY in the chain, the one
@@ -2581,11 +2704,13 @@ MKKEY:
         MOVL    #RMS$_DTP, R1
         BICB3   #KEY$C_DESCENDING, XAB$B_DTP(R4), R2
         CMPB    R2, #KEY$C_COLLATED
-        BGEQU   87$
-        BITB    #^C<KEY$C_DESCENDING!7>, XAB$B_DTP(R4)
+        BGTRU   87$
+        BITB    #^C<KEY$C_DESCENDING!15>, XAB$B_DTP(R4)
         BNEQ    87$
-        CMPB    R2, #KEY$C_PACKED       ; packed decimal: its records may be
-        BEQL    24$                     ; compressed, not the key
+        CMPB    R2, #KEY$C_PACKED       ; packed decimal and collated: their
+        BEQL    24$                     ; records may be compressed, not the key
+        CMPB    R2, #KEY$C_COLLATED
+        BEQL    24$
         TSTB    R2                      ; strings may be compressed, a key
         BNEQ    30$                     ; and its index if it has 6 bytes
         PUSHR   #^M<R1, R2>             ; at least, as VMS's
@@ -2642,9 +2767,16 @@ MKKEY:
         CMPL    R0, #255
         BGTRU   87$
         MOVB    R0, KEY$B_KEYSZ(R3)
+        MOVB    XAB$B_DTP(R4), KEY$B_TYPE(R3)   ; the first segment's type
         BICB3   #KEY$C_DESCENDING, XAB$B_DTP(R4), R2    ; an integer: its size
         BEQL    60$
-        MOVL    #RMS$_SEG, R1           ; one segment
+        CMPB    R2, #KEY$C_COLLATED     ; collated: the others' too, as VMS's
+        BNEQ    51$
+        MOVL    #^X08080808, KEY$B_TYPE+1(R3)
+        MOVW    #^X0808, KEY$B_TYPE+5(R3)
+        MOVB    #8, KEY$B_TYPE+7(R3)
+        BRB     60$
+51$:    MOVL    #RMS$_SEG, R1           ; one segment
         CMPB    KEY$B_SEGMENTS(R3), #1
         BNEQ    87$
         MOVL    #RMS$_KSZ, R1

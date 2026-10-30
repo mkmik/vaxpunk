@@ -1,4 +1,4 @@
-# Indexed files, prologue 3
+# Indexed files
 
 An indexed file keeps its records in primary key order in data buckets,
 with an index of buckets above them for each key: the primary key's index
@@ -37,7 +37,8 @@ something seen.
 | --- | --- | --- | --- |
 | 0x66 | 1 | `AVBN` | VBN of the first area descriptor |
 | 0x67 | 1 | `AMAX` | number of areas |
-| 0x74 | 2 | `VER_NO` | prologue version: 3 |
+| 0x74 | 2 | `VER_NO` | prologue version: 3, or 1 or 2 (*Prologues 1 and 2*) |
+| 0x78 | 2 | `COLVBN` | first block of the collating tables, 0 without collated keys (*Collated keys*) |
 
 The rest of 0x60-0x7F is 0 in an indexed file; a relative file uses it
 (`relative.md`).
@@ -83,7 +84,12 @@ buckets; 7 `REC_COMPR`, data record compression (primary only).
 `DATATYPE`: 0 string, 1 signed word, 2 unsigned word, 3 signed long, 4
 unsigned long (FDL `bin4`), 5 packed decimal, 6 signed quad, 7 unsigned
 quad (`bin8`), 8 collated; 32 + n is n descending. Strings compare as
-unsigned bytes, integers as integers; a segmented key is a string.
+unsigned bytes, integers as integers; a segmented key is a string. A
+packed decimal key, one segment of at most 16 bytes, two digits a byte and
+the sign in the last byte's low half, compares by value: a sign of B or D
+is minus, A, C, E or F plus, and -0 is 0. Every 0 is its null key, and
+its high key is 99…9C, or 99…9B descending (`pd1.idx` to `pkn.idx`). A
+collated key compares by its collating sequence (*Collated keys*).
 
 ### Area descriptor (`AREA$`, 64 bytes)
 
@@ -174,7 +180,11 @@ records in their bucket.
 
 `$DELETE` takes the record out of its bucket; a record a recovery unit
 deleted keeps `DELETED`, which a reader skips, and so does an RRV whose
-record is gone.
+record is gone. OpenVMS's `$DELETE` also leaves a bucket's last record,
+and any record of a primary key with duplicates, in place with `DELETED`
+and only its key: the size word and the key, compressed with
+`KEY_COMPR`; a `FIX` record without compression has no size word and
+keeps `KEYSZ` bytes.
 
 ### Key compression
 
@@ -238,6 +248,43 @@ always 4 bytes. `$DELETE`, or an `$UPDATE` that changes the key, marks the
 pointer: the first keeps its bytes with `DELETED` set, another shrinks to
 its control byte alone, `0x14`, `DELETED` and `NOPTRSZ`.
 
+## Collated keys
+
+A collated key, `DATATYPE` 8 or 40, is a string ordered by a collating
+sequence of the National Character Set utility, NCS. The file keeps a
+copy: `$CREATE` writes each collated key's table, the one its
+`XAB$L_COLTBL` gives, in the blocks after the area descriptors, from
+`COLVBN`. Those blocks hold 510 bytes each and end in a checksum as the
+prologue's do; the tables run on from one block to the next, one for each
+collated key in key order, each after a 12-byte header:
+
+| Offset | Size | Notes |
+| --- | --- | --- |
+| 0 | 1 | 0 |
+| 1 | 1 | 5 |
+| 2 | 1 | the key's number |
+| 3 | 1 | the table's byte 65 |
+| 4 | 4 | the table's size: 620 for `col8.idx`'s Multinational |
+| 8 | 4 | `FF FF FF 00` ascending, 0 descending |
+
+The table, as NCS makes it:
+
+| Offset | Size | Notes |
+| --- | --- | --- |
+| 20 | 32 | the sequence's name, counted |
+| 88 | 256 | each character's primary weight |
+| 344 | 256 | and its secondary weight |
+| 600 | | characters weighed otherwise, 4 bytes each: the character, the one after it or `FF` for itself alone, and its primary weights, the second 0 if it has one; then `FF FF` |
+
+Two keys compare by their characters' primary weights, where a pair the
+list has weighs as one entry and an entry with two weights as two
+characters; if those are the same, by the secondary weights, a list
+entry's being its first character's, once or twice; and if those are the
+same too, by their bytes, the greater first, so `a` comes before `A`. A
+shorter key with the same weights comes first. A descending key is the
+other way round. That order reproduces every bucket of `col1c.idx`,
+`col6c.idx`, `col8.idx` and `col9.idx`.
+
 ## Loading
 
 `CONVERT` writes the records in primary key order and starts a new data
@@ -282,3 +329,28 @@ file is 0 until a bucket is written, then past its last block. `LEVEL1_INDEX_ARE
   its key is null, or the record is too short for the key
   (`MINRECSZ`).
 - `USED` and `NXTVBN` past every bucket of the area.
+
+## Prologues 1 and 2
+
+RMS wrote prologue 1 files before VAX/VMS V4, and prologue 2 ones when a
+key isn't a string; OpenVMS still makes them when an FDL file asks for
+`PROLOG 1` or `2` (`p1.idx`, `p2.idx`, `p2b.idx`, `p2i.idx`, `p2m.idx`).
+They are laid out as prologue 3 but for:
+
+- Nothing is compressed, whatever the key descriptor's flags say, and the
+  primary key stays in the record.
+- A bucket header's byte 1 is the area the bucket came from, not the key;
+  `NXTRECID` is the byte at 6, and the byte at 7 the last record ID of the
+  free range, 255 in a new bucket. No bucket ends in a `VBN FREE SPACE`
+  word.
+- An index bucket's entries run from offset 14 to `FREESPACE`, each a
+  control byte, whose bits 0-1 are the pointer's size less 2, the pointer,
+  and the key, whole.
+- A data record's header is 7 bytes: the control byte, its ID, a byte, and
+  its RFA, an ID byte and a 4-byte VBN; then the size word unless the
+  file is `FIX`. A stub, `1C` and an ID, keeps the ID of a record that is
+  gone, so it isn't given again. A deleted record keeps its bytes.
+- A SIDR starts with a control byte, an ID, and, unless the control
+  byte's bit 4 is set, a 4-byte count of duplicates; then its size. Its
+  pointers' IDs are a byte, and bit 5 of a pointer's control byte, RMS-11's
+  mark of a key `$UPDATE` changed, means deleted as bit 2 does.

@@ -659,6 +659,7 @@ MACRO
     PLG$L_MRN = 108, 0, 32, 0 %,  ! relative: highest record number
     PLG$L_EOF = 112, 0, 32, 0 %,  ! relative: the VBN after the last bucket
     PLG$W_VER_NO = 116, 0, 16, 0 %,  ! prologue version
+    PLG$W_COLVBN = 120, 0, 16, 0 %,  ! indexed: the first block of the collated keys' tables
     PLG$W_CHECKSUM = 510, 0, 16, 0 %;  ! the 16-bit sum of the block's first 255 words
 
 ! $KEYDEF
@@ -782,10 +783,10 @@ LITERAL
 ! $IDXDEF
 LITERAL
     W$K_LENGTH = 576,
-    X$K_WALK0 = 1932,  ! the walks
-    X$K_WALK1 = 2508,
-    X$K_WALK2 = 3084,
-    X$K_LENGTH = 3660,
+    X$K_WALK0 = 2964,  ! the walks
+    X$K_WALK1 = 3540,
+    X$K_WALK2 = 4116,
+    X$K_LENGTH = 4692,
     X$C_BOF = 0,  ! before the first record
     X$C_AFTER = 1,  ! after the stream's record
     X$C_AT = 2,  ! at it: a $FIND found it
@@ -793,6 +794,8 @@ LITERAL
     X$V_LASTPUT = 0,  ! X$T_LASTPUT holds a key
     X$V_OKDUP = 1,  ! a $PUT found a key it has
     X$V_WROTE = 2,  ! the service wrote a bucket or the prologue: the file's other opens get what changed
+    C$K_LISTMAX = 480,
+    C$K_LENGTH = 1036,
     S$K_LENGTH = 16;
 MACRO
     W$L_BUF = 0, 0, 32, 0 %,  ! the bucket's room
@@ -858,6 +861,17 @@ MACRO
     X$L_TICK = 1920, 0, 32, 0 %,  ! uses of them so far, for the least recently used
     X$L_PLG = 1924, 0, 32, 0 %,  ! the prologue's version, 1, 2 or 3
     X$L_LKSTS = 1928, 0, 32, 0 %,  ! what locking the record $GET or $FIND found said: RMS$_NORMAL or an alternate success
+    X$L_COLTAB = 1932, 0, 32, 0 %,  ! each key's collating sequence, a C$ block, or 0, a longword each
+    X$L_COLBLK = 1936, 0, 32, 0 %,  ! the block of the collating tables in IDX$AB_PLG, or 0
+    X$T_COLW1 = 1940, 0, 0, 0 %,  ! two keys' weights, being compared
+    X$T_COLW2 = 2452, 0, 0, 0 %,
+    C$T_PRIM = 0, 0, 0, 0 %,  ! each character's primary weight
+    C$T_SEC = 256, 0, 0, 0 %,  ! and secondary
+    C$T_LIST = 512, 0, 0, 0 %,  ! characters weighed otherwise, 4 bytes each: the character, the next or FF, and its primary weights, the second 0 if one; FF FF after the last
+    C$L_SIZE = 992, 0, 32, 0 %,  ! NCS's table's bytes
+    C$T_NAME = 996, 0, 0, 0 %,  ! its name, .ASCIC
+    C$L_VBN = 1028, 0, 32, 0 %,  ! the file's tables' first VBN
+    C$L_OFF = 1032, 0, 32, 0 %,  ! and where in them this one is, 510 bytes a block
     S$L_VBN = 0, 0, 32, 0 %,  ! the bucket, 0 if the slot is empty
     S$L_SIZE = 4, 0, 32, 0 %,  ! its bytes
     S$L_USE = 8, 0, 32, 0 %,  ! X$L_TICK when it was last used

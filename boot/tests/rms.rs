@@ -41,6 +41,10 @@ const FILES: &[(&str, usize)] = &[
     ("p2b.idx", 1),
     ("p2i.idx", 3),
     ("p2m.idx", 2),
+    ("col1c.idx", 2),
+    ("col6c.idx", 2),
+    ("col8.idx", 4),
+    ("col9.idx", 2),
     ("pd1.idx", 3),
     ("pd2.idx", 2),
     ("pd3.idx", 1),
@@ -269,6 +273,31 @@ fn convert() {
             .unwrap();
         }
     }
+    // COL8, collated keys, and its records, which CONVERT/MERGE puts again.
+    for (name, conv) in [
+        ("COL8.IDX", Conversion::Binary),
+        ("COLDATA.TXT", Conversion::LinesToRecords),
+    ] {
+        let data = fs::read(fixtures.join(if conv == Conversion::Binary {
+            "col8.idx"
+        } else {
+            "make/coldata.txt"
+        }))
+        .unwrap();
+        let attrs = (conv == Conversion::Binary).then(|| {
+            fdl::parse(&fs::read_to_string(fixtures.join("col8.fdl")).unwrap())
+                .unwrap()
+                .record_attrs()
+        });
+        vol.copy_in(
+            &mut &data[..],
+            &format!("[000000]{name}"),
+            conv,
+            Some(data.len() as u64),
+            attrs,
+        )
+        .unwrap();
+    }
     let com = idxm_com();
     vol.copy_in(
         &mut com.as_bytes(),
@@ -319,6 +348,41 @@ fn convert() {
                 failed.push(format!("ANALYZE/RMS_FILE {out}: {report}"));
             }
         }
+        // COL8 converted, its collating tables made again from $DISPLAY's;
+        // and each record again, after its copy, along every collated key.
+        vax.command("COPY COL8.IDX COL8M.IDX", "\n$ ");
+        for cmd in [
+            "CONVERT COL8.IDX COL8C.IDX",
+            "CONVERT/MERGE COLDATA.TXT COL8M.IDX",
+        ] {
+            let said = vax.command(cmd, "\n$ ");
+            if said.contains("-F-") || said.contains("-E-") {
+                failed.push(format!("{cmd}: {said}"));
+            }
+        }
+        for (out, times) in [("COL8C.IDX", 1), ("COL8M.IDX", 2)] {
+            for key in 0..4 {
+                let got = vax.command(&format!("RMSDUMP {out} {key}"), "\n$ ");
+                let got: Vec<_> = got
+                    .lines()
+                    .skip(1)
+                    .take_while(|l| !l.starts_with("RMSDUMP: "))
+                    .collect();
+                let want =
+                    fs::read_to_string(fixtures.join(format!("col8_key{key}.dump"))).unwrap();
+                let want: Vec<_> = want
+                    .lines()
+                    .flat_map(|l| std::iter::repeat_n(l, times))
+                    .collect();
+                if got != want {
+                    failed.push(format!(
+                        "{out} key {key}: {} records of {}",
+                        got.len(),
+                        want.len()
+                    ));
+                }
+            }
+        }
         // COPY copies an indexed file block by block, records and keys.
         vax.command("COPY IDXF.IDX COPY.IDX", "\n$ ");
         let got = vax.command("RMSDUMP COPY.IDX 1", "\n$ ");
@@ -364,10 +428,11 @@ fn convert() {
         }
     }
     let mut vol = Image::open(&disk, Mode::ReadOnly).unwrap();
-    for out in CONVERSIONS
-        .iter()
-        .map(|c| c.0)
-        .chain(["COPY.IDX", "IDXM.IDX"])
+    for out in
+        CONVERSIONS
+            .iter()
+            .map(|c| c.0)
+            .chain(["COPY.IDX", "IDXM.IDX", "COL8C.IDX", "COL8M.IDX"])
     {
         let fid = vol.lookup(&format!("[000000]{out}")).unwrap();
         let report = vol.check_file(fid).unwrap();

@@ -55,8 +55,8 @@ note = "Pool grows as needed (t8y:/exec/capacity#pool); the boot test's IDX63.ID
 [[feature]]
 id = "key-types"
 title = "Collated and packed decimal keys"
-status = "todo"
-note = "PRD-0008 non-goal at first: RMS$_DTP"
+status = "done"
+note = "Packed decimal by value; collated by the NCS table $CREATE takes from XAB$L_COLTBL and keeps after the prologue; vaxpunk: $DISPLAY copies it to XAB$L_COLTBL's buffer"
 
 [[feature]]
 id = "old-prologues"
@@ -108,9 +108,8 @@ segments are allowed. Most VMS applications keep their data in indexed
 files, and so does VMS: `SYSUAF.DAT`, `RIGHTSLIST.DAT`, the queue file,
 mail folders.
 
-vaxpunk's are prologue 3 as OpenVMS writes them, with every key type but
-collated and packed decimal: `rmsidx.mar` finds records, `rmsidxw.mar`
-puts, updates and deletes them
+vaxpunk's are prologue 3 as OpenVMS writes them, with every key type:
+`rmsidx.mar` finds records, `rmsidxw.mar` puts, updates and deletes them
 ([PRD-0008](../../prd/0008-rms-record-and-indexed-files.md) steps
 5 and 6). The boot test reads files `CONVERT` made on OpenVMS Alpha by
 every key and prints the same dumps, and `RMSRAND` runs a long random mix
@@ -122,3 +121,9 @@ the last buckets it read or wrote; a service that changes the file
 gives its other opens the header and descriptors it changed, and they
 forget their buckets. A `$GET` goes on from the stream's record, found
 by its RFA, so a long run of duplicates costs no more than any other.
+A packed decimal key is ordered by the number it holds. A collated key
+is ordered by a collating sequence of NCS's that `$CREATE` takes from
+`XAB$L_COLTBL` and keeps after the prologue; since RMS's copy is in
+system space, `$DISPLAY` copies the table to the buffer `XAB$L_COLTBL`
+gives instead of returning its address, which is how `CONVERT` makes a
+collated file again.

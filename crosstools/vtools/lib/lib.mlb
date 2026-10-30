@@ -815,6 +815,7 @@ PLG$C_VER_REL = 1                       ; a relative file's
 PLG$C_VER_1 = 1                         ; an indexed file's whose keys are all strings, before prologue 3
 PLG$C_VER_2 = 2                         ; and one with other keys too
 PLG$C_VER_3 = 3                         ; an indexed file's
+PLG$W_COLVBN = 120                      ; indexed: the first block of the collated keys' tables
 PLG$W_CHECKSUM = 510                    ; the 16-bit sum of the block's first 255 words
         .ENDM   $PLGDEF
 
@@ -1005,10 +1006,14 @@ X$L_SLOTS = 1916                        ; their slots, S$K_LENGTH each
 X$L_TICK = 1920                         ; uses of them so far, for the least recently used
 X$L_PLG = 1924                          ; the prologue's version, 1, 2 or 3
 X$L_LKSTS = 1928                        ; what locking the record $GET or $FIND found said: RMS$_NORMAL or an alternate success
-X$K_WALK0 = 1932                        ; the walks
-X$K_WALK1 = 1932+W$K_LENGTH
-X$K_WALK2 = 1932+<2*W$K_LENGTH>
-X$K_LENGTH = 1932+<3*W$K_LENGTH>
+X$L_COLTAB = 1932                       ; each key's collating sequence, a C$ block, or 0, a longword each
+X$L_COLBLK = 1936                       ; the block of the collating tables in IDX$AB_PLG, or 0
+X$T_COLW1 = 1940                        ; two keys' weights, being compared
+X$T_COLW2 = 2452
+X$K_WALK0 = 2964                        ; the walks
+X$K_WALK1 = 2964+W$K_LENGTH
+X$K_WALK2 = 2964+<2*W$K_LENGTH>
+X$K_LENGTH = 2964+<3*W$K_LENGTH>
 X$C_BOF = 0                             ; before the first record
 X$C_AFTER = 1                           ; after the stream's record
 X$C_AT = 2                              ; at it: a $FIND found it
@@ -1016,6 +1021,16 @@ X$C_EOF = 3                             ; past the last
 X$V_LASTPUT = 0                         ; X$T_LASTPUT holds a key
 X$V_OKDUP = 1                           ; a $PUT found a key it has
 X$V_WROTE = 2                           ; the service wrote a bucket or the prologue: the file's other opens get what changed
+; A collated key's collating sequence, from the file's tables: NCS's.
+C$T_PRIM = 0                            ; each character's primary weight
+C$T_SEC = 256                           ; and secondary
+C$T_LIST = 512                          ; characters weighed otherwise, 4 bytes each: the character, the next or FF, and its primary weights, the second 0 if one; FF FF after the last
+C$K_LISTMAX = 480
+C$L_SIZE = 992                          ; NCS's table's bytes
+C$T_NAME = 996                          ; its name, .ASCIC
+C$L_VBN = 1028                          ; the file's tables' first VBN
+C$L_OFF = 1032                          ; and where in them this one is, 510 bytes a block
+C$K_LENGTH = 1036
 ; A slot: a bucket kept, by VBN.
 S$L_VBN = 0                             ; the bucket, 0 if the slot is empty
 S$L_SIZE = 4                            ; its bytes

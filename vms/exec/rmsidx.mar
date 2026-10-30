@@ -31,9 +31,12 @@
 ; kept (RMS$SYNC, IDX$PEER): services run one at a time, holding
 ; FIL$LOCK, so nothing else has to keep them in step.
 ;
+; A packed decimal key compares as the number it holds; a collated key
+; by the weights of its characters in the collating sequence the file
+; keeps after its prologue, NCS's (RDCOL, COLCMP).
+;
 ; rmsidxw.mar writes: $CREATE's prologue, $PUT, $UPDATE and $DELETE.
-; ponytail: NSLOT buckets whatever RAB$B_MBF says; collated and packed
-; decimal keys are refused at $OPEN.
+; ponytail: NSLOT buckets whatever RAB$B_MBF says.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -74,10 +77,12 @@ IDX$AB_PLG::                             ; a prologue block being read
 ; along key 0. A prologue 1 or 2 file's keys aren't compressed, whatever
 ; their flags say. R0 = RMS$_NORMAL, RMS$_PLV if it isn't prologue 1, 2
 ; or 3, RMS$_IFL for a damaged prologue, RMS$_BKS for a bucket over MAXBKS
-; blocks, RMS$_DTP for a collated or packed decimal key, RMS$_DME, or
+; blocks, RMS$_DTP for a data type RMS hasn't, RMS$_BOGUSCOL for a
+; collated key whose collating table it can't read (RDCOL), RMS$_DME, or
 ; the disk's error. Uses R0-R6, R8, R9, R11.
 IDX$OPEN::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
+        CLRL    -(SP)                   ; (SP) = the collated keys
         BSBW    RMS$TAKEHDR
         MOVL    #1, R0
         BSBW    IDX$RDPLG
@@ -107,7 +112,10 @@ IDX$OPEN::
         MOVL    #RMS$_DTP, R0
         BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R1), R9
         CMPB    R9, #KEY$C_COLLATED
-        BGEQU   90$
+        BGTRU   90$
+        BNEQ    11$
+        INCL    (SP)
+11$:
         MOVZBL  KEY$B_IDXBKTSZ(R1), R0
         CMPL    R0, R3
         BLEQU   12$
@@ -139,8 +147,10 @@ IDX$OPEN::
 30$:    MOVL    #RMS$_BKS, R0
         CMPL    R3, #MAXBKS
         BGTRU   90$
-        MULL3   #KEY$K_BLN+8, R4, R1    ; the buffer: state, keys, areas, buckets
+        MULL3   #KEY$K_BLN+12, R4, R1   ; the buffer: state, keys, areas, buckets,
         MULL3   #AREA$K_BLN, R5, R0
+        ADDL2   R0, R1
+        MULL3   #C$K_LENGTH, (SP), R0   ; collating sequences
         ADDL2   R0, R1
         MULL3   #BLOCK*4, R3, R0        ; three buckets and WORK2,
         ADDL2   R0, R1
@@ -178,6 +188,11 @@ IDX$OPEN::
         ADDL2   R4, R0
         ADDL2   R4, R0
         ADDL2   R4, R0
+        MOVL    R0, X$L_COLTAB(R11)
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        ADDL2   R4, R0
+        ADDL2   R4, R0
         MOVL    R0, X$L_AREAS(R11)
         MULL3   #AREA$K_BLN, R5, R1
         ADDL2   R1, R0
@@ -205,6 +220,7 @@ IDX$OPEN::
         ADDL2   R1, R5
         ADDL2   #S$K_LENGTH, R4
         SOBGTR  R2, 36$
+        MOVL    R5, X$L_COLBLK(R11)     ; the collating sequences after them
         MOVL    #1, R0                  ; its version
         BSBW    IDX$RDPLG
         BLBC    R0, 90$
@@ -218,13 +234,19 @@ IDX$OPEN::
 37$:    BICB2   #KEY$M_IDX_COMPR!KEY$M_KEY_COMPR!KEY$M_REC_COMPR, KEY$B_FLAGS(R1)
         ADDL2   #KEY$K_BLN, R1
         SOBGTR  R2, 37$
-38$:        BSBW    RDAREAS
+38$:    MOVL    X$L_COLBLK(R11), R1
+        TSTL    (SP)
+        BEQL    39$
+        BSBW    RDCOL
+        BLBC    R0, 90$
+39$:    BSBW    RDAREAS
         BLBC    R0, 90$
         CLRB    X$B_KRF(R11)
         MOVB    #X$C_BOF, X$B_STATE(R11)
         CLRL    X$L_CURVBN(R11)
         MOVL    #RMS$_NORMAL, R0
-90$:    RSB
+90$:    TSTL    (SP)+
+        RSB
 
 ; IDX$RDPLG: R7 = an IFAB, R0 = a VBN. Reads that prologue block into IDX$AB_PLG.
 ; R0 = RMS$_NORMAL or the disk's error. Uses R0-R3.
@@ -233,6 +255,145 @@ IDX$RDPLG::
         MOVL    #1, R1
         MOVAB   IDX$AB_PLG, R2
         BSBW    RMS$READBKT
+        RSB
+
+; RDCOL: R7 = an IFAB, R11 = its state, with its keys, R1 = room for a
+; C$ block for each collated key. Reads each one's collating sequence
+; from the file's tables, which start at VBN PLG$W_COLVBN, 510 bytes a
+; block: for each collated key in turn, 0, 5, the key, the table's kind,
+; its size, a longword, and a longword; then NCS's table, of that size: a
+; 64-byte header with the sequence's name, .ASCIC, at 20, the primary
+; weights at 88, the secondary at 344, and from 600 to its end the
+; characters weighed otherwise. R0 = RMS$_NORMAL, RMS$_BOGUSCOL for
+; tables it can't read, or the disk's error. Uses R0-R6.
+RDCOL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        PUSHR   #^M<R8, R9>
+        MOVL    R1, R4                  ; R4 = the next C$ block
+        CLRL    X$L_COLBLK(R11)
+        MOVL    #1, R0
+        BSBW    IDX$RDPLG
+        BLBC    R0, 90$
+        MOVZWL  IDX$AB_PLG+PLG$W_COLVBN, R5     ; R5 = the tables' VBN
+        CLRL    R6                      ; R6 = where in them
+        CLRL    R8                      ; R8 = the key
+10$:    CMPL    R8, X$L_NKEYS(R11)
+        BGEQU   80$
+        MOVL    R8, R0
+        BSBW    IDX$KEYDESC
+        BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R0
+        CMPB    R0, #KEY$C_COLLATED
+        BNEQ    70$
+        BSBW    COLLONG                 ; its header: 0, 5, the key
+        BLBC    R0, 90$
+        MOVL    #RMS$_BOGUSCOL, R0
+        BICL2   #^XFF000000, R1
+        ASHL    #16, R8, R2
+        BISL2   #^X500, R2
+        CMPL    R1, R2
+        BNEQ    90$
+        BSBW    COLLONG                 ; the table's size
+        BLBC    R0, 90$
+        MOVL    R1, C$L_SIZE(R4)
+        BSBW    COLLONG
+        BLBC    R0, 90$
+        MOVL    #RMS$_BOGUSCOL, R0      ; room for its list?
+        SUBL3   #600, C$L_SIZE(R4), R3
+        BLSS    90$
+        CMPL    R3, #C$K_LISTMAX-2
+        BGTRU   90$
+        MOVL    R5, C$L_VBN(R4)         ; where it is
+        MOVL    R6, C$L_OFF(R4)
+        PUSHL   R6                      ; the table
+        ADDL2   #20, R6                 ; its name
+        BSBW    COLBYTE
+        BLBC    R0, 85$
+        MOVL    #RMS$_BOGUSCOL, R0
+        CMPL    R1, #31
+        BGTRU   85$
+        MOVB    R1, C$T_NAME(R4)
+        MOVL    R1, R2
+        MOVAB   C$T_NAME+1(R4), R3
+        BSBW    COLCOPY
+        BLBC    R0, 85$
+        MOVL    (SP), R6                ; its weights
+        ADDL2   #88, R6
+        MOVL    #512, R2
+        MOVAB   C$T_PRIM(R4), R3
+        BSBW    COLCOPY
+        BLBC    R0, 85$
+        SUBL3   #600, C$L_SIZE(R4), R2  ; and the list
+        MOVAB   C$T_LIST(R4), R3
+        BSBW    COLCOPY
+        BLBC    R0, 85$
+        MNEGW   #1, (R3)                ; FF FF after it, in case
+        MOVL    (SP)+, R6
+        ADDL2   C$L_SIZE(R4), R6
+        MOVL    R4, @X$L_COLTAB(R11)[R8]
+        ADDL2   #C$K_LENGTH, R4
+70$:    INCL    R8
+        BRB     10$
+80$:    MOVL    #RMS$_NORMAL, R0
+        BRB     90$
+85$:    TSTL    (SP)+
+90$:    CLRL    X$L_COLBLK(R11)
+        POPR    #^M<R8, R9>
+        RSB
+
+; COLLONG: for RDCOL: R1 = the longword at R6 in the collating tables,
+; and R6 past it. R0 = RMS$_NORMAL or the disk's error. Keeps every
+; other register.
+COLLONG:
+        .JSB_ENTRY  OUTPUT=<R1, R6>
+        PUSHR   #^M<R2, R3>
+        CLRL    R2
+        MOVL    #4, R3
+10$:    BSBW    COLBYTE
+        BLBC    R0, 90$
+        ROTL    #-8, R2, R2
+        INSV    R1, #24, #8, R2
+        SOBGTR  R3, 10$
+        MOVL    R2, R1
+90$:    POPR    #^M<R2, R3>
+        RSB
+
+; COLCOPY: for RDCOL: R2 = a count of bytes, R3 = where they go. Copies
+; that many from R6 in the collating tables, R6 and R3 past them. R0 =
+; RMS$_NORMAL or the disk's error. Uses R0-R2.
+COLCOPY:
+        .JSB_ENTRY  OUTPUT=<R3, R6>, SCRATCH=<R2>
+        MOVL    #RMS$_NORMAL, R0
+        TSTL    R2
+        BEQL    90$
+10$:    BSBW    COLBYTE
+        BLBC    R0, 90$
+        MOVB    R1, (R3)+
+        SOBGTR  R2, 10$
+90$:    RSB
+
+; COLBYTE: for RDCOL: R5 = the first VBN of the collating tables, R6 =
+; an offset in them, 510 bytes a block. R1 = the byte there, R6 past it.
+; R0 = RMS$_NORMAL or the disk's error. Keeps every other register.
+COLBYTE:
+        .JSB_ENTRY  OUTPUT=<R1, R6>
+        PUSHR   #^M<R2, R3>
+        DIVL3   #510, R6, R0
+        MULL3   #510, R0, R1
+        SUBL3   R1, R6, R1              ; the byte in its block
+        ADDL2   R5, R0
+        CMPL    R0, X$L_COLBLK(R11)
+        BEQL    10$
+        MOVL    R0, X$L_COLBLK(R11)
+        PUSHL   R1
+        BSBW    IDX$RDPLG
+        MOVL    (SP)+, R1
+        BLBS    R0, 10$
+        CLRL    X$L_COLBLK(R11)
+        BRB     90$
+10$:    MOVZBL  IDX$AB_PLG[R1], R1
+        INCL    R6
+        MOVL    #RMS$_NORMAL, R0
+90$:    POPR    #^M<R2, R3>
         RSB
 
 ; RDKEYS: R7 = an IFAB, R11 = its state. Copies the key descriptors,
@@ -335,11 +496,17 @@ IDX$XABSUM::
 ; IDX$XABKEY: R7 = an indexed file's IFAB, R1 = an XABKEY. Gives it key
 ; XAB$B_REF's definition: areas, root, flags, data type, segments, sizes,
 ; fills, first data bucket, its name to XAB$L_KNM's 32 bytes if it isn't
-; 0. R0 = RMS$_NORMAL, RMS$_KRF for a key the file hasn't, or SS$_ACCVIO.
-; Uses R0-R4.
+; 0, and a collated key's table's size and its name, .ASCIC, to
+; XAB$L_COLNAM's 32 bytes. R0 = RMS$_NORMAL, RMS$_KRF for a key the file
+; hasn't, SS$_ACCVIO, or the disk's error. Uses R0-R4.
+;
+; vaxpunk: RMS's copy of a collated key's table is in system space, where
+; user mode can't read it, so instead of its address in XAB$L_COLTBL,
+; $OPEN and $DISPLAY copy the table to the buffer XAB$L_COLTBL gives, if
+; it isn't 0 and the caller may write XAB$L_COLSIZ's bytes there.
 IDX$XABKEY::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
-        PUSHR   #^M<R5, R9, R11>
+        PUSHR   #^M<R5, R6, R9, R11>
         MOVL    IFB$L_IDX(R7), R11
         MOVL    R1, R4
         MOVL    #RMS$_KRF, R0
@@ -383,6 +550,31 @@ IDX$XABKEY::
         MOVC3   #8, KEY$B_TYPE(R9), XAB$B_TYP(R4)
         POPR    #^M<R4>
         MOVB    X$L_PLG(R11), XAB$B_PROLOG(R4)
+        BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R0
+        CMPB    R0, #KEY$C_COLLATED     ; a collated key: its table's size
+        BNEQ    40$                     ; and name
+        SUBL3   X$L_KEYS(R11), R9, R0
+        DIVL2   #KEY$K_BLN, R0
+        MOVL    @X$L_COLTAB(R11)[R0], R2
+        MOVL    C$L_SIZE(R2), XAB$L_COLSIZ(R4)
+        MOVL    XAB$L_COLTBL(R4), R3    ; the table, to a buffer
+        BEQL    35$
+        IFNOWRT C$L_SIZE(R2), (R3), 35$
+        PUSHL   R2
+        MOVL    C$L_VBN(R2), R5
+        MOVL    C$L_OFF(R2), R6
+        MOVL    C$L_SIZE(R2), R2
+        CLRL    X$L_COLBLK(R11)
+        BSBW    COLCOPY
+        CLRL    X$L_COLBLK(R11)
+        MOVL    (SP)+, R2
+        BLBC    R0, 90$
+35$:    MOVL    XAB$L_COLNAM(R4), R1
+        BEQL    40$
+        IFNOWRT #32, (R1), 85$
+        PUSHR   #^M<R4>
+        MOVC3   #32, C$T_NAME(R2), (R1)
+        POPR    #^M<R4>
 40$:    MOVL    XAB$L_KNM(R4), R1
         BEQL    80$
         IFNOWRT #32, (R1), 85$
@@ -390,7 +582,7 @@ IDX$XABKEY::
 80$:    MOVL    #RMS$_NORMAL, R0
         BRB     90$
 85$:    MOVL    #SS$_ACCVIO, R0
-90$:    POPR    #^M<R5, R9, R11>
+90$:    POPR    #^M<R5, R6, R9, R11>
         RSB
 
 ; IDX$XABALL: R7 = an indexed file's IFAB, R1 = an XABALL. Gives it area
@@ -445,12 +637,13 @@ IDX$GETKEY::
         MOVL    #1, R0
 90$:    RSB
 
-; IDX$KEYCMP: R9 = a key descriptor, R1 and R2 = two keys, R3 = how many
-; of their bytes to compare, strings only: integers and packed decimal
-; compare whole. R0 = -1, 0 or 1 as the first is less than, equal to or
-; greater than the second in the key's order: packed decimal by value,
-; so -0 is 0, and a sign of A, C, E or F is +. Keeps every other
-; register.
+; IDX$KEYCMP: R11 = an indexed file's state, R9 = a key descriptor, R1
+; and R2 = two keys, R3 = how many of their bytes to compare, strings
+; only: integers and packed decimal compare whole. R0 = -1, 0 or 1 as the
+; first is less than, equal to or greater than the second in the key's
+; order: packed decimal by value, so -0 is 0, and a sign of A, C, E or F
+; is +; a collated key by its collating sequence (COLCMP). Keeps every
+; other register.
 IDX$KEYCMP::
         .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4, R5>
@@ -461,7 +654,11 @@ IDX$KEYCMP::
         MOVZBL  KEY$B_KEYSZ(R9), R4     ; packed decimal
         BSBW    PACKCMP
         BRB     50$
-3$:     CMPB    R4, #KEY$C_UNSGNQUAD
+3$:     CMPB    R4, #KEY$C_COLLATED
+        BNEQ    4$
+        BSBW    COLCMP                  ; collated
+        BRB     50$
+4$:     CMPB    R4, #KEY$C_UNSGNQUAD
         BGTRU   20$
         MOVZBL  KEY$B_KEYSZ(R9), R3     ; an integer: from its top byte
         DECL    R3
@@ -544,6 +741,119 @@ IDX$KEYOK::
         BLSSU   90$
         MOVL    #1, R0
 90$:    POPR    #^M<R1, R2, R3>
+        RSB
+
+; COLCMP: R11 = an indexed file's state, R9 = a collated key's
+; descriptor, R1 and R2 = two of its keys, R3 = their size. R0 = -1, 0
+; or 1 as the first comes before, is, or comes after the second in the
+; key's collating sequence, as NCS's: by their characters' primary
+; weights, then if they are the same by their secondary ones, then if
+; they still are by their bytes, the greater first, so lowercase before
+; uppercase. Keeps every other register.
+COLCMP:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6, R7, R8>
+        SUBL3   X$L_KEYS(R11), R9, R0   ; the key's sequence
+        DIVL2   #KEY$K_BLN, R0
+        MOVL    @X$L_COLTAB(R11)[R0], R6
+        MOVL    R1, R5                  ; R5 and R7 = the keys, R8 = their size
+        MOVL    R2, R7
+        MOVL    R3, R8
+        CLRL    R4                      ; R4 = the level, 0 then 1
+10$:    MOVL    R5, R0                  ; each key's weights
+        MOVL    R8, R1
+        MOVL    R6, R2
+        MOVAB   X$T_COLW1(R11), R3
+        BSBW    COLW
+        PUSHL   R0
+        MOVL    R7, R0
+        MOVL    R8, R1
+        MOVL    R6, R2
+        MOVAB   X$T_COLW2(R11), R3
+        BSBW    COLW
+        MOVL    (SP)+, R1
+        CMPC5   R1, X$T_COLW1(R11), #0, R0, X$T_COLW2(R11)
+        BEQL    20$
+        BLSSU   50$                     ; vmacro: tested where it falls through
+        MOVL    #1, R0
+        BRB     90$
+20$:    AOBLEQ  #1, R4, 10$
+        CMPC3   R8, (R5), (R7)          ; the same: by their bytes, the
+        BEQL    60$                     ; greater first
+        BLSSU   30$
+        MNEGL   #1, R0
+        BRB     90$
+30$:    MOVL    #1, R0
+        BRB     90$
+50$:    MNEGL   #1, R0
+        BRB     90$
+60$:    CLRL    R0
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R6, R7, R8>
+        RSB
+
+; COLW: R0 = a key, R1 = its size, R2 = its collating sequence, a C$
+; block, R3 = room for twice that, R4 = 0 for primary weights, 1 for
+; secondary. Writes the key's weights there, a byte each: its
+; characters' in the sequence's table, but a character the list has,
+; with the next or alone: its primary weights, one or two, or its
+; secondary weight as many times. R0 = how many. Keeps every other
+; register.
+COLW:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R5, R6, R7, R8, R9>
+        ADDL3   R0, R1, R6              ; R6 = the key's end
+        MOVL    R0, R5                  ; R5 = where in it
+        MOVL    R3, R8                  ; R8 = the weights' start
+        MOVAB   C$T_PRIM(R2), R7        ; R7 = the table
+        TSTL    R4
+        BEQL    10$
+        MOVAB   C$T_SEC(R2), R7
+10$:    CMPL    R5, R6
+        BGEQU   80$
+        MOVZBL  (R5), R0                ; R0 = the character
+        SUBL3   R5, R6, R1
+        MOVAB   C$T_LIST(R2), R9        ; in the list with the next?
+        CMPL    R1, #2
+        BLSSU   25$
+20$:    CMPW    (R9), #^XFFFF
+        BEQL    25$
+        CMPB    (R9), R0
+        BNEQ    22$
+        CMPB    1(R9), 1(R5)
+        BNEQ    22$
+        MOVL    #2, R1
+        BRB     40$
+22$:    ADDL2   #4, R9
+        BRB     20$
+25$:    MOVAB   C$T_LIST(R2), R9        ; alone?
+30$:    CMPW    (R9), #^XFFFF
+        BEQL    35$
+        CMPB    (R9), R0
+        BNEQ    32$
+        CMPB    1(R9), #^XFF
+        BNEQ    32$
+        MOVL    #1, R1
+        BRB     40$
+32$:    ADDL2   #4, R9
+        BRB     30$
+35$:    MOVB    (R7)[R0], (R3)+         ; neither: its weight
+        INCL    R5
+        BRB     10$
+40$:    ADDL2   R1, R5                  ; the list's
+        TSTL    R4
+        BNEQ    45$
+        MOVB    2(R9), (R3)+
+        TSTB    3(R9)
+        BEQL    10$
+        MOVB    3(R9), (R3)+
+        BRB     10$
+45$:    MOVB    (R7)[R0], (R3)+
+        TSTB    3(R9)
+        BEQL    10$
+        MOVB    (R7)[R0], (R3)+
+        BRB     10$
+80$:    SUBL3   R8, R3, R0
+        POPR    #^M<R1, R2, R3, R5, R6, R7, R8, R9>
         RSB
 
 ; PACKCMP: R1 and R2 = two packed decimal numbers, R4 = their size in
@@ -1256,7 +1566,9 @@ KEYARG:
         BGTRU   90$
         BEQL    20$
         BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R2
-        BNEQ    90$                     ; only strings are generic
+        BEQL    20$                     ; only strings are generic,
+        CMPB    R2, #KEY$C_COLLATED     ; collated or not
+        BNEQ    90$
 20$:    MOVL    RAB$L_KBF(R10), R1
         IFNORD  R6, (R1), 80$
         PUSHL   R6

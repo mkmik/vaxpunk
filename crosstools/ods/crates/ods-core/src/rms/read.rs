@@ -5,9 +5,11 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::vec::Vec;
 
+use core::cmp::Ordering;
+
 use super::{
-    AREA_LEN, Area, AreaDesc, BKT_HDR, BucketHeader, KEY_LEN, Key, KeyDesc, Result, RmsError, bktcb, corrupt,
-    expand_key, expand_segments, irc, keyflag, uint,
+    AREA_LEN, Area, AreaDesc, BKT_HDR, BucketHeader, Collation, KEY_LEN, Key, KeyDesc, Result, RmsError, bktcb,
+    collate, corrupt, dtype, expand_key, expand_segments, irc, keyflag, uint,
 };
 use crate::layout::{BLOCK, Field, RecordAttrs};
 use crate::rfm;
@@ -182,6 +184,8 @@ pub struct Indexed<'a> {
     /// aren't strings), or 3.
     pub plg: u16,
     pub keys: Vec<Key>,
+    /// Each collated key's collating sequence, by key number.
+    pub colls: Vec<Option<Collation>>,
     /// Where each key descriptor is: VBN and offset.
     pub key_at: Vec<(u32, usize)>,
     pub areas: Vec<Area>,
@@ -260,7 +264,27 @@ impl<'a> Indexed<'a> {
             d.copy_from_slice(&b[a % 8 * AREA_LEN..(a % 8 + 1) * AREA_LEN]);
             areas.push(AreaDesc(d));
         }
-        Ok(Indexed { data, fix, plg, keys, key_at, areas, avbn })
+        let collated: Vec<usize> =
+            (0..keys.len()).filter(|&n| keys[n].datatype() & !dtype::DESCENDING == dtype::COLLATED).collect();
+        let mut colls = alloc::vec![None; keys.len()];
+        if !collated.is_empty() {
+            for (n, c) in collate::read(data, u16::get(&p[0x78..]) as u32, &collated)? {
+                colls[n] = Some(c);
+            }
+        }
+        Ok(Indexed { data, fix, plg, keys, colls, key_at, areas, avbn })
+    }
+
+    /// Orders two keys of key `key` as RMS does: by the key's collating
+    /// sequence if it is collated (`Collation::compare`), else by its
+    /// data type (`KeyDesc::compare`).
+    pub fn compare(&self, key: usize, a: &[u8], b: &[u8]) -> Ordering {
+        let k = &self.keys[key];
+        match &self.colls[key] {
+            Some(c) if k.datatype() & dtype::DESCENDING != 0 => c.compare(b, a),
+            Some(c) => c.compare(a, b),
+            None => k.compare(a, b),
+        }
     }
 
     /// The file's size in blocks.

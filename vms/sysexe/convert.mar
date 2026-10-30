@@ -38,6 +38,7 @@
 RECSIZE = 8192
 MAXKEYS = 16
 MAXAREAS = 16
+COLMAX = 1080                           ; a collating table's bytes, at most
 INHIB = ^X10000000                      ; STS$M_INHIB_MSG: reported already
 CONV$_OPENIN = ^X00B2109C               ; error opening !AS as input
 CONV$_OPENOUT = ^X00B210A4              ; error opening !AS as output
@@ -72,6 +73,8 @@ SUM:    $XABSUM                         ; an indexed input's keys and areas
 KEYS:   .BLKB   MAXKEYS*XAB$C_KEYLEN    ; their XABs
 AREAS:  .BLKB   MAXAREAS*XAB$C_ALLLEN
 KNAMES: .BLKB   MAXKEYS*32
+COLTBLS:
+        .BLKB   MAXKEYS*COLMAX          ; and collating tables
 REC:    .BLKB   RECSIZE                 ; a record
 PADDED: .BLKB   RECSIZE                 ; one padded
         .ALIGN  LONG
@@ -456,6 +459,8 @@ LIKEIN:
         MOVB    R0, XAB$B_REF(R1)
         MULL3   #32, R0, R2
         MOVAB   KNAMES(R2), XAB$L_KNM(R1)
+        MULL3   #COLMAX, R0, R2
+        MOVAB   COLTBLS(R2), XAB$L_COLTBL(R1)
         MOVL    R1, (R3)
         MOVAB   XAB$L_NXT(R1), R3
         INCL    R0
@@ -490,7 +495,11 @@ WORKFILE:
         MOVL    (SP), R1
         MOVC3   #8, XAB$B_SIZ0(R1), WKEY+XAB$B_SIZ0
         MOVL    (SP)+, R1
-        MOVB    FAB$B_RFM(R6), WFAB+FAB$B_RFM
+        CLRQ    WKEY+XAB$L_COLTBL       ; collated: its table and size
+        CMPB    XAB$B_BLN(R1), #XAB$C_KEYLEN
+        BLSSU   50$
+        MOVQ    XAB$L_COLTBL(R1), WKEY+XAB$L_COLTBL
+50$:    MOVB    FAB$B_RFM(R6), WFAB+FAB$B_RFM
         MOVW    FAB$W_MRS(R6), WFAB+FAB$W_MRS
         $CREATE FAB=WFAB
         BLBC    R0, 80$

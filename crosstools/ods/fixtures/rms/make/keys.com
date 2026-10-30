@@ -2,7 +2,8 @@ $ ! KEYS.COM: MAKE.COM's files with packed decimal keys: PD1, a string
 $ ! key 0 with packed and descending packed alternate keys, PD2 a packed
 $ ! primary key without duplicates, PD3 a descending one with them, each
 $ ! given good and bad values; PKN a packed key with null keys, and
-$ ! descending keys of other types. P1 is where the FDL files are.
+$ ! descending keys of other types; then files with collated keys. P1 is
+$ ! where the FDL files and COLDATA.TXT are.
 $ SET NOON
 $ IN = P1
 $ V1 = "0000005D/-5 D,0000000C/0 C,0000007C/7 C,0000012C/12 C,0123456C/123456 C,0000999D/-999 D"
@@ -63,6 +64,12 @@ $ N = N + 1
 $ GOTO P1
 $ P2:
 $ CLOSE F
+$ ! COL1C, COL6C, COL8 and COL9: collated and descending collated keys,
+$ ! with NCS's Multinational, Spanish and French sequences
+$ CONVERT/FDL='IN'COL1.FDL 'IN'COLDATA.TXT COL1C.IDX
+$ CONVERT/FDL='IN'COL6.FDL 'IN'COLDATA.TXT COL6C.IDX
+$ CONVERT/FDL='IN'COL8.FDL 'IN'COLDATA.TXT COL8.IDX
+$ CONVERT/FDL='IN'COL9.FDL 'IN'COLDATA.TXT COL9.IDX
 $ EXIT
 $ !
 $ PUTALL:
