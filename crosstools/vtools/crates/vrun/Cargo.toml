@@ -17,4 +17,4 @@ vlib = { path = "../vlib" }
 vlink = { path = "../vlink" }
 vmacro = { path = "../vmacro" }
 # Renders what TPU sends the terminal in its tests, as a VT100 would.
-vt100 = "0.16.2"
+vt100 = "0.18.0"
