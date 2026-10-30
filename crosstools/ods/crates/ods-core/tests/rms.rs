@@ -119,6 +119,8 @@ fn damage_is_reported() {
     damaged("idx1", |d| d[at(8) + 8] = 10, "level 0");
     damaged("idx1", |d| d[at(2) + 40] ^= 1, "prologue checksum");
     damaged("relf", |d| d[100] ^= 1, "prologue checksum");
+    // col1c: no collating tables where its prologue says, at VBN 0.
+    damaged("col1c", |d| d[0x78..0x7a].fill(0), "collating table");
     // Swap the keys of the first two records of VBN 4.
     damaged(
         "idx1",

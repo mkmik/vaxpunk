@@ -1392,8 +1392,10 @@ IDX$FIND::
         BNEQ    10$
         MOVB    #X$C_AFTER, X$B_STATE(R11)
 10$:    BSBW    LOCATE
-        BLBC    R0, 90$
+        BLBC    R0, 80$
         MOVB    #X$C_AT, X$B_STATE(R11)
+        RSB
+80$:    BSBW    RMS$UNLOCKAUTO          ; none: the last one's lock goes
 90$:    RSB
 
 IDX$GET::
@@ -1404,8 +1406,10 @@ IDX$GET::
         BEQL    10$
         IFNOWRT R4, (R3), 85$
 10$:    BSBW    LOCATE
-        BLBC    R0, 90$
-        MOVB    #X$C_AFTER, X$B_STATE(R11)
+        BLBS    R0, 15$
+        BSBW    RMS$UNLOCKAUTO          ; none: the last one's lock goes
+        RSB
+15$:    MOVB    #X$C_AFTER, X$B_STATE(R11)
         CLRL    R0
         BSBW    IDX$KEYDESC
         MOVL    RAB$L_UBF(R10), R3

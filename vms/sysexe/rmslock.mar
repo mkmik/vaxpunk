@@ -9,7 +9,8 @@
 ; it finds already held, RAB$M_RLK's lock that RAB$M_NLK may read past,
 ; RAB$M_RRL reading a locked record without its lock, so that $UPDATE has
 ; none, a $PUT's record kept locked with ULK, and RAB$M_REA's read locks,
-; which two streams may hold at once but which $UPDATE can't use. The
+; which two streams may hold at once but which $UPDATE can't use, and a
+; $GET that finds nothing, which drops the lock the one before took. The
 ; boot test (boot/tests/rms.rs) knows what each must say. It uses only
 ; VMS's own: STARLET's macros and LIB$PUT_OUTPUT.
 ;
@@ -131,6 +132,14 @@ REC:    .ASCII  "K0 data "              ; a record put, K and its digit first
         KEY     B, 5
         STEP    B, $GET, "B GET K5 REA"
         STEP    B, $UPDATE, "B UPDATE"
+        ROP     A, 0                    ; a $GET that fails drops the lock
+        KEY     A, 6                    ; the one before took
+        STEP    A, $GET, "A GET K6"
+        KEY     A, 7
+        STEP    A, $GET, "A GET K7"
+        ROP     B, 0
+        KEY     B, 6
+        STEP    B, $GET, "B GET K6"
         $CLOSE  FAB=FAB2
         $CLOSE  FAB=FAB
         MOVAB   DONE, R1

@@ -74,6 +74,9 @@ impl Collation {
 /// longword, then NCS's table, of that size.
 pub(crate) fn read(data: &[u8], colvbn: u32, keys: &[usize]) -> Result<Vec<(usize, Collation)>> {
     let bad = || RmsError::Corrupt { what: "collating table", vbn: colvbn };
+    if colvbn == 0 {
+        return Err(bad());
+    }
     let byte = |off: usize| -> Result<u8> {
         let vbn = colvbn as usize + off / (BLOCK - 2);
         data.get((vbn - 1) * BLOCK + off % (BLOCK - 2)).copied().ok_or_else(bad)

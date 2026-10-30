@@ -227,7 +227,7 @@ const CONVERSIONS: &[(&str, &str, &str, &str, usize)] = &[
     ("P2IN.IDX", "P2I.FDL", "P2I.IDX", "", 3),
 ];
 
-/// An FDL file or input of make's, or IDX63.FDL, IDX1.FDL with 63-block
+/// An FDL file or input of make's, or IDXn.FDL, IDX1.FDL with n-block
 /// buckets, or BIG.TXT, as MAKE.COM writes it.
 fn fdl_text(make: &Path, name: &str) -> Vec<u8> {
     if name == "BIG.TXT" {
@@ -237,10 +237,13 @@ fn fdl_text(make: &Path, name: &str) -> Vec<u8> {
             .collect::<String>()
             .into_bytes();
     }
-    if name == "IDX63.FDL" {
+    let blocks = name
+        .strip_prefix("IDX")
+        .and_then(|n| n.strip_suffix(".FDL"));
+    if let Some(blocks) = blocks.filter(|n| n.parse::<u8>().is_ok()) {
         let idx1 = fs::read_to_string(make.join("idx1.fdl")).unwrap();
         return idx1
-            .replace("BUCKET_SIZE\t1", "BUCKET_SIZE\t63")
+            .replace("BUCKET_SIZE\t1", &format!("BUCKET_SIZE\t{blocks}"))
             .into_bytes();
     }
     fs::read(make.join(name.to_lowercase())).unwrap()
@@ -343,6 +346,29 @@ fn convert() {
         Conversion::Binary,
         Some(data.len() as u64),
         Some(spec.record_attrs((data.len() / 512) as u32)),
+    )
+    .unwrap();
+    // DATAX.TXT: DATA.TXT's records, each with a ! after it.
+    let datax: String = fs::read_to_string(fixtures.join("make/data.txt"))
+        .unwrap()
+        .lines()
+        .map(|l| format!("{l}!\n"))
+        .collect();
+    vol.copy_in(
+        &mut datax.as_bytes(),
+        "[000000]DATAX.TXT",
+        Conversion::LinesToRecords,
+        Some(datax.len() as u64),
+        None,
+    )
+    .unwrap();
+    let fdl = fdl_text(&fixtures.join("make"), "IDX10.FDL");
+    vol.copy_in(
+        &mut &fdl[..],
+        "[000000]IDX10.FDL",
+        Conversion::LinesToRecords,
+        Some(fdl.len() as u64),
+        None,
     )
     .unwrap();
     let com = p2w_com();
@@ -547,6 +573,24 @@ fn convert() {
             if !report.contains("The analysis uncovered NO errors.") {
                 failed.push(format!("ANALYZE/RMS_FILE {file}: {report}"));
             }
+        }
+        // A file read after another of its layout, in the pool the other
+        // gave back, more than one MOVC5 clears: its own records.
+        for cmd in [
+            "CONVERT/FDL=IDX10.FDL DATA.TXT A10.IDX",
+            "CONVERT/FDL=IDX10.FDL DATAX.TXT B10.IDX",
+            "OPEN/READ F A10.IDX",
+            "READ/KEY=\"K0000003\" F R",
+            "CLOSE F",
+            "OPEN/READ F B10.IDX",
+            "READ/KEY=\"K0000003\" F R",
+            "CLOSE F",
+        ] {
+            vax.command(cmd, "\n$ ");
+        }
+        let said = vax.command("WRITE SYS$OUTPUT \"B10: \", R", "\n$ ");
+        if !said.contains("B10: K0000003 BETA x!") {
+            failed.push(format!("B10.IDX read A10.IDX's record: {said}"));
         }
         // COPY copies an indexed file block by block, records and keys.
         vax.command("COPY IDXF.IDX COPY.IDX", "\n$ ");
@@ -930,6 +974,9 @@ const RMSLOCK: &[&str] = &[
     "A GET K5 REA 00010001",
     "B GET K5 REA 00010001",
     "B UPDATE 000181A0",
+    "A GET K6 00010001",
+    "A GET K7 000182B2",
+    "B GET K6 00010001",
     "RMSLOCK done 00010001",
 ];
 

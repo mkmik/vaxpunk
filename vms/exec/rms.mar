@@ -1998,8 +1998,9 @@ NEWIFAB:
         RSB
 
 ; RMS$ALLOCBUF: R7 = an IFAB, R1 = a size in bytes. Gives it a buffer of
-; pool that big, zeroed, which FREEIFAB gives back: IFB$L_BUF. R0 =
-; RMS$_NORMAL or RMS$_DME. Uses R0-R3.
+; pool that big, zeroed, 65535 bytes at a time, MOVC5's most, which
+; FREEIFAB gives back: IFB$L_BUF. R0 = RMS$_NORMAL or RMS$_DME. Uses
+; R0-R3.
 RMS$ALLOCBUF::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R1
@@ -2007,9 +2008,17 @@ RMS$ALLOCBUF::
         BLBC    R0, 80$
         MOVL    R2, IFB$L_BUF(R7)
         MOVL    R1, IFB$L_BUFSZ(R7)
-        PUSHR   #^M<R4, R5>
-        MOVC5   #0, (R2), #0, 8(SP), (R2)
-        POPR    #^M<R4, R5>
+        PUSHR   #^M<R4, R5, R6, R7>
+        MOVL    16(SP), R6              ; R6 = the bytes left, R7 = where
+        MOVL    R2, R7
+10$:    CMPL    R6, #^XFFFF
+        BLEQU   20$
+        MOVC5   #0, (R7), #0, #^XFFFF, (R7)
+        ADDL2   #^XFFFF, R7
+        SUBL2   #^XFFFF, R6
+        BRB     10$
+20$:    MOVC5   #0, (R7), #0, R6, (R7)
+        POPR    #^M<R4, R5, R6, R7>
         TSTL    (SP)+
         MOVL    #RMS$_NORMAL, R0
         RSB
