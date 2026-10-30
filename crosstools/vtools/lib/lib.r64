@@ -783,10 +783,10 @@ LITERAL
 ! $IDXDEF
 LITERAL
     W$K_LENGTH = 576,
-    X$K_WALK0 = 2968,  ! the walks
-    X$K_WALK1 = 3544,
-    X$K_WALK2 = 4120,
-    X$K_LENGTH = 4696,
+    X$K_WALK0 = 2972,  ! the walks
+    X$K_WALK1 = 3548,
+    X$K_WALK2 = 4124,
+    X$K_LENGTH = 4700,
     X$C_BOF = 0,  ! before the first record
     X$C_AFTER = 1,  ! after the stream's record
     X$C_AT = 2,  ! at it: a $FIND found it
@@ -866,7 +866,8 @@ MACRO
     X$L_COLBLK = 1936, 0, 32, 0 %,  ! the block of the collating tables in IDX$AB_PLG, or 0
     X$T_COLW1 = 1940, 0, 0, 0 %,  ! two keys' weights, being compared
     X$T_COLW2 = 2452, 0, 0, 0 %,
-    X$L_NEWID = 2964, 0, 32, 0 %,  ! the next record ID of the bucket NEWBKT gave last
+    X$L_NEWID = 2964, 0, 32, 0 %,  ! the next record ID of the bucket NEWBKT gave last,
+    X$L_NEWAREA = 2968, 0, 32, 0 %,  ! and its area
     C$T_PRIM = 0, 0, 0, 0 %,  ! each character's primary weight
     C$T_SEC = 256, 0, 0, 0 %,  ! and secondary
     C$T_LIST = 512, 0, 0, 0 %,  ! characters weighed otherwise, 4 bytes each: the character, the next or FF, and its primary weights, the second 0 if one; FF FF after the last

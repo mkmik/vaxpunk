@@ -69,7 +69,8 @@ Decisions this PRD rests on:
   of FreeVMS. The structure layouts come from the manuals and from
   `ANALYZE/RMS_FILE` dumps of the oracle's files.
 - **Prologue 1 and 2 indexed files.** VMS still opens them; we refuse them
-  with `RMS$_PLV`. `CONVERT` on OpenVMS turns them into prologue 3.
+  with `RMS$_PLV`. `CONVERT` on OpenVMS turns them into prologue 3. They
+  came later ([t8y:/rms/indexed#old-prologues](../map/rms/indexed.md)).
 - **Collated keys and packed decimal keys** at first. String, signed and
   unsigned integer of 2, 4 and 8 bytes, and their descending forms, are in.
   Both came later ([t8y:/rms/indexed#key-types](../map/rms/indexed.md)).

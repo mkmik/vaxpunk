@@ -35,6 +35,7 @@
         $KEYDEF
         $AREADEF
         $BKTDEF
+        $IRCDEF
 
         .EXTERNAL LIN$TEXT, LIN$STR, LIN$CHAR, LIN$DEC, LIN$HEX, LIN$PAD
         .EXTERNAL LIN$PUT, LIN$STATUS, LIN$GW_LEN, LIN$T_LINE, LIN$GL_RAB
@@ -1628,7 +1629,17 @@ GETBKT:
         BEQL    20$
         MOVAB   E_CHECK, R1
         BSBW    ERROR
-20$:    CMPB    BKT+BKT$B_INDEXNO, KNUM
+20$:    MOVL    KNUM, R1                ; its key, or before prologue 3
+        CMPW    PLG+PLG$W_VER_NO, #PLG$C_VER_3  ; the area its level's
+        BEQL    23$                             ; buckets come from
+        MOVZBL  KD+KEY$B_DANUM, R1
+        TSTL    R5
+        BEQL    23$
+        MOVZBL  KD+KEY$B_LANUM, R1
+        CMPL    R5, #1
+        BEQL    23$
+        MOVZBL  KD+KEY$B_IANUM, R1
+23$:    CMPB    BKT+BKT$B_INDEXNO, R1
         BEQL    25$
         MOVAB   E_KEYID, R1
         BSBW    ERROR
@@ -1637,8 +1648,11 @@ GETBKT:
         MOVAB   E_LEVEL, R1
         BSBW    ERROR
 30$:    MOVZWL  BKT+BKT$W_FREESPACE, R3 ; R3 = where the entries end
+        CMPW    PLG+PLG$W_VER_NO, #PLG$C_VER_3  ; index buckets too
+        BLSSU   32$                             ; before prologue 3
         TSTL    R5
         BNEQ    50$
+32$:
         CMPL    R3, #BKT$K_OVERHDSZ     ; a data bucket's: in it
         BLSSU   35$
         CMPL    R3, R4
@@ -1671,7 +1685,11 @@ GETBKT:
 ; Uses R0-R6.
 IXBKT:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
-        EXTZV   #BKT$V_PTR_SZ, #2, BKT+BKT$B_BKTCB, R6
+        CMPW    PLG+PLG$W_VER_NO, #PLG$C_VER_3
+        BEQL    5$
+        BSBW    IXBKT2
+        RSB
+5$:     EXTZV   #BKT$V_PTR_SZ, #2, BKT+BKT$B_BKTCB, R6
         ADDL2   #2, R6                  ; R6 = a pointer's size
         MOVZBL  KD+KEY$B_KEYSZ, R5
         MOVL    #BKT$K_OVERHDSZ, R2     ; each key
@@ -1717,8 +1735,50 @@ IXBKT:
         CLRL    R0
         RSB
 
+; IXBKT2: IXBKT before prologue 3: each entry a control byte, whose bits
+; 0-1 are its pointer's size less 2, the pointer and the key, whole.
+IXBKT2:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVZBL  KD+KEY$B_KEYSZ, R5
+        MOVL    #BKT$K_OVERHDSZ, R2     ; each entry
+10$:    CMPL    R2, BEND
+        BGEQU   30$
+        BICL3   #^C3, BKT(R2), R3
+        ADDL2   #3, R3
+        ADDL2   R5, R3                  ; R3 = its bytes
+        ADDL2   R3, R2
+        CMPL    R2, BEND
+        BGTRU   80$
+        INCL    S_NIDX
+        CMPL    R10, #1
+        BNEQ    25$
+        INCL    S_L1
+25$:    ADDL2   R3, S_IST
+        ADDL2   R3, S_IUNC
+        BRB     10$
+30$:    ADDL3   #1, BEND, R0            ; in use
+        ADDL2   R0, S_IUSED
+        ADDL2   BSIZE, S_ISIZE
+        INCL    S_IBKTS
+        BICL3   #^C3, BKT+BKT$K_OVERHDSZ, R6    ; the first pointer
+        ADDL2   #2, R6
+        CLRL    R0
+        MOVAB   BKT+BKT$K_OVERHDSZ+1(R6), R1
+40$:    ASHL    #8, R0, R0
+        MOVB    -(R1), R0
+        SOBGTR  R6, 40$
+        RSB
+80$:    MOVL    BVBN, R0
+        MOVAB   E_IDXFIT, R1
+        BSBW    ERROR
+        BSBW    UNWIND
+        CLRL    R0
+        RSB
+
 ; DATABKT: counts the primary data bucket in BKT's records, their bytes
-; and its bytes in use. Uses R0-R6.
+; and its bytes in use. Before prologue 3 a record's ID and RRV ID are
+; bytes, and a stub, which keeps a deleted record's ID, is its control
+; byte and the ID. Uses R0-R6.
 DATABKT:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         ADDL3   #1, BEND, R0
@@ -1732,7 +1792,12 @@ DATABKT:
 15$:    MOVZBL  BKT(R2), R3             ; R3 = its control byte
         BICL3   #^C3, R3, R4
         ADDL2   #7, R4                  ; R4 = its header's bytes
-        BBC     #3, R3, 20$             ; an RRV: control, ID, ID, VBN
+        CMPW    PLG+PLG$W_VER_NO, #PLG$C_VER_3
+        BEQL    17$
+        MOVL    #IRC$K_HDRSZ2, R4
+        BBC     #4, R3, 17$             ; a stub
+        MOVL    #IRC$K_STUBSZ, R4
+17$:    BBC     #3, R3, 20$             ; an RRV: control, ID, ID, VBN
         ADDL2   R4, R2
         CMPL    R2, BEND
         BGTRU   80$
@@ -1743,7 +1808,9 @@ DATABKT:
         BITB    #KEY$M_KEY_COMPR!KEY$M_REC_COMPR, KD+KEY$B_FLAGS
         BNEQ    25$
         BBC     #2, R3, 30$             ; or a deleted one's, which keeps
-        MOVZBL  KD+KEY$B_KEYSZ, R5      ; only its key
+        CMPW    PLG+PLG$W_VER_NO, #PLG$C_VER_3  ; only its key in prologue 3
+        BLSSU   30$
+        MOVZBL  KD+KEY$B_KEYSZ, R5
         BRB     30$
 25$:    ADDL3   R2, R4, R0              ; or as its size says
         ADDL2   #2, R0
@@ -1834,7 +1901,13 @@ SIDRBKT:
 10$:    CMPL    R2, BEND
         BLSSU   15$
         RSB
-15$:    ADDL3   #2, R2, R0
+15$:    CMPW    PLG+PLG$W_VER_NO, #PLG$C_VER_3  ; before prologue 3: its
+        BEQL    17$                             ; control, ID, maybe a
+        MOVZBL  BKT(R2), R0                     ; count
+        ADDL2   #2, R2
+        BBS     #4, R0, 17$
+        ADDL2   #4, R2
+17$:    ADDL3   #2, R2, R0
         CMPL    R0, BEND
         BGTRU   70$
         MOVZWL  BKT(R2), R5             ; R5 = its bytes
@@ -1859,7 +1932,10 @@ SIDRBKT:
         BBS     #4, R4, 30$             ; a deleted one's stub
         BICL3   #^C3, R4, R1
         ADDL2   #4, R1
-        ADDL2   R1, R3
+        CMPW    PLG+PLG$W_VER_NO, #PLG$C_VER_3  ; a byte's ID before 3
+        BEQL    40$
+        DECL    R1
+40$:    ADDL2   R1, R3
         CMPL    R3, R6
         BGTRU   80$
         BBS     #2, R4, 30$

@@ -11,7 +11,7 @@ refs = ["vms/sysexe/analyzrms.mar", "vms/cld/analyze.cld", "docs/prd/0008-rms-re
 id = "check"
 title = "/CHECK: walk each key's index and data buckets and report what is wrong"
 status = "done"
-note = "PRD-0008 step 7; the report matched the oracle's on every fixture"
+note = "PRD-0008 step 7; the report matched the oracle's on every fixture; prologue 1 and 2 buckets too, and OpenVMS's key-only deleted records"
 
 [[feature]]
 id = "statistics"

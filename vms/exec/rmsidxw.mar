@@ -28,6 +28,13 @@
 ; root above it.
 ; A split takes its new bucket from the area's available ones, which
 ; CONVERT/RECLAIM freed, before the area's extent (NEWBKT).
+;
+; Prologue 1 and 2 files, which an XABKEY's XAB$B_PROLOG asks for, are
+; written as VMS writes them, but for a 4-byte pointer in each index entry
+; ours makes: nothing compressed; record and SIDR IDs a byte, given again
+; from runs of free ones; index entries of a control byte, the pointer
+; and the key, from the bucket's start; a deleted record's ID kept in a
+; stub at home.
 ; ponytail: an emptied bucket stays in its chain until CONVERT/RECLAIM.
 ;
         .LIBRARY "lib.mlb"
@@ -115,16 +122,18 @@ GAP:
         ADDL2   R1, W$L_FREE(R8)
         RSB
 
-; ROOM: R8 = a walk. R0 = the free bytes in its bucket: in a level 0
-; one, up to its last byte; in an index one, up to its pointers. Keeps
-; every other register.
+; ROOM: R8 = a walk, R11 = the state. R0 = the free bytes in its
+; bucket: in a level 0 one, or any before prologue 3, up to its last
+; byte; in an index one, up to its pointers. Keeps every other register.
 ROOM:
         .JSB_ENTRY
         PUSHL   R1
         MOVL    W$L_BUF(R8), R1
         TSTB    BKT$B_LEVEL(R1)
-        BNEQ    10$
-        SUBL3   #1, W$L_SIZE(R8), R0
+        BEQL    5$
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    10$
+5$:     SUBL3   #1, W$L_SIZE(R8), R0
         BRB     20$
 10$:    ADDL2   W$L_SIZE(R8), R1        ; VBN FREE SPACE + 1
         MOVZWL  -BKT$K_ENDOVHD(R1), R0
@@ -145,6 +154,7 @@ ROOM:
 NEWBKT:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVL    R0, R5
+        MOVL    R0, X$L_NEWAREA(R11)
         MOVL    #1, X$L_NEWID(R11)
         MULL3   #AREA$K_BLN, R0, R2
         ADDL2   X$L_AREAS(R11), R2
@@ -259,7 +269,9 @@ WRPLG:
 ; in blocks, R2 = a key of reference, R3 = a level. Makes an empty bucket
 ; in its room: no entries, the next record ID NEWBKT gave, linked to
 ; itself as the last of its level, and an index bucket's pointers, none,
-; 2 bytes each. Keeps every register.
+; 2 bytes each. Before prologue 3 the bucket says NEWBKT's area instead
+; of the key, its IDs are bytes, 1 to 255 free, and an index bucket has
+; no pointers apart. Keeps every register.
 INITW:
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4, R5>
@@ -275,7 +287,13 @@ INITW:
         MOVL    R0, BKT$L_NXTBKT(R4)
         MOVB    R3, BKT$B_LEVEL(R4)
         MOVB    #1@BKT$V_LASTBKT, BKT$B_BKTCB(R4)
-        TSTL    R3
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    5$
+        MOVB    X$L_NEWAREA(R11), BKT$B_AREANO(R4)
+        MOVB    #1, BKT$B_NXTRECID(R4)
+        MNEGB   #1, BKT$B_LSTRECID(R4)
+        BRB     10$
+5$:     TSTL    R3
         BEQL    10$
         ADDL2   W$L_SIZE(R8), R4        ; VBN FREE SPACE: the byte before
         SUBL3   #BKT$K_ENDOVHD+1, W$L_SIZE(R8), R5      ; where pointers go
@@ -368,7 +386,9 @@ ENCKEY:
 ; record as it is stored: its control byte, ID, RRV ID and VBN, all 0,
 ; its size, but a FIX record's, and the record, or its key first,
 ; compressed with KEY$V_KEY_COMPR, and the rest compressed with
-; KEY$V_REC_COMPR. R0 = its bytes, or 0 if they don't fit. Uses R0-R6.
+; KEY$V_REC_COMPR. Before prologue 3 its ID and RRV ID are bytes, and
+; nothing is compressed. R0 = its bytes, or 0 if they don't fit. Uses
+; R0-R6.
 PACKREC:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         MOVL    R4, R6                  ; where it starts
@@ -378,8 +398,12 @@ PACKREC:
         CMPL    R0, R5
         BGTRU   85$
         MOVB    #2, (R4)+               ; a 4-byte pointer
-        CLRL    (R4)+
-        CLRL    (R4)+
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    5$
+        CLRW    (R4)+
+        BRB     7$
+5$:     CLRL    (R4)+
+7$:     CLRL    (R4)+
         BITB    #KEY$M_KEY_COMPR!KEY$M_REC_COMPR, KEY$B_FLAGS(R9)
         BNEQ    20$
         CMPB    IFB$B_RFM(R7), #FAB$C_FIX
@@ -699,13 +723,31 @@ WALKIX:
 80$:    TSTL    (SP)+
         RSB
 
-; IXCOUNT: R8 = a walk in an index bucket. R0 = its entries, R1 = its
-; pointers' size, from its VBN FREE SPACE word. Keeps every other
-; register.
+; IXCOUNT: R11 = the state, R9 = a key's descriptor, R8 = a walk in an
+; index bucket. R0 = its entries, R1 = its pointers' size, from its VBN
+; FREE SPACE word; before prologue 3, counted along them, and R1 = 4,
+; the size of those ADDIX and IXINS write. Keeps every other register.
 IXCOUNT:
         .JSB_ENTRY
         PUSHL   R2
-        MOVL    W$L_BUF(R8), R2
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    5$
+        CLRL    R0
+        MOVL    #BKT$K_OVERHDSZ, R2
+1$:     CMPL    R2, W$L_FREE(R8)        ; each: control, pointer, key
+        BGEQU   2$
+        INCL    R0
+        ADDL3   W$L_BUF(R8), R2, R1
+        BICL3   #^C3, (R1), R1
+        ADDL2   #3, R1
+        ADDL2   R1, R2
+        MOVZBL  KEY$B_KEYSZ(R9), R1
+        ADDL2   R1, R2
+        BRB     1$
+2$:     MOVL    #4, R1
+        MOVL    (SP)+, R2
+        RSB
+5$:     MOVL    W$L_BUF(R8), R2
         EXTZV   #BKT$V_PTR_SZ, #2, BKT$B_BKTCB(R2), R1
         ADDL2   #2, R1
         ADDL2   W$L_SIZE(R8), R2
@@ -749,12 +791,24 @@ SETPTRS:
         POPR    #^M<R0, R1, R2>
         RSB
 
-; ADDIX: R9 = a key's descriptor, R8 = a walk in an index bucket with
-; room, R1 = a key, R2 = the key before it, its last, or 0, R3 = a VBN.
-; Adds an entry for them after its last. Uses R0-R4.
+; ADDIX: R11 = the state, R9 = a key's descriptor, R8 = a walk in an
+; index bucket with room, R1 = a key, R2 = the key before it, its last,
+; or 0, R3 = a VBN. Adds an entry for them after its last; before
+; prologue 3, a control byte, the VBN in 4 bytes and the key. Uses R0-R4.
 ADDIX:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
-        PUSHL   R3
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    5$
+        ADDL3   W$L_BUF(R8), W$L_FREE(R8), R4
+        MOVB    #2, (R4)+
+        MOVL    R3, (R4)+
+        MOVZBL  KEY$B_KEYSZ(R9), R0
+        PUSHL   R0
+        MOVC3   R0, (R1), (R4)
+        ADDL3   #5, (SP)+, R0
+        ADDL2   R0, W$L_FREE(R8)
+        RSB
+5$:     PUSHL   R3
         PUSHL   R1
         BSBW    IXCOUNT
         MOVL    (SP)+, R1
@@ -846,8 +900,16 @@ IXINS:
         MOVL    4(SP), R0               ; to the entry
         BSBW    WALKIX
         CMPL    R0, #1
-        BNEQ    85$
-        MOVZBL  KEY$B_KEYSZ(R9), R6     ; R6 = the room it takes
+        BEQL    12$
+        BRW     85$
+12$:    CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    13$
+        MOVZBL  KEY$B_KEYSZ(R9), R6     ; before prologue 3: an entry, and
+        MULL2   #2, R6                  ; the next's pointer grown to 4
+        ADDL2   #10, R6
+        SUBL2   W$L_LEN(R8), R6
+        BRB     25$
+13$:    MOVZBL  KEY$B_KEYSZ(R9), R6     ; R6 = the room it takes
         BBC     #KEY$V_IDX_COMPR, KEY$B_FLAGS(R9), 20$
         MOVL    R10, R1                 ; the new key's bytes,
         MOVAB   W$T_PREV(R8), R2
@@ -867,7 +929,7 @@ IXINS:
         SUBL2   R0, R6
 20$:    BSBW    IXCOUNT                 ; and a pointer
         ADDL2   R1, R6
-        BSBW    ROOM
+25$:    BSBW    ROOM
         CMPL    R6, R0
         BLEQ    30$
         MOVL    (SP), R0                ; no room: split it
@@ -879,8 +941,32 @@ IXINS:
         MOVL    (SP), R0
         MOVAQ   X$L_PATH(R11)[R0], R0
         MOVL    R2, (R0)
-        BRB     10$
-30$:    BBC     #KEY$V_IDX_COMPR, KEY$B_FLAGS(R9), 35$
+        BRW     10$
+30$:    CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    32$
+        MOVL    W$L_OFF(R8), R0         ; before prologue 3: the entry,
+        MOVZBL  KEY$B_KEYSZ(R9), R1
+        ADDL2   #5, R1
+        BSBW    GAP
+        ADDL3   W$L_BUF(R8), R0, R3
+        MOVB    #2, (R3)+
+        MOVL    8(SP), (R3)+
+        MOVZBL  KEY$B_KEYSZ(R9), R0
+        PUSHR   #^M<R0, R3>
+        MOVC3   R0, (R10), (R3)
+        POPR    #^M<R0, R3>
+        ADDL2   R0, R3                  ; the next's pointer, in 4 bytes
+        MOVZBL  (R3), R1
+        BICL2   #^C3, R1
+        SUBL3   W$L_BUF(R8), R3, R0     ; past it
+        ADDL2   #3, R0
+        ADDL2   R1, R0
+        SUBL3   R1, #2, R1
+        BSBW    GAP
+        MOVB    #2, (R3)+
+        MOVL    12(SP), (R3)
+        BRB     60$
+32$:    BBC     #KEY$V_IDX_COMPR, KEY$B_FLAGS(R9), 35$
         MOVL    R10, R2                 ; the next as it adds to the key
         BSBW    REENC
 35$:    MOVL    W$L_OFF(R8), R0         ; the key
@@ -922,7 +1008,7 @@ IXINS:
         INCL    R2
         MOVL    12(SP), R3
         BSBW    PUTPTR
-        BSBW    WRW
+60$:    BSBW    WRW
         BRB     90$
 85$:    MOVL    W$L_VBN(R8), R1
         MOVL    #RMS$_IRC, R0
@@ -991,7 +1077,11 @@ SPLITIX:
         MOVC3   R2, (R0), BKT$K_OVERHDSZ(R1)
         POPR    #^M<R2, R3, R4, R5>
         ADDL2   R2, W$L_FREE(R3)
-        SUBL3   R4, R5, R0              ; and their pointers
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3      ; before prologue 3 their
+        BEQL    18$                             ; pointers went with them
+        MOVL    W$L_OFF(R8), W$L_FREE(R8)
+        BRB     25$
+18$:    SUBL3   R4, R5, R0              ; and their pointers
         PUSHL   R0
         MULL2   R6, R0
         MULL3   R5, R6, R1              ; from the old's lowest
@@ -1019,7 +1109,7 @@ SPLITIX:
         MOVL    W$L_OFF(R8), W$L_FREE(R8)       ; the old keeps the first ones
         MOVL    (SP), R0
         BSBW    SETPTRS
-        MOVAB   X$K_WALK1(R11), R3      ; the chain: the new after the old
+25$:    MOVAB   X$K_WALK1(R11), R3      ; the chain: the new after the old
         MOVL    W$L_BUF(R8), R0
         MOVL    W$L_BUF(R3), R1
         MOVL    BKT$L_NXTBKT(R0), BKT$L_NXTBKT(R1)
@@ -1116,9 +1206,9 @@ NEWROOT:
 ; fit in a bucket of its own, or a bucket's error. Uses R0-R6, R8.
 SPLIT0:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8>
-        MOVL    #RMS$_RSZ, R0           ; an empty bucket the record won't fit
-        MOVL    X$L_N(R11), R5
+        MOVL    X$L_N(R11), R5          ; an empty bucket the record won't fit
         BNEQ    5$
+        BSBW    NOSTUBS
         RSB
 5$:     BBC     #X$V_IDSPLIT, X$W_FLAGS(R11), 6$       ; no IDs left: the
         MOVL    X$L_Q(R11), X$L_M(R11)  ; new record's place
@@ -1194,15 +1284,24 @@ SPLIT0:
         CLRL    R2
         BSBW    REENC
 40$:    TSTB    KEY$B_KEYREF(R9)        ; records: new IDs, and their RFAs
+        BEQL    50$
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3      ; SIDRs before prologue 3:
+        BEQL    60$                             ; new IDs
+45$:    BSBW    IDX$ENTRY
+        CMPL    R0, #1
         BNEQ    60$
+        BSBW    NEXTID
+        ADDL3   W$L_BUF(R8), W$L_OFF(R8), R1
+        MOVB    R0, 1(R1)
+        BSBW    IDX$NEXTW
+        BRB     45$
 50$:    BSBW    IDX$ENTRY
         CMPL    R0, #1
         BNEQ    60$
-        MOVL    W$L_BUF(R8), R0
-        MOVZWL  BKT$W_NXTRECID(R0), R1
-        INCW    BKT$W_NXTRECID(R0)
-        ADDL2   W$L_OFF(R8), R0
-        MOVW    R1, IRC$W_ID(R0)
+        BSBW    NEXTID
+        ADDL3   W$L_BUF(R8), W$L_OFF(R8), R3
+        BSBW    SETID
+        MOVL    R0, R1
         MULL3   #8, X$L_NMOV(R11), R2   ; home, its ID, the new ID
         ADDL2   X$L_WORK(R11), R2
         MOVL    W$L_RRVVBN(R8), (R2)
@@ -1228,12 +1327,12 @@ SPLIT0:
         ADDL2   X$L_WORK(R11), R2
         CMPL    (R2), W$L_VBN(R8)
         BNEQ    75$
-        ADDL3   W$L_BUF(R8), W$L_FREE(R8), R0
-        MOVB    #<1@IRC$V_RRV>!2, IRC$B_CONTROL(R0)
-        MOVW    4(R2), IRC$W_ID(R0)
-        MOVW    6(R2), IRC$W_RRV_ID(R0)
-        MOVL    X$L_RVBN(R11), IRC$L_RRV_VBN(R0)
-        ADDL2   #RRVSIZE, W$L_FREE(R8)
+        MOVZWL  4(R2), R0
+        MOVZWL  6(R2), R1
+        PUSHL   R2
+        MOVL    X$L_RVBN(R11), R2
+        BSBW    NEWRRV
+        MOVL    (SP)+, R2
 75$:    INCL    R5
         BRB     70$
 80$:    PUSHL   R8                      ; write the new, then the old
@@ -1269,41 +1368,224 @@ SPLIT0:
         BSBW    IXINS
 90$:    RSB
 
-; FREEID: R11 = an indexed file's state, R9 = key 0's descriptor, R8 = a
-; walk in a primary data bucket. R0 = the lowest record ID, from 1, that
-; no record, stub or RRV there has, or 0 if it has them all. Keeps every
+; RECID: R11 = an indexed file's state, R3 = a primary record or RRV.
+; R0 = its ID: a word, a byte before prologue 3. Keeps every other
+; register.
+RECID:
+        .JSB_ENTRY
+        MOVZWL  IRC$W_ID(R3), R0
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    10$
+        MOVZBL  IRC$B_ID(R3), R0
+10$:    RSB
+
+; SETID: R11 = an indexed file's state, R3 = a primary record or RRV, R0
+; = an ID. Makes it its ID. Keeps every register.
+SETID:
+        .JSB_ENTRY
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    10$
+        MOVB    R0, IRC$B_ID(R3)
+        RSB
+10$:    MOVW    R0, IRC$W_ID(R3)
+        RSB
+
+; SETRFA: R11 = an indexed file's state, R3 = a primary record or RRV,
+; R0 = an ID and R1 = a VBN. Makes them its RFA, or an RRV's record's
+; place. Keeps every register.
+SETRFA:
+        .JSB_ENTRY
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    10$
+        MOVB    R0, IRC$B_RRV_ID(R3)
+        MOVL    R1, IRC$L_RRV_VBN2(R3)
+        RSB
+10$:    MOVW    R0, IRC$W_RRV_ID(R3)
+        MOVL    R1, IRC$L_RRV_VBN(R3)
+        RSB
+
+; NEWRRV: R11 = an indexed file's state, R8 = a walk in a data bucket, R0
+; = an RRV's ID, R1 = its record's ID now, R2 = its VBN. Adds the RRV
+; after the bucket's last entry. Keeps every register.
+NEWRRV:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R3>
+        ADDL3   W$L_BUF(R8), W$L_FREE(R8), R3
+        MOVB    #<1@IRC$V_RRV>!2, IRC$B_CONTROL(R3)
+        BSBW    SETID
+        MOVL    R1, R0
+        MOVL    R2, R1
+        BSBW    SETRFA
+        ADDL2   #RRVSIZE, W$L_FREE(R8)
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    10$
+        SUBL2   #RRVSIZE-IRC$K_HDRSZ2, W$L_FREE(R8)
+10$:    POPR    #^M<R0, R1, R3>
+        RSB
+
+; NEXTID: R11 = an indexed file's state, R9 = a key's descriptor, R8 = a
+; walk in a level 0 bucket of it. R0 = the next record or SIDR ID the
+; bucket gives, which then goes up by one: in prologue 3, with none left
+; past 65535, the lowest nothing there has (FREEID); before, a byte, the
+; next of the free run BKT$B_NXTRECID to BKT$B_LSTRECID, or of a new one
+; (FREERUN). 0 if there is none. Keeps every other register.
+NEXTID:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2>
+        MOVL    W$L_BUF(R8), R2
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    20$
+        MOVZBL  BKT$B_NXTRECID(R2), R0
+        BEQL    5$
+        CMPB    R0, BKT$B_LSTRECID(R2)
+        BLEQU   10$
+5$:     BSBW    FREERUN
+        BLBC    R0, 90$
+        MOVZBL  BKT$B_NXTRECID(R2), R0
+10$:    INCB    BKT$B_NXTRECID(R2)
+        BRB     90$
+20$:    MOVZWL  BKT$W_NXTRECID(R2), R0
+        BEQL    25$
+        INCW    BKT$W_NXTRECID(R2)
+        BRB     90$
+25$:    MOVZWL  #65535, R1
+        BSBW    FREEID
+90$:    POPR    #^M<R1, R2>
+        RSB
+
+; HASID: R11 = an indexed file's state, R9 = a key's descriptor, R8 = a
+; walk in a level 0 bucket of it. R0 = 1 if it has an ID to give, else 0:
+; in prologue 3 none past 65535, before it none in its free run or a new
+; one (FREERUN). Keeps every other register.
+HASID:
+        .JSB_ENTRY
+        PUSHL   R1
+        MOVL    W$L_BUF(R8), R1
+        CLRL    R0
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    20$
+        TSTB    BKT$B_NXTRECID(R1)
+        BEQL    10$
+        CMPB    BKT$B_NXTRECID(R1), BKT$B_LSTRECID(R1)
+        BLEQU   80$
+10$:    BSBW    FREERUN
+        BRB     90$
+20$:    TSTW    BKT$W_NXTRECID(R1)
+        BEQL    90$
+80$:    MOVL    #1, R0
+90$:    MOVL    (SP)+, R1
+        RSB
+
+; FREERUN: R11 = an indexed file's state, R9 = a key's descriptor, R8 =
+; a walk in a level 0 bucket of a file before prologue 3. Makes
+; BKT$B_NXTRECID to BKT$B_LSTRECID the lowest run of IDs from 1 to 254
+; that nothing there has, as VMS's RMS does. R0 = 1, or 0 if there is
+; none. Keeps every other register.
+FREERUN:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2>
+        MOVL    #254, R1
+        BSBW    FREEID
+        TSTL    R0
+        BEQL    90$
+        MOVL    W$L_BUF(R8), R2
+        MOVB    R0, BKT$B_NXTRECID(R2)
+        MOVL    R0, R1                  ; and on while they are free
+10$:    MOVB    R1, BKT$B_LSTRECID(R2)
+        INCL    R1
+        CMPL    R1, #254
+        BGTRU   80$
+        MOVL    R1, R0
+        BSBW    USEDID
+        BLBC    R0, 10$
+80$:    MOVL    #1, R0
+90$:    POPR    #^M<R1, R2>
+        RSB
+
+; FREEID: R11 = an indexed file's state, R9 = a key's descriptor, R8 = a
+; walk in a level 0 bucket of it, R1 = the highest ID. R0 = the lowest
+; ID from 1 that nothing there has, or 0 if it has them all. Keeps every
 ; other register.
 FREEID:
         .JSB_ENTRY
+        PUSHL   R2
+        MOVL    #1, R2
+10$:    MOVL    R2, R0
+        BSBW    USEDID
+        BLBC    R0, 80$
+        AOBLEQ  R1, R2, 10$
+        CLRL    R0
+        BRB     90$
+80$:    MOVL    R2, R0
+90$:    MOVL    (SP)+, R2
+        RSB
+
+; USEDID: R11 = an indexed file's state, R9 = a key's descriptor, R8 = a
+; walk in a level 0 bucket of it, R0 = an ID. R0 = 1 if a record, stub,
+; RRV or SIDR there has it, or the bucket is damaged; else 0. Parses in
+; walk 2. Keeps every other register.
+USEDID:
+        .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4, R5, R8>
+        MOVL    R0, R5                  ; R5 = the ID
         MOVAB   X$K_WALK2(R11), R0      ; in walk 2, on the same bucket
         MOVQ    W$L_BUF(R8), W$L_BUF(R0)
         MOVQ    W$L_SIZE(R8), W$L_SIZE(R0)
         MOVL    W$L_FREE(R8), W$L_FREE(R0)
         MOVL    R0, R8
-        MOVL    #1, R5                  ; R5 = the ID tried
-10$:    MOVL    #BKT$K_OVERHDSZ, W$L_OFF(R8)
+        MOVL    #BKT$K_OVERHDSZ, W$L_OFF(R8)
         CLRL    W$L_INDEX(R8)
-20$:    BSBW    IDX$ENTRY
+10$:    BSBW    IDX$ENTRY
         TSTL    R0
-        BEQL    80$                     ; nothing has it
+        BEQL    90$
         CMPL    R0, #2
-        BGTRU   70$
-        CMPW    W$L_ID(R8), R5
-        BEQL    30$
+        BGTRU   80$
+        CMPL    W$L_ID(R8), R5
+        BEQL    80$
         BSBW    IDX$NEXTW
-        BRB     20$
-30$:    ACBL    #65535, #1, R5, 10$     ; taken: the next
-70$:    CLRL    R5
-80$:    MOVL    R5, R0
-        POPR    #^M<R1, R2, R3, R4, R5, R8>
+        BRB     10$
+80$:    MOVL    #1, R0
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R8>
+        RSB
+
+; NOSTUBS: R7 = an IFAB, R11 = its state, R9 = key 0's descriptor, R8
+; = a walk in a data bucket without records, full. Before prologue 3,
+; takes its stubs out, and writes it. R0 = RMS$_NORMAL, RMS$_RSZ if it
+; has none, or the disk's error. Uses R0-R4.
+; ponytail: a stub keeps a deleted record's ID from being given again,
+; so that an RFA kept from it doesn't find another record; when the
+; bucket is full of them they go, as VMS's RMS gives IDs again anyway.
+NOSTUBS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
+        PUSHL   #RMS$_RSZ
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    90$
+        MOVL    #BKT$K_OVERHDSZ, W$L_OFF(R8)
+        CLRL    W$L_INDEX(R8)
+10$:    BSBW    IDX$ENTRY
+        CMPL    R0, #2
+        BNEQ    80$
+        CMPL    W$L_LEN(R8), #IRC$K_STUBSZ
+        BEQL    20$
+        BSBW    IDX$NEXTW
+        BRB     10$
+20$:    ADDL3   W$L_OFF(R8), #IRC$K_STUBSZ, R0  ; a stub: out
+        MNEGL   #IRC$K_STUBSZ, R1
+        BSBW    GAP
+        MOVL    #RMS$_NORMAL, (SP)
+        BRB     10$
+80$:    BLBC    (SP), 90$
+        BSBW    WRW
+        MOVL    R0, (SP)
+90$:    MOVL    (SP)+, R0
         RSB
 
 ; SETRRV: R7 = an IFAB, R11 = its state, R0 = a bucket's VBN, R1 = an
 ; RRV's ID in it, R3 = an ID and R4 = a VBN, where its record is now.
-; Changes the RRV to say so, or, with R4 = 0, takes it out. R0 =
-; RMS$_NORMAL, or a bucket's error; one that isn't there is left. Uses
-; R0-R5, R8.
+; Changes the RRV to say so, or, with R4 = 0, takes it out; before
+; prologue 3 it shrinks to a stub, which keeps the ID from being given
+; again. R0 = RMS$_NORMAL, or a bucket's error; one that isn't there is
+; left. Uses R0-R5, R8.
 SETRRV:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R8>
         PUSHR   #^M<R1, R3, R4, R9>
@@ -1326,14 +1608,24 @@ SETRRV:
         BEQL    30$
 20$:    BSBW    IDX$NEXTW
         BRB     10$
-30$:    ADDL3   W$L_BUF(R8), W$L_OFF(R8), R2
+30$:    ADDL3   W$L_BUF(R8), W$L_OFF(R8), R3
         TSTL    8(SP)
         BEQL    40$
-        MOVW    4(SP), IRC$W_RRV_ID(R2) ; where it is now
-        MOVB    #<1@IRC$V_RRV>!2, IRC$B_CONTROL(R2)
-        MOVL    8(SP), IRC$L_RRV_VBN(R2)
+        MOVB    #<1@IRC$V_RRV>!2, IRC$B_CONTROL(R3)     ; where it is now
+        MOVL    4(SP), R0
+        MOVL    8(SP), R1
+        BSBW    SETRFA
         BRB     50$
-40$:    MOVL    W$L_OFF(R8), R0         ; or out
+40$:    CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    45$
+        CMPL    W$L_LEN(R8), #IRC$K_STUBSZ      ; a stub already
+        BEQL    80$
+        MOVB    #<1@IRC$V_RRV>!<1@IRC$V_DELETED>!<1@IRC$V_NOPTRSZ>, IRC$B_CONTROL(R3)
+        ADDL3   #IRC$K_HDRSZ2, W$L_OFF(R8), R0
+        MNEGL   #IRC$K_HDRSZ2-IRC$K_STUBSZ, R1
+        BSBW    GAP
+        BRB     50$
+45$:    MOVL    W$L_OFF(R8), R0         ; or out
         MNEGL   W$L_LEN(R8), R1
         ADDL2   W$L_LEN(R8), R0
         BSBW    GAP
@@ -1343,9 +1635,9 @@ SETRRV:
 90$:    POPR    #^M<R1, R3, R4, R9>
         RSB
 
-; PTRLEN: R0 = a VBN. R1 = the bytes of a SIDR pointer to it: the
-; control byte, the ID and the smallest pointer it fits. Keeps every
-; other register.
+; PTRLEN: R11 = an indexed file's state, R0 = a VBN. R1 = the bytes of
+; a SIDR pointer to it: the control byte, the ID, a byte before prologue
+; 3, and the smallest pointer it fits. Keeps every other register.
 PTRLEN:
         .JSB_ENTRY
         MOVL    #5, R1
@@ -1355,7 +1647,10 @@ PTRLEN:
         CMPL    R0, #^XFFFFFF
         BLEQU   10$
         INCL    R1
-10$:    RSB
+10$:    CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    20$
+        DECL    R1
+20$:    RSB
 
 ; WRPTR: R11 = an indexed file's state, R3 = where, R1 = its bytes
 ; (PTRLEN), R2 = control bits to add. Writes a SIDR pointer to the
@@ -1363,11 +1658,18 @@ PTRLEN:
 WRPTR:
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3>
-        SUBL3   #5, R1, R0              ; the pointer's size less 2
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    5$
+        SUBL3   #4, R1, R0              ; before prologue 3: a byte's ID
+        BISB3   R2, R0, (R3)+
+        MOVB    X$W_RFAID(R11), (R3)+
+        SUBL2   #2, R1
+        BRB     7$
+5$:     SUBL3   #5, R1, R0              ; the pointer's size less 2
         BISB3   R2, R0, (R3)+
         MOVW    X$W_RFAID(R11), (R3)+
-        MOVL    X$L_RFAVBN(R11), R0
         SUBL2   #3, R1
+7$:     MOVL    X$L_RFAVBN(R11), R0
 10$:    MOVB    R0, (R3)+
         ROTL    #-8, R0, R0
         SOBGTR  R1, 10$
@@ -1407,6 +1709,8 @@ GROWS:
 ; with the records after it. ponytail: one that goes first in such a
 ; bucket takes the lowest ID nothing there has (FREEID), where VMS would
 ; split before it, so an RFA kept from a deleted record there may find it.
+; Before prologue 3 IDs are bytes, given again: a bucket gives a run of
+; free ones, then looks for another (NEXTID), and splits without one.
 PUTPRI:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9>
         PUSHR   #^M<R1, R2>             ; 0 the record, 4 its size
@@ -1438,16 +1742,15 @@ PUTPRI:
         BGEQU   27$
         BSBW    GROWS
 27$:    MOVL    R0, R5
-        MOVL    W$L_BUF(R8), R0         ; no IDs left for a new record?
-        TSTW    BKT$W_NXTRECID(R0)
-        BNEQ    28$
-        TSTL    X$L_Q(R11)
+        MOVL    X$L_RFAVBN(R11), R0     ; a new record needs an ID: none
+        BEQL    26$                     ; left, a split, as VMS's, the new
+        CMPL    R0, W$L_VBN(R8)         ; record going to the new bucket
         BEQL    28$
-        MOVL    X$L_RFAVBN(R11), R0     ; going home it needs none
-        BEQL    29$
-        CMPL    R0, W$L_VBN(R8)
+26$:    TSTL    X$L_Q(R11)
         BEQL    28$
-29$:    BISW2   #1@X$V_IDSPLIT, X$W_FLAGS(R11)  ; then split, as VMS
+        BSBW    HASID
+        BLBS    R0, 28$
+        BISW2   #1@X$V_IDSPLIT, X$W_FLAGS(R11)
         BRB     31$
 28$:    BSBW    ROOM
         CMPL    R5, R0
@@ -1473,27 +1776,27 @@ PUTPRI:
         PUSHL   R3
         MOVC3   R6, @X$L_WORK2(R11), (R3)
         MOVL    (SP)+, R3
-        MOVL    W$L_BUF(R8), R2         ; its ID and RFA
-        MOVL    X$L_RFAVBN(R11), R4
+        MOVL    X$L_RFAVBN(R11), R4     ; its ID and RFA
         BEQL    50$
-        MOVW    X$W_RFAID(R11), IRC$W_RRV_ID(R3)
-        MOVL    R4, IRC$L_RRV_VBN(R3)
+        MOVZWL  X$W_RFAID(R11), R0
+        MOVL    R4, R1
+        BSBW    SETRFA
         CMPL    R4, W$L_VBN(R8)
         BNEQ    50$
-        MOVW    X$W_RFAID(R11), IRC$W_ID(R3)    ; home: its ID
+        BSBW    SETID                   ; home: its ID
         BRB     60$
-50$:    CLRW    IRC$W_ID(R3)            ; a new ID
-        MOVZWL  BKT$W_NXTRECID(R2), R0
-        BEQL    55$
-        INCW    BKT$W_NXTRECID(R2)
-        BRB     57$
-55$:    BSBW    FREEID                  ; none left, first in the bucket
-57$:    MOVW    R0, IRC$W_ID(R3)
+50$:    BSBW    NEXTID                  ; a new ID
+        TSTL    R0
+        BNEQ    57$
+        MOVL    #RMS$_RSZ, R0           ; none at all
+        BRB     90$
+57$:    BSBW    SETID
         TSTL    R4
         BNEQ    60$
-        MOVW    IRC$W_ID(R3), IRC$W_RRV_ID(R3)
-        MOVL    W$L_VBN(R8), IRC$L_RRV_VBN(R3)
-60$:    MOVZWL  IRC$W_ID(R3), R6
+        MOVL    W$L_VBN(R8), R1         ; and its RFA
+        BSBW    SETRFA
+60$:    BSBW    RECID
+        MOVL    R0, R6
         BSBW    WRW
         BLBC    R0, 90$
         MOVL    X$L_RFAVBN(R11), R0     ; away from home: its RRV says where
@@ -1602,7 +1905,7 @@ SIDRINS:
         MOVL    R6, R1
         CLRL    R2
         BSBW    WRPTR
-        ADDL3   W$L_BUF(R8), W$L_OFF(R8), R0    ; the size word
+        SUBL3   #2, W$L_BODY(R8), R0    ; the size word
         ADDW2   R6, (R0)
         BSBW    WRW
         RSB
@@ -1619,8 +1922,18 @@ SIDRINS:
         RSB
 45$:    MOVL    X$L_Q(R11), R0          ; no room: a SIDR of its own after
         BSBW    WALKTO
-50$:    MOVL    X$L_WORK2(R11), R4      ; a new SIDR: its size, its key,
-        ADDL3   #2, R4, R3              ; the pointer
+50$:    CLRL    -(SP)                   ; before prologue 3, first its control
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3      ; and ID, 0 until it has one,
+        BEQL    51$                             ; and with duplicates a
+        MOVL    X$L_WORK2(R11), R0              ; count, 0 as VMS's
+        MOVW    #1@IRC$V_NOPTRSZ, (R0)
+        MOVL    #2, (SP)
+        BBC     #KEY$V_DUPKEYS, KEY$B_FLAGS(R9), 51$
+        MOVB    #1, (R0)
+        CLRL    2(R0)
+        ADDL2   #IRC$K_DCNTSZ, (SP)
+51$:    ADDL3   (SP), X$L_WORK2(R11), R4        ; a new SIDR: its size, its
+        ADDL3   #2, R4, R3              ; key, the pointer
         BBC     #KEY$V_KEY_COMPR, KEY$B_FLAGS(R9), 55$
         MOVAB   X$T_KEY(R11), R1
         MOVAB   X$T_QPREV(R11), R2
@@ -1635,20 +1948,28 @@ SIDRINS:
         POPR    #^M<R0, R3, R4>
 57$:    ADDL2   R0, R3
         MOVL    R6, R1
+        CLRL    R2                      ; the first pointer, which prologue 3
+        TSTL    (SP)                    ; marks
+        BNEQ    58$
         MOVL    #^X80, R2
-        BSBW    WRPTR
+58$:    BSBW    WRPTR
         ADDL3   R0, R6, R1              ; R5 = the SIDR's bytes
         MOVW    R1, (R4)
         ADDL3   #2, R1, R5
+        ADDL2   (SP)+, R5
         MOVL    R5, R0
         CMPL    X$L_Q(R11), X$L_N(R11)  ; and the next's key's growth
         BGEQU   60$
         BSBW    GROWS
 60$:    MOVL    R0, R6
-        BSBW    ROOM
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3      ; an ID for it, before
+        BEQL    62$                             ; prologue 3
+        BSBW    HASID
+        BLBC    R0, 65$
+62$:    BSBW    ROOM
         CMPL    R6, R0
         BLEQ    70$
-        BSBW    SPLIT0                  ; no room: split, and again
+65$:    BSBW    SPLIT0                  ; no room: split, and again
         BLBC    R0, 90$
         BRW     10$
 70$:    CMPL    X$L_Q(R11), X$L_N(R11)
@@ -1660,8 +1981,14 @@ SIDRINS:
         MOVL    R5, R1
         BSBW    GAP
         ADDL3   W$L_BUF(R8), R0, R3
+        PUSHL   R3
         MOVC3   R5, @X$L_WORK2(R11), (R3)
-        BSBW    WRW
+        MOVL    (SP)+, R3
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    80$
+        BSBW    NEXTID                  ; before prologue 3: its ID
+        MOVB    R0, 1(R3)
+80$:    BSBW    WRW
 90$:    RSB
 
 ; HASDUP: R7 = an IFAB, R11 = its state, R9 = an alternate key's
@@ -1756,13 +2083,24 @@ DELSIDR:
         BBS     #IRC$V_NOPTRSZ, R3, 40$
         BICL3   #^C3, R3, R4
         ADDL2   #5, R4
-        BBS     #IRC$V_DELETED, R3, 40$
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BEQL    25$
+        DECL    R4                      ; before prologue 3: a byte's ID,
+        BITB    #<1@IRC$V_DELETED>!^X20, R3     ; and RMS-11's mark of a
+        BNEQ    40$                             ; changed key
+        CMPB    1(R2), X$W_RFAID(R11)
+        BNEQ    40$
+        SUBL3   #2, R4, R1
+        PUSHL   R2
+        ADDL2   #2, R2
+        BRB     28$
+25$:    BBS     #IRC$V_DELETED, R3, 40$
         CMPW    1(R2), X$W_RFAID(R11)
         BNEQ    40$
-        MOVL    X$L_RFAVBN(R11), R0     ; the VBN, as many bytes as it has
         SUBL3   #3, R4, R1
         PUSHL   R2
         ADDL2   #3, R2
+28$:    MOVL    X$L_RFAVBN(R11), R0     ; the VBN, as many bytes as it has
 30$:    CMPB    (R2)+, R0
         BNEQ    35$
         ROTL    #-8, R0, R0
@@ -1786,7 +2124,7 @@ DELSIDR:
         ADDL2   R4, R0
         MNEGL   R4, R1
         BSBW    GAP
-        ADDL3   W$L_BUF(R8), W$L_OFF(R8), R0    ; the size word
+        SUBL3   #2, W$L_BODY(R8), R0    ; the size word
         SUBW2   R4, (R0)
         BSBW    WRW
         RSB
@@ -2176,10 +2514,15 @@ UPDCORE:
         MOVL    #RMS$_RSZ, R0
         BRW     88$
 57$:    MOVL    X$L_WORK2(R11), R3      ; its ID and RFA
-        ADDL3   W$L_BUF(R8), W$L_OFF(R8), R0
-        MOVW    IRC$W_ID(R0), IRC$W_ID(R3)
-        MOVW    IRC$W_RRV_ID(R0), IRC$W_RRV_ID(R3)
-        MOVL    IRC$L_RRV_VBN(R0), IRC$L_RRV_VBN(R3)
+        ADDL3   W$L_BUF(R8), W$L_OFF(R8), R2
+        PUSHL   R3
+        MOVL    R2, R3
+        BSBW    RECID
+        MOVL    (SP)+, R3
+        BSBW    SETID
+        MOVZWL  W$L_RRVID(R8), R0
+        MOVL    W$L_RRVVBN(R8), R1
+        BSBW    SETRFA
         SUBL3   W$L_LEN(R8), R6, R5     ; R5 = how much it grows
         BSBW    ROOM
         CMPL    R5, R0
@@ -2200,12 +2543,10 @@ UPDCORE:
         BNEQ    70$
         BSBW    FETCHHOME               ; the home bucket's RRV, to itself
         BLBC    R0, 88$
-        ADDL3   W$L_BUF(R8), W$L_FREE(R8), R0
-        MOVB    #<1@IRC$V_RRV>!2, IRC$B_CONTROL(R0)
-        MOVW    X$W_RFAID(R11), IRC$W_ID(R0)
-        MOVW    X$W_RFAID(R11), IRC$W_RRV_ID(R0)
-        MOVL    R6, IRC$L_RRV_VBN(R0)
-        ADDL2   #RRVSIZE, W$L_FREE(R8)
+        MOVZWL  X$W_RFAID(R11), R0
+        MOVL    R0, R1
+        MOVL    R6, R2
+        BSBW    NEWRRV
         BSBW    WRW
         BLBC    R0, 88$
 70$:    MOVQ    4(SP), R1               ; and in again
@@ -2350,11 +2691,20 @@ IDX$DELETE::
         MOVL    (SP)+, R4
         BLBC    R0, 88$
         CMPL    R4, R5
-        BEQL    50$
+        BEQL    45$
         MOVL    R5, R0
         MOVL    R6, R1
         CLRL    R4
         BSBW    SETRRV
+        BLBC    R0, 88$
+        BRB     50$
+45$:    CMPL    X$L_PLG(R11), #PLG$C_VER_3      ; at home before prologue
+        BEQL    50$                             ; 3, a stub keeps its ID
+        ADDL3   W$L_BUF(R8), W$L_FREE(R8), R0
+        MOVB    #<1@IRC$V_RRV>!<1@IRC$V_DELETED>!<1@IRC$V_NOPTRSZ>, (R0)+
+        MOVB    R6, (R0)
+        ADDL2   #IRC$K_STUBSZ, W$L_FREE(R8)
+        BSBW    WRW
         BLBC    R0, 88$
 50$:    CLRL    X$L_CURVBN(R11)
         MOVL    #RMS$_NORMAL, R0
@@ -2397,6 +2747,9 @@ IDX$FLUSH::
 ; type RMS hasn't, RMS$_AID, RMS$_IAN or
 ; RMS$_DAN for an area there isn't, RMS$_BKS for a bucket over 63 blocks,
 ; RMS$_XAB, or the file system's error. Uses R0-R6, R8, R9, R11.
+;
+; It is prologue 3, or 1 or 2, nothing compressed, if the primary key's
+; XABKEY asks for it (PROLOG).
 IDX$CREATE::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
         CLRL    R5                      ; R5 = the keys, R6 = the areas
@@ -2432,8 +2785,10 @@ IDX$CREATE::
         BLBS    R0, 30$
         RSB
 30$:    AOBLSS  R6, R4, 29$
-        CLRQ    -(SP)                   ; 8 the collating tables' VBN
-        PUSHR   #^M<R5, R6>             ; 0 the keys, 4 the areas
+        CLRQ    -(SP)                   ; 8 the collating tables' VBN, 12
+        PUSHR   #^M<R5, R6>             ; the prologue; 0 the keys, 4 areas
+        BSBW    PROLOG
+        MOVL    R0, 12(SP)
         SUBL3   #1, R5, R2              ; the prologue's blocks
         ADDL2   #4, R2
         DIVL2   #5, R2
@@ -2488,7 +2843,7 @@ IDX$CREATE::
         BNEQ    45$
         MOVB    R8, IDX$AB_PLG+PLG$B_AVBN       ; VBN 1: key 0 and the prologue
         MOVB    4(SP), IDX$AB_PLG+PLG$B_AMAX
-        MOVW    #PLG$C_VER_3, IDX$AB_PLG+PLG$W_VER_NO
+        MOVW    12(SP), IDX$AB_PLG+PLG$W_VER_NO
         MOVW    8(SP), IDX$AB_PLG+PLG$W_COLVBN
         MOVAB   IDX$AB_PLG, R3
         MOVL    R6, R0
@@ -2496,7 +2851,10 @@ IDX$CREATE::
         BSBW    MKKEY
         BLBS    R0, 42$
         BRW     88$
-42$:    INCL    R6
+42$:    CMPL    12(SP), #PLG$C_VER_3    ; nothing compressed before 3
+        BEQL    43$
+        BICB2   #KEY$M_KEY_COMPR!KEY$M_IDX_COMPR!KEY$M_REC_COMPR, IDX$AB_PLG+KEY$B_FLAGS
+43$:    INCL    R6
         BRB     55$
 45$:    CLRL    R4                      ; then five keys a block
 50$:    CMPL    R6, (SP)
@@ -2510,7 +2868,11 @@ IDX$CREATE::
         BSBW    MKKEY
         BLBS    R0, 52$
         BRW     88$
-52$:    INCL    R6
+52$:    CMPL    12(SP), #PLG$C_VER_3
+        BEQL    53$
+        MULL3   #KEY$K_BLN, R4, R3
+        BICB2   #KEY$M_KEY_COMPR!KEY$M_IDX_COMPR!KEY$M_REC_COMPR, IDX$AB_PLG+KEY$B_FLAGS(R3)
+53$:    INCL    R6
         INCL    R4
         BRB     50$
 55$:    BRW     70$
@@ -2558,6 +2920,73 @@ IDX$CREATE::
         BSBW    IDX$OPEN
         RSB
 88$:    ADDL2   #16, SP
+        RSB
+
+; PROLOG: R10 = a FAB, R5 = its keys. R0 = the prologue IDX$CREATE
+; makes: 3, unless the primary key's XABKEY asks for 1 or 2 in
+; XAB$B_PROLOG, or its segments overlap, which prologue 3 can't take;
+; then 1 if every key is a string, 2 if not, and 3 for a collated key,
+; as VMS's. Keeps every other register.
+PROLOG:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3>
+        MOVL    #PLG$C_VER_3, R3        ; R3 = the prologue
+        CLRL    R0
+        BSBW    KEYXAB
+        BSBW    OVERLAP                 ; segments that overlap: 1 or 2
+        BLBS    R0, 5$
+        CMPB    XAB$B_BLN(R1), #XAB$B_PROLOG+1
+        BLSSU   90$
+        CMPB    XAB$B_PROLOG(R1), #PLG$C_VER_2
+        BGTRU   90$
+        TSTB    XAB$B_PROLOG(R1)
+        BEQL    90$
+5$:     MOVL    #PLG$C_VER_1, R3
+        CLRL    R2                      ; R2 = a key
+10$:    CMPL    R2, R5
+        BGEQU   90$
+        MOVL    R2, R0
+        BSBW    KEYXAB
+        INCL    R2
+        BICB3   #KEY$C_DESCENDING, XAB$B_DTP(R1), R0
+        BEQL    10$
+        MOVL    #PLG$C_VER_2, R3
+        CMPB    R0, #KEY$C_COLLATED
+        BNEQ    10$
+        MOVL    #PLG$C_VER_3, R3
+90$:    MOVL    R3, R0
+        POPR    #^M<R1, R2, R3>
+        RSB
+
+; OVERLAP: R1 = an XABKEY. R0 = 1 if two of its segments share a byte,
+; else 0. Keeps every other register.
+OVERLAP:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R4, R5, R6>
+        CLRL    R0
+        MOVZBL  XAB$B_NSG(R1), R6       ; R6 = its segments
+        CLRL    R2                      ; R2 and R3: two of them
+10$:    INCL    R2
+        CMPL    R2, R6
+        BGEQU   90$
+        CLRL    R3
+20$:    MOVZWL  XAB$W_POS(R1)[R2], R4   ; R2's start, R3's end
+        MOVZWL  XAB$W_POS(R1)[R3], R5
+        MOVZBL  XAB$B_SIZ(R1)[R3], -(SP)
+        ADDL2   (SP)+, R5
+        CMPL    R4, R5
+        BGEQU   30$
+        MOVZWL  XAB$W_POS(R1)[R2], R4   ; and R2's end, R3's start
+        MOVZBL  XAB$B_SIZ(R1)[R2], -(SP)
+        ADDL2   (SP)+, R4
+        MOVZWL  XAB$W_POS(R1)[R3], R5
+        CMPL    R5, R4
+        BGEQU   30$
+        MOVL    #1, R0
+        BRB     90$
+30$:    AOBLSS  R2, R3, 20$
+        BRB     10$
+90$:    POPR    #^M<R2, R3, R4, R5, R6>
         RSB
 
 ; COLBYTES: R10 = a FAB, R5 = its keys. R1 = the bytes of the collating

@@ -1,7 +1,7 @@
 +++
 title = "Indexed files"
-summary = "Prologue 3 files: records in key order, a primary and up to 254 alternate keys"
-aka = ["IDX", "ISAM", "prologue 3", "XABKEY", "SIDR", "RRV", "bucket split", "key compression", "rmsidx.mar", "rmsidxw.mar"]
+summary = "Prologue 1, 2 and 3 files: records in key order, a primary and up to 254 alternate keys"
+aka = ["IDX", "ISAM", "prologue 3", "prologue 1", "prologue 2", "XABKEY", "SIDR", "RRV", "bucket split", "key compression", "rmsidx.mar", "rmsidxw.mar"]
 kind = "core"
 intent = "goal"
 research = "done"
@@ -61,8 +61,8 @@ note = "Packed decimal by value; collated by the NCS table $CREATE takes from XA
 [[feature]]
 id = "old-prologues"
 title = "Prologue 1 and 2 files"
-status = "todo"
-note = "PRD-0008 non-goal: refused with RMS$_PLV; CONVERT on OpenVMS makes them prologue 3"
+status = "done"
+note = "Read and written as OpenVMS does, XAB$B_PROLOG at $CREATE; ponytail: a bucket full of stubs drops them"
 
 [[feature]]
 id = "shared"
@@ -132,3 +132,8 @@ of available buckets, and a split takes its new bucket from there before
 growing the file, its record IDs going on from where they were. A bucket
 that has given all 65,535 IDs splits when a new record comes, as on
 OpenVMS, so an RFA never finds another record.
+Files of prologues 1 and 2, which VAX/VMS made before V4 and OpenVMS
+still makes when an FDL file asks, are read and written too: no
+compression, record IDs of a byte that are given again, and index
+entries that keep their pointers next to their keys. `RMSRAND` runs its
+random mix on a prologue 1 file as well.

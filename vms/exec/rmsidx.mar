@@ -1,4 +1,4 @@
-        .TITLE  RMSIDX  RMS: indexed files, prologue 3
+        .TITLE  RMSIDX  RMS: indexed files
         .IDENT  /V0.1/
 ;
 ; An indexed file keeps its records in buckets in primary key order,
@@ -1113,7 +1113,7 @@ IDX$ENTRY::
         CMPL    X$L_PLG(R11), #PLG$C_VER_3
         BEQL    5$
         MOVZBL  (R3)+, W$L_CTL(R8)      ; before prologue 3: control, ID,
-        INCL    R3                      ; and maybe a count
+        MOVZBL  (R3)+, W$L_ID(R8)       ; and maybe a count
         BBS     #IRC$V_NOPTRSZ, W$L_CTL(R8), 5$
         ADDL2   #IRC$K_DCNTSZ, R3
 5$:     MOVZWL  (R3)+, R4

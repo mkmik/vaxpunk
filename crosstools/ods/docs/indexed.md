@@ -382,3 +382,17 @@ They are laid out as prologue 3 but for:
   byte's bit 4 is set, a 4-byte count of duplicates; then its size. Its
   pointers' IDs are a byte, and bit 5 of a pointer's control byte, RMS-11's
   mark of a key `$UPDATE` changed, means deleted as bit 2 does.
+- Record IDs are given again. A bucket gives the run of free IDs from
+  `NXTRECID` to the byte at 7; when it runs out, RMS looks for the lowest
+  run of IDs from 1 to 254 that no record, RRV or stub has. OpenVMS's
+  doesn't always look well: a bucket of 300 records it filled gave IDs
+  133 to 177 a second time. Ours checks, and splits the bucket when none
+  is free.
+- `$DELETE` takes a record out and, in its home bucket, leaves a stub so
+  its ID isn't given again; OpenVMS's keeps a bucket's last record, or
+  one with duplicates, whole with `DELETED`. A key whose segments overlap
+  makes RMS choose prologue 1 or 2 even unasked, and a collated key
+  prologue 3 whatever was asked.
+
+OpenVMS writes an index entry's pointer in the fewest bytes that hold
+it, 2 from `$PUT`, 4 from `CONVERT`; ours always 4.
