@@ -75,7 +75,7 @@ status = "todo"
 id = "extend"
 title = "$EXTEND, and the default extension quantity"
 status = "todo"
-note = "rmsseq.mar extends by 8 blocks"
+note = "A sequential file's writes take the default extension now, t8y:/rms/sequential#default-extension; $EXTEND isn't there"
 
 [[feature]]
 id = "bro"

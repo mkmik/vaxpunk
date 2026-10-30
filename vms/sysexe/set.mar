@@ -19,7 +19,12 @@
 ;   of the names made in it later, the same way.
 ; - SET VOLUME device with /LABEL=label, /OWNER_UIC=uic, /PROTECTION and
 ;   /FILE_PROTECTION=(code[,...]), which FIL$SETVOLUME writes in the
-;   volume's home blocks, in kernel mode, which takes CMKRNL.
+;   volume's home blocks, in kernel mode, for a process with control
+;   access to the volume.
+; - SET RMS_DEFAULT, the process's RMS defaults, or with /SYSTEM the
+;   system's, which RMS$SETDEF sets in kernel mode (SETRMS).
+; SET.EXE is a known image with CMKRNL, as VMS installs it, for those
+; two (exec/process.mar).
 ; - SET SECURITY object[,...], with wildcards: each file's owner,
 ;   /OWNER=uic or identifier, protection, /PROTECTION=(code[,...]), and
 ;   ACL, through $SET_SECURITY (docs/adr/0040-acls-in-file-headers-and-
@@ -68,10 +73,11 @@
         $DVIDEF
         $ACEDEF
         $OSSDEF
+        $JPIDEF
 
         .EXTERNAL PRV_LOOKUP, LIB$SIGNAL, PUT_LINE, GET_PROT, GET_UIC
         .EXTERNAL TERM_SENSE, TERM_FIND, TERM_TYPE, TERM_SPEEDS
-        .EXTERNAL FIL$SETVOLUME
+        .EXTERNAL FIL$SETVOLUME, RMS$SETDEF
 
 ; TTBIT "name", bit, base, ON=BBSS, OFF=BBCC: sets the bit at base for
 ; the qualifier /name, and clears it for /NOname; ON=BBCC, OFF=BBSS the
@@ -395,6 +401,19 @@ NOSUCH2TXT:
         .ASCIC  ", does not exist"
 SECFAILED:                              ; the worst status, for the image's exit
         .LONG   SS$_NORMAL
+; SET RMS_DEFAULT's
+        .ALIGN  LONG
+RMSARGS:.LONG   3                       ; RMS$SETDEF's arguments: the item,
+RMSITEM:.LONG   0
+RMSVALUE:                               ; its value,
+        .LONG   0
+RMSSYS: .LONG   0                       ; and 1 for the system's
+RMSN = 9                                ; RMS defaults SET RMS_DEFAULT sets
+RMSVALS:.BLKL   RMSN+1                  ; RMSITEMS's values, -1 for none; the buffer count last
+RMSITEMS:                               ; what RMSVALS's are
+        .WORD   JPI$_RMS_DFMBC, JPI$_RMS_DFMBFSDK, JPI$_RMS_DFMBFSMT, JPI$_RMS_DFMBFSUR
+        .WORD   JPI$_RMS_DFMBFREL, JPI$_RMS_DFMBFIDX, JPI$_RMS_PROLOGUE, JPI$_RMS_EXTEND_SIZE
+        .WORD   JPI$_RMS_DFNBC
 VT100:  .ASCID  "VT100"
 VT102:  .ASCID  "VT102"
 VT200:  .ASCID  "VT200"                 ; to VT500, 2 to 5 after
@@ -402,8 +421,12 @@ VT200:  .ASCID  "VT200"                 ; to VT500, 2 to 5 after
         .PSECT  CODE, EXE, LONG
         .ENTRY  START, ^M<R2, R3, R4, R5, R6>
         PRESENT "OPTION.TERMINAL"
-        BLBC    R0, 4$
+        BLBC    R0, 3$
         BRW     SETTERM
+3$:     PRESENT "OPTION.RMS_DEFAULT"
+        BLBC    R0, 4$
+        CALLS   #0, SETRMS
+        RET
 4$:     PRESENT "OPTION.SECURITY"
         BLBC    R0, 5$
         CALLS   #0, SETSEC
@@ -1719,6 +1742,123 @@ SAYMSG:
         PUSHAB  LINE
         CALLS   #1, G^PUT_LINE
         MOVL    (SP)+, R0
+        RSB
+
+; RMSQUAL "name", neg, max, n: the value of the qualifier /name, if it is
+; there, a decimal number from 0 to max, or with a minus sign to -neg,
+; goes in RMSVALS's longword n, without its sign; one that isn't goes to
+; VALERR. Uses R0-R5.
+        .MACRO  RMSQUAL NAME, NEG, MAX, N, ?L1, ?L2
+        PRESENT NAME
+        BLBC    R0, L2
+        MOVW    #16, NUMDSC
+        GETVALUE NAME, NUMDSC, NUMDSC
+        BLBC    R0, L1
+        MOVL    #NEG, R2
+        MOVL    #MAX, R3
+        BSBW    RMSNUM
+        BLBC    R0, L1
+        MOVL    R1, RMSVALS+<4*N>
+        BRB     L2
+L1:     BRW     VALERR
+L2:
+        .ENDM   RMSQUAL
+
+; SETRMS: SET RMS_DEFAULT: the process's RMS defaults, or with /SYSTEM
+; the system's, that the qualifiers give: /BLOCK_COUNT=n, 0 to 255,
+; blocks in a buffer; /BUFFER_COUNT=n, -127 to 255, without its sign,
+; buffers for the kinds of file /DISK, /MAGTAPE, /UNIT_RECORD,
+; /SEQUENTIAL, which is all three, /RELATIVE and /INDEXED say, or the
+; sequential ones; /PROLOG=n, 0, 2 or 3; /EXTEND_QUANTITY=n, 0 to 65535;
+; /NETWORK_BLOCK_COUNT=n, 0 to 127. Each is checked before any is set:
+; one out of range is %SET-E-VALERR. RMS$SETDEF sets each in kernel mode;
+; the system's take CMKRNL, else SS$_NOCMKRNL. R0 = SS$_NORMAL, or the
+; failure.
+; ponytail: no /QUERY_LOCK, /CONTENTION_POLICY or /PATH_TIMEOUT: RMS has
+; no query locks, contention policy or paths to time out.
+        .ENTRY  SETRMS, ^M<R2, R3, R4, R5, R6>
+        MOVL    #RMSN+1, R0
+        MOVAL   RMSVALS, R1
+5$:     MNEGL   #1, (R1)+
+        SOBGTR  R0, 5$
+        RMSQUAL "BLOCK_COUNT", 0, 255, 0
+        RMSQUAL "PROLOG", 0, 3, 6
+        RMSQUAL "EXTEND_QUANTITY", 0, 65535, 7
+        RMSQUAL "NETWORK_BLOCK_COUNT", 0, 127, 8
+        RMSQUAL "BUFFER_COUNT", 127, 255, RMSN
+        CMPL    RMSVALS+<4*6>, #1       ; there is no prologue 1
+        BNEQ    10$
+        BRW     VALERR
+10$:    MOVL    RMSVALS+<4*RMSN>, R6
+        BLSS    40$
+        CLRL    R5                      ; which kinds: bit n, RMSVALS's n
+        PRESENT "SEQUENTIAL"
+        BLBC    R0, 15$
+        BISL2   #^XE, R5
+15$:    PRESENT "DISK"
+        BLBC    R0, 16$
+        BISL2   #2, R5
+16$:    PRESENT "MAGTAPE"
+        BLBC    R0, 17$
+        BISL2   #4, R5
+17$:    PRESENT "UNIT_RECORD"
+        BLBC    R0, 18$
+        BISL2   #8, R5
+18$:    PRESENT "RELATIVE"
+        BLBC    R0, 19$
+        BISL2   #16, R5
+19$:    PRESENT "INDEXED"
+        BLBC    R0, 20$
+        BISL2   #32, R5
+20$:    TSTL    R5
+        BNEQ    25$
+        MOVL    #^XE, R5
+25$:    MOVL    #1, R4
+30$:    BBC     R4, R5, 35$
+        MOVL    R6, RMSVALS[R4]
+35$:    AOBLEQ  #5, R4, 30$
+40$:    PRESENT "SYSTEM"
+        BICL3   #^C1, R0, RMSSYS
+        CLRL    R6
+50$:    MOVL    RMSVALS[R6], RMSVALUE
+        BLSS    60$
+        MOVZWL  RMSITEMS[R6], RMSITEM
+        $CMKRNL_S ROUTIN=G^RMS$SETDEF, ARGLST=RMSARGS
+        BLBC    R0, 90$
+60$:    AOBLSS  #RMSN, R6, 50$
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+VALERR: PRINT   "%SET-E-VALERR, specified value is out of legal range"
+        MOVL    #ERROR, R0
+        RET
+
+; RMSNUM: NUMDSC = a value. R1 = it, a decimal number from 0 to R3, or
+; with a minus sign to -R2, without its sign. R0 = SS$_NORMAL, or
+; SS$_BADPARAM if it isn't one. Uses R0-R5.
+RMSNUM:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVAB   NUMBUF, R5
+        MOVZWL  NUMDSC, R4
+        BEQL    80$
+        CMPB    (R5), #^A/-/
+        BNEQ    5$
+        INCL    R5
+        MOVL    R2, R3
+        DECL    R4
+        BEQL    80$
+5$:     CLRL    R1
+10$:    MOVZBL  (R5)+, R0
+        SUBL2   #^A/0/, R0
+        CMPL    R0, #9
+        BGTRU   80$
+        MULL2   #10, R1
+        ADDL2   R0, R1
+        CMPL    R1, R3
+        BGTRU   80$
+        SOBGTR  R4, 10$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADPARAM, R0
         RSB
 
         .END    START

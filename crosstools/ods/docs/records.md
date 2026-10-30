@@ -6,7 +6,7 @@ reads the formats text uses (`src/records.rs`):
 
 | Format | Layout |
 | --- | --- |
-| VAR | 16-bit little-endian length, data, one pad byte if the length is odd. In files with `BLK` a length of 0xFFFF means the rest of the block is unused |
+| VAR | 16-bit little-endian length, big-endian with the `MSB` attribute, data, one pad byte if the length is odd. In files with `BLK` a length of 0xFFFF means the rest of the block is unused |
 | VFC | VAR whose first `VFCSIZE` bytes (default 2) are print control |
 | FIX | `RSIZE` bytes each, padded to even length |
 | STMLF, STMCR, STM | bytes; records end at LF, CR, or CR LF |

@@ -1793,9 +1793,79 @@
 3 Examples
 
   $ SET PROTECTION=(S:RWED,O:RWED,G:RE,W) REPORT.TXT
+2 RMS_DEFAULT
+  Sets the defaults RMS uses for your process's files when a program
+  leaves them at 0: how many blocks each buffer holds, how many buffers
+  a stream gets, how many blocks a file grows by. With /SYSTEM it sets
+  the system's, which every process uses where its own are 0; that
+  takes the CMKRNL privilege. SHOW RMS_DEFAULT shows them.
+
+    SET RMS_DEFAULT
+3 Qualifiers
+/BLOCK_COUNT
+  /BLOCK_COUNT=n
+
+  How many blocks each buffer of a sequential file holds, 0 to 255.
+  RMS reads and writes up to that many in one transfer, 127 at most.
+/BUFFER_COUNT
+  /BUFFER_COUNT=n
+
+  How many buffers a stream gets, -127 to 255: a negative count means
+  the same as a positive one. It sets the count for the kinds of file
+  /DISK, /MAGTAPE, /UNIT_RECORD, /SEQUENTIAL, /RELATIVE and /INDEXED
+  name, or, without any of them, for sequential files.
+/DISK
+  /DISK
+
+  /BUFFER_COUNT sets the count for sequential files on disks.
+/EXTEND_QUANTITY
+  /EXTEND_QUANTITY=n
+
+  How many blocks a file is extended by when it fills, 0 to 65535,
+  unless the program or the file says.
+/INDEXED
+  /INDEXED
+
+  /BUFFER_COUNT sets the count for indexed files.
+/MAGTAPE
+  /MAGTAPE
+
+  /BUFFER_COUNT sets the count for sequential files on magnetic tapes.
+/NETWORK_BLOCK_COUNT
+  /NETWORK_BLOCK_COUNT=n
+
+  How many blocks a transfer to a file on another node holds, 0 to
+  127.
+/PROLOG
+  /PROLOG=n
+
+  The prologue of a new indexed file: 2, 3, or 0 for RMS's choice.
+/RELATIVE
+  /RELATIVE
+
+  /BUFFER_COUNT sets the count for relative files.
+/SEQUENTIAL
+  /SEQUENTIAL
+
+  /BUFFER_COUNT sets the count for sequential files on disks, magnetic
+  tapes and unit record devices.
+/SYSTEM
+  /SYSTEM
+
+  Sets the system's defaults instead of your process's. It takes the
+  CMKRNL privilege.
+/UNIT_RECORD
+  /UNIT_RECORD
+
+  /BUFFER_COUNT sets the count for sequential files on unit record
+  devices, such as terminals.
+3 Examples
+
+  $ SET RMS_DEFAULT/BLOCK_COUNT=64/BUFFER_COUNT=2
 2 VOLUME
   Changes a mounted volume's label, owner and protection, on the
-  volume. It takes the CMKRNL privilege.
+  volume. It takes control access to the volume: you must own it, or
+  have the SYSPRV privilege.
 
     SET VOLUME device-name[:]
 3 Qualifiers
@@ -2021,6 +2091,14 @@
   /USER=uic
 
   The user to ask about.
+2 RMS_DEFAULT
+  Shows the defaults RMS uses for your process's files and the
+  system's, which SET RMS_DEFAULT sets: how many blocks each buffer
+  holds, how many buffers a stream gets for each kind of file, the
+  network block count, the prologue of a new indexed file and how many
+  blocks a file grows by. A process's 0 means the system's.
+
+    SHOW RMS_DEFAULT
 2 SYMBOL
   Shows a symbol's value.
 

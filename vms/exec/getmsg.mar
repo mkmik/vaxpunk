@@ -1261,6 +1261,10 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "NOPRIV"
         .ASCIC  "insufficient privilege or object protection violation"
+        .LONG   SS$_NOCMKRNL
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOCMKRNL"
+        .ASCIC  "operation requires CMKRNL privilege"
         .LONG   SS$_ACEIDMATCH
         .ASCIC  "SYSTEM"
         .ASCIC  "ACEIDMATCH"

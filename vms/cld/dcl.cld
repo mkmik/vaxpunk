@@ -213,6 +213,7 @@ define type SET_OPTIONS
 	keyword PROCESS, syntax=SET_PROCESS
 	keyword PROMPT, value
 	keyword PROTECTION, value(list), syntax=SET_PROTECTION
+	keyword RMS_DEFAULT, syntax=SET_RMS_DEFAULT
 	keyword SECURITY, syntax=SET_SECURITY
 	keyword TERMINAL, syntax=SET_TERMINAL
 	keyword VERIFY, negatable
@@ -257,6 +258,25 @@ define syntax SET_PROTECTION
 	image SET
 	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
 	parameter P2, label=FILE, prompt="File", value(required, type=$infile)
+
+! SET RMS_DEFAULT: SET.EXE sets the process's RMS defaults, or the
+! system's: blocks in a buffer, buffers for each kind of file, prologue,
+! extension and network block count.
+define syntax SET_RMS_DEFAULT
+	image SET
+	parameter P1, label=OPTION, value(required, type=SET_OPTIONS)
+	qualifier BLOCK_COUNT, nonnegatable, value(required)
+	qualifier BUFFER_COUNT, nonnegatable, value(required)
+	qualifier DISK, nonnegatable
+	qualifier EXTEND_QUANTITY, nonnegatable, value(required)
+	qualifier INDEXED, nonnegatable
+	qualifier MAGTAPE, nonnegatable
+	qualifier NETWORK_BLOCK_COUNT, nonnegatable, value(required)
+	qualifier PROLOG, nonnegatable, value(required)
+	qualifier RELATIVE, nonnegatable
+	qualifier SEQUENTIAL, nonnegatable
+	qualifier SYSTEM, nonnegatable
+	qualifier UNIT_RECORD, nonnegatable
 
 ! SET SECURITY object[,...]: SET.EXE changes each object's owner,
 ! protection and ACL with $SET_SECURITY: /ACL's ACEs are added at the
@@ -361,6 +381,7 @@ define type SHOW_OPTIONS
 	keyword MEMORY, syntax=SHOW_MEMORY
 	keyword PROCESS, syntax=SHOW_IMAGE
 	keyword QUOTA, syntax=SHOW_QUOTA
+	keyword RMS_DEFAULT, syntax=SHOW_RMS_DEFAULT
 	keyword SECURITY, syntax=SHOW_SECURITY
 	keyword SYMBOL, syntax=SHOW_SYMBOL
 	keyword SYSTEM, syntax=SHOW_IMAGE
@@ -427,6 +448,12 @@ define syntax SHOW_MEMORY
 define syntax SHOW_ERROR
 	image SHOW
 	qualifier FULL
+
+! SHOW RMS_DEFAULT: SHOW.EXE shows the process's and the system's RMS
+! defaults.
+define syntax SHOW_RMS_DEFAULT
+	image SHOW
+	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
 
 ! SHOW QUOTA [/USER=uic] [/DISK=device]: SHOW.EXE.
 define syntax SHOW_QUOTA

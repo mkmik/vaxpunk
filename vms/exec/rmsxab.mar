@@ -114,8 +114,6 @@ RMS$XABOUT::
         MOVW    IFB$AB_HDR+FAT$W_FFBYTE(R7), XAB$W_FFB(R6)
         CMPB    IFB$B_ORG(R7), #FAB$C_SEQ
         BNEQ    110$
-        TSTL    IFB$L_BUF(R7)
-        BEQL    110$
         DIVL3   #BLOCK, IFB$L_EOF(R7), R0
         ADDL3   #1, R0, XAB$L_EBK(R6)
         BICW3   #^C<BLOCK-1>, IFB$L_EOF(R7), XAB$W_FFB(R6)

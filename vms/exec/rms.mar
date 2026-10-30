@@ -51,7 +51,9 @@
 ; together, and its records are locked as a stream reads them
 ; (RMS$LOCKREC, docs/adr/0046-shared-indexed-files-and-record-locks.md);
 ; a service that changes a file gives its other opens its header
-; (RMS$SYNC).
+; (RMS$SYNC). A sequential file's stream gets its buffers at $CONNECT,
+; as many and as big as the RAB, the process's defaults or the system's
+; say, which SET RMS_DEFAULT sets (RMS$SETDEF).
 ;
 ; ponytail: the services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
@@ -81,6 +83,8 @@
         $IFBDEF
         $XABFHCDEF
         $LCKDEF
+        $JPIDEF
+        $PRVDEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$MATCH, FIL$EOF, FIL$ISDIR
@@ -199,6 +203,40 @@ MFDNAME:
 ELLIPSIS:
         .ASCII  "!"                     ; ... in WPAT
 DOTDIR: .ASCII  ".DIR"
+
+; The system's RMS defaults, which SET RMS_DEFAULT/SYSTEM sets, each what
+; VMS's SYSGEN parameter of that name starts at. A process's own,
+; PCB$B_RMSDFMBC and those after it, win where they aren't 0.
+        .ALIGN  LONG
+SGN$GW_RMSEXTEND::                      ; RMS_EXTEND_SIZE: blocks a file is extended by, 0 for RMS's choice
+        .WORD   0
+SGN$GB_RMSDFMBC::                       ; RMS_DFMBC: blocks in an RMS buffer
+        .BYTE   32
+SGN$AB_RMSDFMBF::                       ; RMS_DFMBFSDK, _DFMBFSMT, _DFMBFSUR, _DFMBFREL and _DFMBFIDX: buffers, by PCB$K_RMSMBF_
+        .BYTE   0, 0, 0, 0, 0
+SGN$GB_RMSDFNBC::                       ; RMS_DFNBC: blocks in a network transfer
+        .BYTE   8
+SGN$GB_RMSPROLOG::                      ; RMS_PROLOGUE: an indexed file's prologue, 0 for RMS's choice
+        .BYTE   0
+
+; DEFAULT item, size, at: an RMS default RMS$SETDEF sets: its $GETJPI
+; item code, its size, a byte or word, and where it is, at that offset
+; in the PCB and that address for the system's.
+        .MACRO  DEFAULT ITEM, SIZE, PCB, SGN
+        .WORD   JPI$_'ITEM, SIZE, PCB, 0
+        .ADDRESS SGN
+        .ENDM   DEFAULT
+DEFAULTS:
+        DEFAULT RMS_DFMBC, 1, PCB$B_RMSDFMBC, SGN$GB_RMSDFMBC
+        DEFAULT RMS_DFMBFSDK, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_SDK, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_SDK
+        DEFAULT RMS_DFMBFSMT, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_SMT, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_SMT
+        DEFAULT RMS_DFMBFSUR, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_SUR, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_SUR
+        DEFAULT RMS_DFMBFREL, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_REL, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_REL
+        DEFAULT RMS_DFMBFIDX, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_IDX, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_IDX
+        DEFAULT RMS_DFNBC, 1, PCB$B_RMSDFNBC, SGN$GB_RMSDFNBC
+        DEFAULT RMS_PROLOGUE, 1, PCB$B_RMSPROLOG, SGN$GB_RMSPROLOG
+        DEFAULT RMS_EXTEND_SIZE, 2, PCB$W_RMSEXTEND, SGN$GW_RMSEXTEND
+        .WORD   0
 
         .PSECT  $CODE$
 
@@ -1990,6 +2028,8 @@ NEWIFAB:
         POPR    #^M<R4, R5>
         MOVL    #IFB$K_LENGTH, IFB$L_SIZE(R7)
         CLRL    IFB$L_RLB(R7)
+        CLRL    IFB$W_RTDEQ(R7)         ; with IFB$B_MBC and IFB$B_MBF
+        CLRQ    IFB$L_BDB(R7)           ; and IFB$L_USE
         MOVL    F11$GL_VCB, IFB$L_VCB(R7)
         MNEGL   #1, IFB$L_CUR(R7)
         MOVL    #RMS$_NORMAL, R0
@@ -2025,6 +2065,40 @@ RMS$ALLOCBUF::
 80$:    TSTL    (SP)+
         MOVL    #RMS$_DME, R0
         RSB
+
+; RMS$SETDEF item, value, system: SET RMS_DEFAULT's, in kernel mode:
+; gives the process's RMS default item, one of DEFAULTS's $GETJPI item
+; codes, JPI$_RMS_DFMBC and the others, the value, or with system 1 the
+; system's, which takes CMKRNL among the process's permanent privileges.
+; R0 = SS$_NORMAL, SS$_NOCMKRNL, or SS$_BADPARAM for an item it doesn't
+; know.
+; vaxpunk: VMS's SET.EXE, installed with CMKRNL, writes them itself, the
+; process's in its P1 and the system's in the SYSGEN parameters.
+        .ENTRY  RMS$SETDEF, ^M<R2, R3>
+        MOVAB   DEFAULTS, R2
+10$:    MOVZWL  (R2), R0
+        BEQL    80$
+        CMPL    R0, 4(AP)
+        BEQL    20$
+        ADDL2   #12, R2
+        BRB     10$
+20$:    MOVL    SCH$GL_CURPCB, R1
+        BLBC    12(AP), 30$
+        MOVL    #SS$_NOCMKRNL, R0
+        BBC     #PRV$V_CMKRNL, PCB$Q_PROCPRIV(R1), 90$
+        MOVL    8(R2), R1               ; the system's
+        BRB     40$
+30$:    MOVZWL  4(R2), R3               ; the process's
+        ADDL2   R3, R1
+40$:    CMPW    2(R2), #1
+        BNEQ    50$
+        MOVB    8(AP), (R1)
+        BRB     60$
+50$:    MOVW    8(AP), (R1)
+60$:    MOVL    #SS$_NORMAL, R0
+        RET
+80$:    MOVL    #SS$_BADPARAM, R0
+90$:    RET
 
 ; FREEIFAB: R7 = an IFAB. Gives back its record locks, its access
 ; arbitration lock, and it and its buffer to the pool, and R0 as it was.
@@ -2791,8 +2865,10 @@ RABIFAB:
 ; $CONNECT rab: connects the RAB to the file its FAB opened: its stream
 ; starts at the first record, along key RAB$B_KRF in an indexed file, or
 ; with RAB$M_EOF past the last. RMS$_FAB if the RAB's FAB isn't one,
-; RMS$_IFI if it opened no file, RMS$_ACT if a RAB is connected to it
-; already, RMS$_KRF for a key the file hasn't.
+; RMS$_IFI if it opened no file, RMS$_CCR if the RAB is connected to it
+; already, RMS$_ACT if another is, RMS$_KRF for a key the file hasn't, or
+; the organization's error: a sequential file's stream gets its buffers
+; (SEQ$CONNECT).
 ; ponytail: one stream per file, FAB$M_MSE or not.
         .ENTRY  EXE$CONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
@@ -2803,7 +2879,10 @@ RABIFAB:
         MOVZWL  FAB$W_IFI(R1), R8
         BSBW    GETIFAB
         BLBC    R0, 90$
-        MOVL    #RMS$_ACT, R0
+        MOVL    #RMS$_CCR, R0           ; this RAB is
+        CMPL    IFB$L_RAB(R7), R10
+        BEQL    90$
+        MOVL    #RMS$_ACT, R0           ; another is
         TSTL    IFB$L_RAB(R7)
         BNEQ    90$
         MOVL    IFB$L_VCB(R7), F11$GL_VCB
@@ -2975,12 +3054,13 @@ FLUSH:
 ; is, or the default (f11wrt.mar), unless the FAB's protection XAB gives
 ; one, and an owner, not 0, which takes the system's access if it isn't
 ; the process's UIC (CREPRO). RMS$_WLD for a wildcard, RMS$_ORG for an
-; organization RMS doesn't know, RMS$_WLK on a volume that can't be
-; written, RMS$_PRV without write access to the directory or the
-; system's for the owner, SS$_ACCVIO if the caller can't read the XAB
-; chain or write the XAB, RMS$_FEX if that version is there, RMS$_FUL if
-; the volume is full, RMS$_CRE for another error from the file system,
-; which goes in FAB$L_STV, or the organization's error.
+; organization RMS doesn't know, RMS$_RFM for FAB$M_MSB without VAR
+; records, RMS$_WLK on a volume that can't be written, RMS$_PRV without
+; write access to the directory or the system's for the owner,
+; SS$_ACCVIO if the caller can't read the XAB chain or write the XAB,
+; RMS$_FEX if that version is there, RMS$_FUL if the volume is full,
+; RMS$_CRE for another error from the file system, which goes in
+; FAB$L_STV, or the organization's error.
         .ENTRY  EXE$CREATE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
@@ -2990,7 +3070,11 @@ FLUSH:
         BGTRU   90$
         BITB    #^X0F, FAB$B_ORG(R10)
         BNEQ    90$
-        BSBW    PARSEFAB
+        MOVL    #RMS$_RFM, R0           ; FAB$M_MSB is for VAR records' sizes
+        BBC     #FAB$V_MSB, FAB$B_RAT(R10), 3$
+        CMPB    FAB$B_RFM(R10), #FAB$C_VAR
+        BNEQ    90$
+3$:     BSBW    PARSEFAB
         BLBC    R0, 90$
         MOVL    #RMS$_WLD, R0
         TSTL    WILD
