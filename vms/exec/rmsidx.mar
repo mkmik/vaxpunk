@@ -106,8 +106,6 @@ IDX$OPEN::
         MOVAB   IDX$AB_PLG(R2), R1
         MOVL    #RMS$_DTP, R0
         BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R1), R9
-        CMPB    R9, #KEY$C_PACKED
-        BEQL    90$
         CMPB    R9, #KEY$C_COLLATED
         BGEQU   90$
         MOVZBL  KEY$B_IDXBKTSZ(R1), R0
@@ -448,15 +446,22 @@ IDX$GETKEY::
 90$:    RSB
 
 ; IDX$KEYCMP: R9 = a key descriptor, R1 and R2 = two keys, R3 = how many
-; of their bytes to compare, strings only: integers compare whole. R0 =
-; -1, 0 or 1 as the first is less than, equal to or greater than the
-; second in the key's order. Keeps every other register.
+; of their bytes to compare, strings only: integers and packed decimal
+; compare whole. R0 = -1, 0 or 1 as the first is less than, equal to or
+; greater than the second in the key's order: packed decimal by value,
+; so -0 is 0, and a sign of A, C, E or F is +. Keeps every other
+; register.
 IDX$KEYCMP::
         .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R4, R5>
         BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R4
         BEQL    20$
-        CMPB    R4, #KEY$C_UNSGNQUAD
+        CMPB    R4, #KEY$C_PACKED
+        BNEQ    3$
+        MOVZBL  KEY$B_KEYSZ(R9), R4     ; packed decimal
+        BSBW    PACKCMP
+        BRB     50$
+3$:     CMPB    R4, #KEY$C_UNSGNQUAD
         BGTRU   20$
         MOVZBL  KEY$B_KEYSZ(R9), R3     ; an integer: from its top byte
         DECL    R3
@@ -492,21 +497,131 @@ IDX$KEYCMP::
         RSB
 
 ; IDX$ISNULL: R9 = a key descriptor with KEY$V_NULKEYS, R1 = a key. R0 =
-; 1 if every byte of it is the null character, else 0. Keeps every
-; other register.
+; 1 if every byte of it is the null character, or a packed decimal one
+; is 0, whatever its sign, else 0. Keeps every other register.
 IDX$ISNULL::
         .JSB_ENTRY
         CLRL    R0
         BBC     #KEY$V_NULKEYS, KEY$B_FLAGS(R9), 90$
-        PUSHR   #^M<R1, R2>
+        PUSHR   #^M<R1, R2, R4>
         MOVZBL  KEY$B_KEYSZ(R9), R2
-        SKPC    KEY$B_NULLCHAR(R9), R2, (R1)
+        BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R4
+        CMPB    R4, #KEY$C_PACKED
+        BNEQ    10$
+        MOVL    R2, R4
+        BSBW    PACKZERO
+        BRB     85$
+10$:    SKPC    KEY$B_NULLCHAR(R9), R2, (R1)
         BNEQ    80$
         MOVL    #1, R0
         BRB     85$
 80$:    CLRL    R0
-85$:    POPR    #^M<R1, R2>
+85$:    POPR    #^M<R1, R2, R4>
 90$:    RSB
+
+; IDX$KEYOK: R9 = a key descriptor, R1 = a key. R0 = 1 if it is a value
+; of the key's type: every key is, but a packed decimal one whose digits
+; aren't 0-9 or whose sign isn't A-F. Keeps every other register.
+IDX$KEYOK::
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3>
+        MOVL    #1, R0
+        BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R2
+        CMPB    R2, #KEY$C_PACKED
+        BNEQ    90$
+        CLRL    R0
+        MOVZBL  KEY$B_KEYSZ(R9), R2
+10$:    MOVZBL  (R1)+, R3
+        CMPB    R3, #^XA0               ; a digit on top
+        BGEQU   90$
+        BICL2   #^XF0, R3
+        DECL    R2
+        BEQL    20$
+        CMPL    R3, #9                  ; and below, but in the last byte
+        BGTRU   90$
+        BRB     10$
+20$:    CMPL    R3, #^XA                ; where it is the sign
+        BLSSU   90$
+        MOVL    #1, R0
+90$:    POPR    #^M<R1, R2, R3>
+        RSB
+
+; PACKCMP: R1 and R2 = two packed decimal numbers, R4 = their size in
+; bytes. R0 = -1, 0 or 1 as the first is less than, equal to or greater
+; than the second. Keeps every other register.
+PACKCMP:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3, R4, R5, R6>
+        BSBW    PACKNEG
+        MOVL    R0, R5                  ; R5, R6 = 1 if negative
+        PUSHL   R1
+        MOVL    R2, R1
+        BSBW    PACKNEG
+        MOVL    (SP)+, R1
+        MOVL    R0, R6
+        CMPL    R5, R6
+        BEQL    10$
+        MNEGL   #1, R0                  ; the negative one is less
+        TSTL    R5
+        BNEQ    90$
+        MOVL    #1, R0
+        BRB     90$
+10$:    SUBL3   #1, R4, R0              ; one sign: the digits, the bytes before
+        CMPC3   R0, (R1), (R2)          ; the last, then its top
+        BNEQ    20$
+        BICB3   #^X0F, (R1), R0
+        BICB3   #^X0F, (R3), R2
+        CMPB    R0, R2
+        BEQL    40$
+20$:    BLSSU   25$
+        MOVL    #1, R0
+        BRB     30$
+25$:    MNEGL   #1, R0
+30$:    TSTL    R5                      ; negative: the bigger, the less
+        BEQL    90$
+        MNEGL   R0, R0
+        BRB     90$
+40$:    CLRL    R0
+90$:    POPR    #^M<R1, R2, R3, R4, R5, R6>
+        RSB
+
+; PACKNEG: R1 = a packed decimal number, R4 = its size in bytes. R0 = 1
+; if its sign is B or D and it isn't 0, else 0. Keeps every other
+; register.
+PACKNEG:
+        .JSB_ENTRY
+        PUSHL   R2
+        CLRL    R0
+        BICB3   #^XF0, -1(R1)[R4], R2
+        CMPB    R2, #^XB
+        BEQL    10$
+        CMPB    R2, #^XD
+        BNEQ    90$
+10$:    BSBW    PACKZERO
+        XORL2   #1, R0
+90$:    MOVL    (SP)+, R2
+        RSB
+
+; PACKZERO: R1 = a packed decimal number, R4 = its size in bytes. R0 = 1
+; if its digits are all 0, else 0. Keeps every other register.
+PACKZERO:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3>
+        CLRL    R0
+        SUBL3   #1, R4, R2
+        BEQL    10$
+        PUSHL   R1
+        SKPC    #0, R2, (R1)
+        MOVL    R0, R3
+        MOVL    (SP)+, R1
+        CLRL    R0
+        TSTL    R3
+        BNEQ    90$
+10$:    BITB    #^XF0, -1(R1)[R4]
+        BNEQ    90$
+        MOVL    #1, R0
+90$:    POPR    #^M<R1, R2, R3>
+        RSB
 
 ; IDX$EXPKEY: R9 = a key descriptor, R1 = a compressed key: its length,
 ; its front count and its bytes, R2 = the key before it in the bucket,
@@ -730,6 +845,9 @@ IDX$ENTRY::
         BNEQ    30$
         MOVL    R4, W$L_BODY(R8)
         MOVZWL  IFB$W_MRS(R7), W$L_BLEN(R8)
+        BSBW    STUB                    ; a stub keeps only the key
+        BLBC    R0, 35$
+        MOVZBL  KEY$B_KEYSZ(R9), W$L_BLEN(R8)
         BRB     35$
 30$:    MOVZWL  (R4)+, W$L_BLEN(R8)
         MOVL    R4, W$L_BODY(R8)
@@ -747,15 +865,18 @@ IDX$ENTRY::
         BEQL    85$
         MOVL    R0, W$L_KLEN(R8)
         BRB     70$
-50$:    MOVZBL  KEY$B_KEYSZ(R9), R0     ; whole: first, or in place
-        TSTB    KEY$B_KEYREF(R9)
-        BNEQ    60$
-        BBS     #KEY$V_REC_COMPR, KEY$B_FLAGS(R9), 60$
+50$:    TSTB    KEY$B_KEYREF(R9)        ; whole: first, or in place
+        BNEQ    55$
+        BBS     #KEY$V_REC_COMPR, KEY$B_FLAGS(R9), 55$
+        BSBW    STUB
+        BLBS    R0, 55$
+        MOVZBL  KEY$B_KEYSZ(R9), R0
         CLRL    W$L_KLEN(R8)
         MOVL    W$L_BLEN(R8), R2
         BSBW    IDX$GETKEY
         BLBC    R0, 85$
         BRB     70$
+55$:    MOVZBL  KEY$B_KEYSZ(R9), R0
 60$:    MOVL    R0, W$L_KLEN(R8)
         CMPL    R0, W$L_BLEN(R8)
         BGTRU   85$
@@ -766,6 +887,20 @@ IDX$ENTRY::
 80$:    RSB
 85$:    MOVL    W$L_VBN(R8), R1
         MOVL    #RMS$_IRC, R0
+90$:    RSB
+
+; STUB: R11 = an indexed file's state, R8 = a walk at a primary record,
+; its control byte parsed. R0 = 1 if it is a prologue 3 record $DELETE
+; left in place, the last in its bucket or a duplicate, which keeps only
+; its key, first: a FIX one without its size word; else 0. Keeps every
+; other register.
+STUB:
+        .JSB_ENTRY
+        CLRL    R0
+        CMPL    X$L_PLG(R11), #PLG$C_VER_3
+        BNEQ    90$
+        BBC     #IRC$V_DELETED, W$L_CTL(R8), 90$
+        MOVL    #1, R0
 90$:    RSB
 
 ; PTRAT: R2 = an entry, R4 = its pointer's size, 2-5. R0 = the pointer at
@@ -1101,7 +1236,9 @@ LOCKIT:
 ; RAB$L_KBF points at, RAB$B_KSZ bytes, or the key's size if it is 0, to
 ; X$T_KEY: R6 = its size, R9 = key RAB$B_KRF's descriptor. R0 =
 ; RMS$_NORMAL, RMS$_KRF, RMS$_KSZ, longer than the key or short of an
-; integer, or RMS$_KBF if the caller can't read it. Uses R0-R6, R9.
+; integer or packed decimal one, RMS$_KEY for a packed decimal one that
+; isn't a number, or RMS$_KBF if the caller can't read it. Uses R0-R6,
+; R9.
 KEYARG:
         .JSB_ENTRY  OUTPUT=<R6, R9>, SCRATCH=<R2, R3, R4, R5>
         MOVL    #RMS$_KRF, R0
@@ -1125,9 +1262,14 @@ KEYARG:
         PUSHL   R6
         MOVC3   R6, (R1), X$T_KEY(R11)
         MOVL    (SP)+, R6
+        MOVAB   X$T_KEY(R11), R1        ; a value of the key's type?
+        BSBW    IDX$KEYOK
+        BLBC    R0, 85$
         MOVL    #RMS$_NORMAL, R0
         RSB
 80$:    MOVL    #RMS$_KBF, R0
+        RSB
+85$:    MOVL    #RMS$_KEY, R0
 90$:    RSB
 
 ; IDX$MATCHKEY: R9 = a key descriptor, R6 = a size, R1 = a key. R0 = 0 if its

@@ -18,7 +18,7 @@ cd "$vms"
 rm -f disk2.img
 "$ods" init disk2.img --size 200M --label STAGE >/dev/null 2>&1
 "$ods" mkdir disk2.img '[OUT]'
-for f in "$here"/*.txt "$here"/*.fdl "$here"/make.com; do
+for f in "$here"/*.txt "$here"/*.fdl "$here"/*.com; do
 	"$ods" copy-in disk2.img "$f" "[000000]$(basename "$f" | tr a-z A-Z)" --mode lines-to-records >/dev/null 2>&1
 done
 cmd=$(mktemp)

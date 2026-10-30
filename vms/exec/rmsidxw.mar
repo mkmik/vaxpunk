@@ -51,7 +51,7 @@
         .EXTERNAL IDX$EXPKEY, IDX$LOADW, IDX$ENTRY, IDX$NEXTW, IDX$IXENTRY
         .EXTERNAL IDX$IXPTR, IDX$DESCEND, IDX$FINDKEY, IDX$SCAN, IDX$FETCH
         .EXTERNAL IDX$PTRNEXT, IDX$MATCHKEY, IDX$RDPLG, IDX$AB_PLG, IDX$NEXT
-        .EXTERNAL IDX$DECODE, IDX$KEEP, IDX$SETCTX
+        .EXTERNAL IDX$DECODE, IDX$KEEP, IDX$SETCTX, IDX$KEYOK
         .EXTERNAL RMS$LOCKREC, RMS$UNLOCKAUTO, RMS$RECHELD
 
 BLOCK = 512
@@ -271,19 +271,30 @@ INITW:
 
 ; HIGHKEY: R9 = a key descriptor, R3 = 256 bytes. Puts there the highest
 ; key there can be in the key's order: all ones, or a signed integer's
-; highest, or for a descending key the lowest. Keeps every register.
+; highest, or for a descending key the lowest; a packed decimal one's is
+; 99...9C, or descending 99...9B, as VMS's. Keeps every register.
 HIGHKEY:
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4, R5>
         MOVZBL  KEY$B_KEYSZ(R9), R2
         MNEGL   #1, R1                  ; all ones, or zeros descending
-        BBC     #5, KEY$B_DATATYPE(R9), 10$
+        BBC     #5, KEY$B_DATATYPE(R9), 5$
         CLRL    R1
+5$:     BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R0
+        CMPB    R0, #KEY$C_PACKED
+        BNEQ    10$
+        MOVL    #^X99, R1               ; packed decimal: 9s
 10$:    MOVC5   #0, (R3), R1, R2, (R3)
         MOVL    12(SP), R3
         MOVZBL  KEY$B_KEYSZ(R9), R2
         BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R0
-        CMPB    R0, #KEY$C_SGNWORD      ; signed: the top byte's sign bit
+        CMPB    R0, #KEY$C_PACKED       ; and a sign
+        BNEQ    15$
+        MOVB    #^X9C, -1(R3)[R2]
+        BBC     #5, KEY$B_DATATYPE(R9), 30$
+        MOVB    #^X9B, -1(R3)[R2]
+        BRB     30$
+15$:    CMPB    R0, #KEY$C_SGNWORD      ; signed: the top byte's sign bit
         BEQL    20$
         CMPB    R0, #KEY$C_SGNLONG
         BEQL    20$
@@ -1756,6 +1767,34 @@ RECARG:
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RSB
 
+; KEYSOK: R11 = an indexed file's state, R1 = a record, R2 = its size.
+; R0 = RMS$_NORMAL, or RMS$_KEY if a key it has is packed decimal and
+; not a number (IDX$KEYOK). Keeps every other register.
+KEYSOK:
+        .JSB_ENTRY
+        PUSHR   #^M<R3, R6, R9>
+        CLRL    R6
+10$:    MOVL    #RMS$_NORMAL, R0
+        CMPL    R6, X$L_NKEYS(R11)
+        BGEQU   90$
+        MOVL    R6, R0
+        BSBW    IDX$KEYDESC
+        INCL    R6
+        BICB3   #KEY$C_DESCENDING, KEY$B_DATATYPE(R9), R0
+        CMPB    R0, #KEY$C_PACKED
+        BNEQ    10$
+        MOVAB   X$T_KEY2(R11), R3
+        BSBW    IDX$GETKEY
+        BLBC    R0, 10$                 ; it hasn't the key
+        PUSHL   R1
+        MOVL    R3, R1
+        BSBW    IDX$KEYOK
+        MOVL    (SP)+, R1
+        BLBS    R0, 10$
+        MOVL    #RMS$_KEY, R0
+90$:    POPR    #^M<R3, R6, R9>
+        RSB
+
 ; ALTKEY: R11 = an indexed file's state, R9 = an alternate key's
 ; descriptor, R1 = a record, R2 = its size, R3 = 256 bytes. Puts its key
 ; there: R0 = 1, or 0 if it has none: too short or null. Keeps every
@@ -1780,8 +1819,8 @@ ALTKEY:
 ; RMS$_OK_DUP if it has a key another record has, RMS$_DUP if that key
 ; has no duplicates, but with RAB$M_UIF it updates the record with its
 ; primary key, locking it first (RMS$_RLK), RMS$_FAC, RMS$_RSZ,
-; RMS$_SEQ, RMS$_RAC, SS$_ACCVIO, or a bucket's error. Uses R0-R6, R8,
-; R9, R11.
+; RMS$_SEQ, RMS$_RAC, RMS$_KEY for a packed decimal key that isn't a
+; number, SS$_ACCVIO, or a bucket's error. Uses R0-R6, R8, R9, R11.
 IDX$PUT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
         MOVL    IFB$L_IDX(R7), R11
@@ -1800,8 +1839,12 @@ IDX$PUT::
         BLSSU   8$
         BRW     90$
 8$:     PUSHR   #^M<R1, R2>             ; 0 the record, 4 its size
-        CLRL    R0
+        BSBW    KEYSOK
+        BLBS    R0, 9$
+        BRW     88$
+9$:     CLRL    R0
         BSBW    IDX$KEYDESC
+        MOVQ    (SP), R1
         MOVAB   X$T_KEY(R11), R3
         BSBW    IDX$GETKEY
         BLBS    R0, 10$
@@ -1947,12 +1990,15 @@ IDX$UPDATE::
 ; its SIDR pointers moving, and the record goes back where it was if it
 ; fits, else is taken out and put again (PUTPRI), its RFA kept. R0 =
 ; RMS$_NORMAL, RMS$_CHK for another primary key, RMS$_CHG, RMS$_DUP,
-; RMS$_RSZ, or a bucket's error. Uses R0-R6, R8, R9.
+; RMS$_RSZ, RMS$_KEY (KEYSOK), or a bucket's error. Uses R0-R6, R8, R9.
 UPDCORE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9>
         PUSHR   #^M<R1, R2>             ; 0 the record, 4 its size
         CLRL    -(SP)                   ; 0 the old one's size
-        BSBW    FETCHCUR                ; the old one, in X$L_WORK
+        BSBW    KEYSOK
+        BLBS    R0, 3$
+        BRW     88$
+3$:     BSBW    FETCHCUR                ; the old one, in X$L_WORK
         BLBS    R0, 5$
         BRW     88$
 5$:     MOVL    X$L_WORK(R11), R3
@@ -2272,8 +2318,10 @@ IDX$FLUSH::
 ; key without an index yet, and area 0 holding the prologue. Then opens
 ; it (IDX$OPEN). R0 = RMS$_NORMAL, RMS$_KEY without an XABKEY, RMS$_REF
 ; for keys not numbered from 0 in turn, RMS$_KSZ for a key of no bytes,
-; over 255, more than 8 segments, or an integer not one segment of its
-; size, RMS$_DTP for a data type RMS hasn't, RMS$_AID, RMS$_IAN or
+; over 255, more than 8 segments, or an integer not its size, RMS$_SEG
+; for an integer or packed decimal key of more than one segment, RMS$_SIZ
+; for a packed decimal one over 16 bytes, 31 digits, RMS$_DTP for a data
+; type RMS hasn't, RMS$_AID, RMS$_IAN or
 ; RMS$_DAN for an area there isn't, RMS$_BKS for a bucket over 63 blocks,
 ; RMS$_XAB, or the file system's error. Uses R0-R6, R8, R9, R11.
 IDX$CREATE::
@@ -2532,12 +2580,12 @@ MKKEY:
 20$:    BISB2   #KEY$M_INITIDX, R0
         MOVL    #RMS$_DTP, R1
         BICB3   #KEY$C_DESCENDING, XAB$B_DTP(R4), R2
-        CMPB    R2, #KEY$C_PACKED
-        BEQL    87$
         CMPB    R2, #KEY$C_COLLATED
         BGEQU   87$
         BITB    #^C<KEY$C_DESCENDING!7>, XAB$B_DTP(R4)
         BNEQ    87$
+        CMPB    R2, #KEY$C_PACKED       ; packed decimal: its records may be
+        BEQL    24$                     ; compressed, not the key
         TSTB    R2                      ; strings may be compressed, a key
         BNEQ    30$                     ; and its index if it has 6 bytes
         PUSHR   #^M<R1, R2>             ; at least, as VMS's
@@ -2596,9 +2644,17 @@ MKKEY:
         MOVB    R0, KEY$B_KEYSZ(R3)
         BICB3   #KEY$C_DESCENDING, XAB$B_DTP(R4), R2    ; an integer: its size
         BEQL    60$
+        MOVL    #RMS$_SEG, R1           ; one segment
         CMPB    KEY$B_SEGMENTS(R3), #1
         BNEQ    87$
-        MOVL    #2, R5
+        MOVL    #RMS$_KSZ, R1
+        CMPB    R2, #KEY$C_PACKED       ; packed decimal: 31 digits at most
+        BNEQ    52$
+        MOVL    #RMS$_SIZ, R1
+        CMPL    R0, #16
+        BGTRU   87$
+        BRB     60$
+52$:    MOVL    #2, R5
         CMPB    R2, #KEY$C_UNSGNWORD
         BLEQU   55$
         MOVL    #4, R5

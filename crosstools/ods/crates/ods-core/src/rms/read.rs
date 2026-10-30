@@ -344,6 +344,17 @@ impl<'a> Indexed<'a> {
         Ok((key, rec))
     }
 
+    /// A deleted record's key, all its body keeps; it has no record.
+    fn stub_key(&self, k: &Key, body: &[u8], prev: &[u8], vbn: u32) -> Result<(Vec<u8>, Vec<u8>)> {
+        let ksz = k.keysz() as usize;
+        let key = if k.has(keyflag::KEY_COMPR) {
+            expand_key(body, prev, ksz).ok_or(RmsError::Corrupt { what: "compressed key", vbn })?.0
+        } else {
+            body.get(..ksz).ok_or(RmsError::Corrupt { what: "deleted record shorter than its key", vbn })?.to_vec()
+        };
+        Ok((key, Vec::new()))
+    }
+
     /// The records and RRVs of a primary data bucket.
     pub(crate) fn data_bucket(&self, k: &Key, vbn: u32, b: &[u8]) -> Result<Vec<Item>> {
         let free = Self::freespace(b, vbn)?;
@@ -374,7 +385,12 @@ impl<'a> Indexed<'a> {
                 out.push(Item::Rrv { ctrl, id, to: (vbn2, id2) });
                 continue;
             }
+            // A record prologue 3's $DELETE left in place, the last of its
+            // bucket or one with duplicates, keeps only its key: a FIX one
+            // has no size word, so KEYSZ bytes.
+            let stub = self.plg == 3 && ctrl & irc::DELETED != 0;
             let size = match raw_fix {
+                Some(_) if stub => k.keysz() as usize,
                 Some(n) => n,
                 None => {
                     let s = b.get(p..p + 2).filter(|_| p + 2 <= free).ok_or(short.clone())?;
@@ -384,7 +400,7 @@ impl<'a> Indexed<'a> {
             };
             let body = b.get(p..p + size).filter(|_| p + size <= free).ok_or(short.clone())?;
             p += size;
-            let (key, rec) = self.decode(k, body, &prev, vbn)?;
+            let (key, rec) = if stub { self.stub_key(k, body, &prev, vbn)? } else { self.decode(k, body, &prev, vbn)? };
             prev.clone_from(&key);
             out.push(Item::Rec(DataRec { ctrl, id, rfa: (vbn2, id2), key, rec }));
         }

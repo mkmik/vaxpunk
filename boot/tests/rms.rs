@@ -41,6 +41,10 @@ const FILES: &[(&str, usize)] = &[
     ("p2b.idx", 1),
     ("p2i.idx", 3),
     ("p2m.idx", 2),
+    ("pd1.idx", 3),
+    ("pd2.idx", 2),
+    ("pd3.idx", 1),
+    ("pkn.idx", 8),
     ("rel.rel", 1),
     ("relf.rel", 1),
 ];
@@ -196,7 +200,8 @@ fn fixtures() {
 /// make.com's conversions: output, FDL, input, qualifiers, keys. Not
 /// REL.REL's, which DCL's READ/DELETE and WRITE/UPDATE change after.
 /// IDX63 is IDX1 in buckets of 63 blocks, the most a prologue allows,
-/// with IDX1's records.
+/// with IDX1's records; PD3N and PKNN have the packed decimal fixtures'
+/// records and keys, put in the order of their primary key.
 const CONVERSIONS: &[(&str, &str, &str, &str, usize)] = &[
     ("IDX1.IDX", "IDX1.FDL", "DATA.TXT", "", 2),
     ("IDXC.IDX", "IDXC.FDL", "DATA.TXT", "", 2),
@@ -204,6 +209,8 @@ const CONVERSIONS: &[(&str, &str, &str, &str, usize)] = &[
     ("COMP.IDX", "COMP.FDL", "COMP.TXT", "", 1),
     ("RELF.REL", "RELF.FDL", "FIXD.TXT", "/PAD", 1),
     ("IDX63.IDX", "IDX63.FDL", "DATA.TXT", "", 2),
+    ("PD3N.IDX", "PD3.FDL", "PD3.IDX", "", 1),
+    ("PKNN.IDX", "PKN.FDL", "PKN.IDX", "", 8),
 ];
 
 /// An FDL file of make's, or IDX63.FDL, IDX1.FDL with 63-block buckets.
@@ -233,6 +240,22 @@ fn convert() {
         for file in [fdl, input] {
             let spec = format!("[000000]{file}");
             if vol.lookup(&spec).is_ok() {
+                continue;
+            }
+            if file.ends_with(".IDX") {
+                // A fixture, with its FDL's attributes.
+                let name = file.to_lowercase();
+                let data = fs::read(fixtures.join(&name)).unwrap();
+                let text = fs::read_to_string(fixtures.join(name.replace(".idx", ".fdl"))).unwrap();
+                let attrs = fdl::parse(&text).unwrap().record_attrs();
+                vol.copy_in(
+                    &mut &data[..],
+                    &spec,
+                    Conversion::Binary,
+                    Some(data.len() as u64),
+                    Some(attrs),
+                )
+                .unwrap();
                 continue;
             }
             let data = fdl_text(&fixtures.join("make"), file);
@@ -269,6 +292,9 @@ fn convert() {
             }
             let stem = match out.split('.').next().unwrap() {
                 "IDX63" => "idx1".to_string(),
+                stem if stem.starts_with('P') && stem.ends_with('N') => {
+                    stem[..stem.len() - 1].to_lowercase()
+                }
                 stem => stem.to_lowercase(),
             };
             for key in 0..*keys {

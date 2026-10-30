@@ -202,14 +202,18 @@ impl<B: AsRef<[u8]>> KeyDesc<B> {
         Some(k)
     }
 
-    /// Whether a key is all `NULLCHAR`, the null key.
+    /// Whether a key is the null key: all `NULLCHAR`, or a packed decimal
+    /// 0, whatever its sign.
     pub fn is_null(&self, key: &[u8]) -> bool {
+        if self.datatype() & !dtype::DESCENDING == dtype::DECIMAL {
+            return key.split_last().is_some_and(|(l, d)| l & 0xf0 == 0 && d.iter().all(|&c| c == 0));
+        }
         key.iter().all(|&c| c == self.nullchar())
     }
 
     /// Orders two keys as RMS does for this key's data type: strings (and
-    /// segmented keys) as unsigned bytes, integers as integers, descending
-    /// types the other way round.
+    /// segmented keys) as unsigned bytes, integers as integers, packed
+    /// decimal by value, descending types the other way round.
     pub fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         compare(self.datatype(), self.segments(), a, b)
     }
@@ -233,10 +237,27 @@ pub(crate) fn compare(datatype: u8, segments: u8, a: &[u8], b: &[u8]) -> Orderin
     let o = if segments == 1 && width > 0 && a.len() == width && b.len() == width {
         let signed = matches!(datatype & !dtype::DESCENDING, dtype::INT2 | dtype::INT4 | dtype::INT8);
         int(a, signed).cmp(&int(b, signed))
+    } else if datatype & !dtype::DESCENDING == dtype::DECIMAL && a.len() == b.len() && !a.is_empty() {
+        packed(a).cmp(&packed(b))
     } else {
         a.cmp(b)
     };
     if datatype & dtype::DESCENDING != 0 { o.reverse() } else { o }
+}
+
+/// A packed decimal number as RMS orders it: negative (sign B or D) and
+/// not zero, then its digits, the bytes but the last's sign nibble, which
+/// compare as they are; a negative one's the other way round.
+fn packed(k: &[u8]) -> (bool, Vec<u8>) {
+    let mut digits = k.to_vec();
+    let last = digits.len() - 1;
+    let sign = digits[last] & 0xf;
+    digits[last] &= 0xf0;
+    let negative = matches!(sign, 0xb | 0xd) && digits.iter().any(|&d| d != 0);
+    if negative {
+        digits.iter_mut().for_each(|d| *d = !*d);
+    }
+    (!negative, digits)
 }
 
 /// Whether a prologue block's checksum, the sum of its first 255 words, is
@@ -407,6 +428,12 @@ mod tests {
         assert_eq!(compare(dtype::BIN4, 1, &[0, 1, 0, 0], &[0xff, 0, 0, 0]), Ordering::Greater);
         assert_eq!(compare(dtype::INT2, 1, &[0xff, 0xff], &[1, 0]), Ordering::Less);
         assert_eq!(compare(dtype::STRING | dtype::DESCENDING, 1, b"a", b"b"), Ordering::Greater);
+        // Packed decimal: -5 < -0 = +0 < 7, whatever the plus sign.
+        let p = |v: &[u8]| v.to_vec();
+        assert_eq!(compare(dtype::DECIMAL, 1, &p(&[0, 0x5d]), &p(&[0, 0x0f])), Ordering::Less);
+        assert_eq!(compare(dtype::DECIMAL, 1, &p(&[0, 0x0d]), &p(&[0, 0x0c])), Ordering::Equal);
+        assert_eq!(compare(dtype::DECIMAL, 1, &p(&[0x99, 0x9d]), &p(&[0, 0x5d])), Ordering::Less);
+        assert_eq!(compare(dtype::DECIMAL, 1, &p(&[0, 0x7a]), &p(&[0, 0x7e])), Ordering::Equal);
         assert_eq!(uint(&[1, 2]), 0x201);
     }
 }

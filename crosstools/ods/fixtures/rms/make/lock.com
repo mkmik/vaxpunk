@@ -1,7 +1,8 @@
 $ ! LOCK.COM: record and file locking from DCL, two and three streams in
 $ ! one process on an indexed file, L.IDX, made as IDX1: what each command
 $ ! said, and the records it read, as LOCK.LOG has them from OpenVMS
-$ ! Alpha V8.4. P1 is where IDX1.FDL and DATA.TXT are.
+$ ! Alpha V8.4, its console's output; MAKE.COM doesn't run it. P1 is where
+$ ! IDX1.FDL and DATA.TXT are.
 $ SET NOON
 $ IN = P1
 $ CONVERT/FDL='IN'IDX1.FDL 'IN'DATA.TXT L.IDX
