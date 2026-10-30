@@ -1,0 +1,21 @@
+MODULE CQ (MAIN = M) =
+BEGIN
+! CVTQS and CVTQF round the quadword once: 2^54 + 2^30 + 1 is above half
+! way between two singles, but a double rounds it to half way.
+REQUIRE 'PRINT';
+BUILTIN
+    CVTQS, CVTQF;
+OWN
+    Q, C;
+ROUTINE M =
+    BEGIN
+    Q = 18014399583223809;
+    CVTQS(Q, C); PRINT(.C);
+    CVTQF(Q, C); PRINT(.C);
+    Q = -.Q;
+    CVTQS(Q, C); PRINT(.C);
+    CVTQF(Q, C); PRINT(.C);
+    1
+    END;
+END
+ELUDOM

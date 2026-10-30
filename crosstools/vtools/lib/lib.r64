@@ -207,8 +207,8 @@ LITERAL
     PCB$V_QUOWAIT = 4,  ! vaxpunk: IOC$ALLOCIRP found a quota short, which $QIO waits for
     DYN$C_PCB = 1;  ! PCB$B_TYPE
 MACRO
-    PCB$L_SQFL = 0, 0, 32, 0 %,  ! state queue: COM queue or a wait queue
-    PCB$L_SQBL = 4, 0, 32, 0 %,
+    PCB$L_SQFL = 0, 0, 32, 1 %,  ! state queue: COM queue or a wait queue
+    PCB$L_SQBL = 4, 0, 32, 1 %,
     PCB$W_SIZE = 8, 0, 16, 0 %,
     PCB$B_TYPE = 10, 0, 8, 0 %,
     PCB$B_PRI = 11, 0, 8, 0 %,  ! current priority, 0-31, higher first
@@ -217,8 +217,8 @@ MACRO
     PCB$L_STS = 20, 0, 32, 0 %,  ! PCB$V_
     PCB$L_EFCS = 24, 0, 32, 0 %,  ! event flags 0-31
     PCB$L_EFCU = 28, 0, 32, 0 %,  ! 32-63
-    PCB$L_EFC2P = 32, 0, 32, 0 %,  ! common cluster 2 (64-95): its CEB
-    PCB$L_EFC3P = 36, 0, 32, 0 %,  ! 3 (96-127)
+    PCB$L_EFC2P = 32, 0, 32, 1 %,  ! common cluster 2 (64-95): its CEB
+    PCB$L_EFC3P = 36, 0, 32, 1 %,  ! 3 (96-127)
     PCB$L_EFWM = 40, 0, 32, 0 %,  ! a wait's flags
     PCB$L_WEFC = 44, 0, 32, 0 %,  ! and their cluster, 0-3
     PCB$L_KSTACK = 48, 0, 32, 0 %,  ! kernel stack, from pool
@@ -271,10 +271,10 @@ MACRO
 LITERAL
     CEB$K_LENGTH = 48;
 MACRO
-    CEB$L_CEBFL = 0, 0, 32, 0 %,  ! all clusters
-    CEB$L_CEBBL = 4, 0, 32, 0 %,
-    CEB$L_WQFL = 8, 0, 32, 0 %,  ! processes waiting on it
-    CEB$L_WQBL = 12, 0, 32, 0 %,
+    CEB$L_CEBFL = 0, 0, 32, 1 %,  ! all clusters
+    CEB$L_CEBBL = 4, 0, 32, 1 %,
+    CEB$L_WQFL = 8, 0, 32, 1 %,  ! processes waiting on it
+    CEB$L_WQBL = 12, 0, 32, 1 %,
     CEB$L_EFC = 16, 0, 32, 0 %,  ! the flags
     CEB$L_REFC = 20, 0, 32, 0 %,  ! processes associated
     CEB$T_EFCNAM = 24, 0, 0, 0 %;  ! name, .ASCIC, 15 characters
@@ -283,8 +283,8 @@ MACRO
 LITERAL
     GSD$K_LENGTH = 80;  ! without them
 MACRO
-    GSD$L_GSDFL = 0, 0, 32, 0 %,  ! MMG$GQ_GSDHD's queue, or 0 once $DGBLSC took it off
-    GSD$L_GSDBL = 4, 0, 32, 0 %,
+    GSD$L_GSDFL = 0, 0, 32, 1 %,  ! MMG$GQ_GSDHD's queue, or 0 once $DGBLSC took it off
+    GSD$L_GSDBL = 4, 0, 32, 1 %,
     GSD$L_SIZE = 8, 0, 32, 0 %,  ! its size, as allocated
     GSD$L_REFCNT = 12, 0, 32, 0 %,  ! PTEs that map its pages
     GSD$L_FLAGS = 16, 0, 32, 0 %,  ! SEC$M_WRT, SEC$M_PERM and SEC$M_SYSGBL
@@ -300,8 +300,8 @@ LITERAL
     LNMB$K_LENGTH = 16,  ! past that, the strings
     LNMB$M_NODELETE = 1;  ! $DELLNM can't delete it, $CRELNM and $CRELNT can't replace it
 MACRO
-    LNMB$L_FLINK = 0, 0, 32, 0 %,  ! the table
-    LNMB$L_BLINK = 4, 0, 32, 0 %,
+    LNMB$L_FLINK = 0, 0, 32, 1 %,  ! the table
+    LNMB$L_BLINK = 4, 0, 32, 1 %,
     LNMB$W_SIZE = 8, 0, 16, 0 %,  ! its size, as allocated
     LNMB$B_FLAGS = 10, 0, 8, 0 %,  ! LNMB$M_
     LNMB$L_LNMTH = 12, 0, 32, 0 %,  ! a table's header, else 0
@@ -315,8 +315,8 @@ LITERAL
 MACRO
     LNMTH$L_FLINK = 0, 0, 32, 0 %,  ! its names: LNMBs
     LNMTH$L_BLINK = 4, 0, 32, 0 %,
-    LNMTH$L_NAME = 8, 0, 32, 0 %,  ! its LNMB, in a directory
-    LNMTH$L_PARENT = 12, 0, 32, 0 %,  ! its parent table's header, 0 for a directory
+    LNMTH$L_NAME = 8, 0, 32, 1 %,  ! its LNMB, in a directory
+    LNMTH$L_PARENT = 12, 0, 32, 1 %,  ! its parent table's header, 0 for a directory
     LNMTH$L_OWNER = 16, 0, 32, 0 %,  ! a shareable table's owner, a UIC
     LNMTH$W_PROT = 20, 0, 16, 0 %,  ! and its protection mask, as a file's: R, W, C (make a table under it), D
     LNMTH$B_FLAGS = 22, 0, 8, 0 %;  ! LNMTH$M_
@@ -330,13 +330,13 @@ LITERAL
     TQE$C_SSSNGL = 3,  ! a driver's: JSBs TQE$L_AST with R5 = the entry, its own, at IPL$_SYNCH
     DYN$C_TQE = 15;  ! TQE$B_TYPE
 MACRO
-    TQE$L_TQFL = 0, 0, 32, 0 %,  ! timer queue
-    TQE$L_TQBL = 4, 0, 32, 0 %,
+    TQE$L_TQFL = 0, 0, 32, 1 %,  ! timer queue
+    TQE$L_TQBL = 4, 0, 32, 1 %,
     TQE$W_SIZE = 8, 0, 16, 0 %,
     TQE$B_TYPE = 10, 0, 8, 0 %,
     TQE$B_RQTYPE = 11, 0, 8, 0 %,  ! TQE$C_
     TQE$L_PID = 12, 0, 32, 0 %,  ! the process it is for
-    TQE$L_AST = 16, 0, 32, 0 %,  ! $SETIMR's AST routine, or 0
+    TQE$L_AST = 16, 0, 32, 1 %,  ! $SETIMR's AST routine, or 0
     TQE$L_ASTPRM = 20, 0, 32, 0 %,  ! $SETIMR's reqidt, the AST's parameter
     TQE$Q_TIME = 24, 0, 64, 0 %,  ! when it is due
     TQE$Q_DELTA = 32, 0, 64, 0 %,  ! a repeating $SCHDWK's interval
@@ -348,15 +348,15 @@ LITERAL
     ACB$K_LENGTH = 32,
     DYN$C_ACB = 2;  ! ACB$B_TYPE
 MACRO
-    ACB$L_ASTQFL = 0, 0, 32, 0 %,  ! the AST queue
-    ACB$L_ASTQBL = 4, 0, 32, 0 %,
+    ACB$L_ASTQFL = 0, 0, 32, 1 %,  ! the AST queue
+    ACB$L_ASTQBL = 4, 0, 32, 1 %,
     ACB$W_SIZE = 8, 0, 16, 0 %,
     ACB$B_TYPE = 10, 0, 8, 0 %,
     ACB$B_RMOD = 11, 0, 8, 0 %,  ! the access mode the AST is for
     ACB$L_PID = 12, 0, 32, 0 %,  ! the process it is for
-    ACB$L_AST = 16, 0, 32, 0 %,  ! the AST routine, called in that mode
+    ACB$L_AST = 16, 0, 32, 1 %,  ! the AST routine, called in that mode
     ACB$L_ASTPRM = 20, 0, 32, 0 %,  ! its parameter
-    ACB$L_KAST = 24, 0, 32, 0 %;  ! or the executive's routine, for a kernel mode AST: JSB'd with R4 = the PCB, R5 = the ACB, which it frees, at IPL$_SYNCH
+    ACB$L_KAST = 24, 0, 32, 1 %;  ! or the executive's routine, for a kernel mode AST: JSB'd with R4 = the PCB, R5 = the ACB, which it frees, at IPL$_SYNCH
 
 ! $VCBDEF
 LITERAL
@@ -390,11 +390,11 @@ LITERAL
     DDB$K_LENGTH = 32,
     DYN$C_DDB = 6;  ! DDB$B_TYPE
 MACRO
-    DDB$L_LINK = 0, 0, 32, 0 %,  ! the next DDB, or 0
-    DDB$L_UCB = 4, 0, 32, 0 %,  ! its first unit's UCB, the others after it by UCB$L_LINK, by number
+    DDB$L_LINK = 0, 0, 32, 1 %,  ! the next DDB, or 0
+    DDB$L_UCB = 4, 0, 32, 1 %,  ! its first unit's UCB, the others after it by UCB$L_LINK, by number
     DDB$W_SIZE = 8, 0, 16, 0 %,
     DDB$B_TYPE = 10, 0, 8, 0 %,  ! DYN$C_DDB
-    DDB$L_DDT = 12, 0, 32, 0 %,  ! its units' driver's dispatch table
+    DDB$L_DDT = 12, 0, 32, 1 %,  ! its units' driver's dispatch table
     DDB$T_NAME = 16, 0, 0, 0 %;  ! its name, DDC, .ASCIC, 15 characters at most: a unit's is it and the unit's number
 
 ! $DDTDEF
@@ -437,14 +437,14 @@ LITERAL
     UCB$M_DELMBX = 2,
     DYN$C_UCB = 16;  ! UCB$B_TYPE
 MACRO
-    UCB$L_IOQFL = 0, 0, 32, 0 %,  ! IRPs waiting for the device
-    UCB$L_IOQBL = 4, 0, 32, 0 %,
+    UCB$L_IOQFL = 0, 0, 32, 1 %,  ! IRPs waiting for the device
+    UCB$L_IOQBL = 4, 0, 32, 1 %,
     UCB$W_SIZE = 8, 0, 16, 0 %,  ! the UCB's size, a template's its clones'
     UCB$B_TYPE = 10, 0, 8, 0 %,  ! DYN$C_UCB
-    UCB$L_DDB = 12, 0, 32, 0 %,  ! its controller's DDB, which has the device's name but the unit, and its driver
-    UCB$L_LINK = 16, 0, 32, 0 %,  ! the DDB's next unit, by number, or 0
-    UCB$L_DDT = 20, 0, 32, 0 %,  ! its driver's dispatch table, the DDB's
-    UCB$L_VCB = 24, 0, 32, 0 %,  ! a disk's VCB, or 0
+    UCB$L_DDB = 12, 0, 32, 1 %,  ! its controller's DDB, which has the device's name but the unit, and its driver
+    UCB$L_LINK = 16, 0, 32, 1 %,  ! the DDB's next unit, by number, or 0
+    UCB$L_DDT = 20, 0, 32, 1 %,  ! its driver's dispatch table, the DDB's
+    UCB$L_VCB = 24, 0, 32, 1 %,  ! a disk's VCB, or 0
     UCB$L_PID = 28, 0, 32, 0 %,  ! its owner: a terminal's, the process created on it, which a hangup deletes, or 0
     UCB$L_DEVCHAR = 32, 0, 32, 0 %,  ! DEV$ bits, $GETDVI's DVI$_DEVCHAR
     UCB$L_DEVCHAR2 = 36, 0, 32, 0 %,  ! and DEVCHAR2, DVI$_DEVCHAR2
@@ -506,16 +506,16 @@ LITERAL
     IRP$V_STARTED = 1,  ! the terminal has written its prompt
     DYN$C_IRP = 10;  ! IRP$B_TYPE
 MACRO
-    IRP$L_IOQFL = 0, 0, 32, 0 %,  ! the UCB's queue, then the AST queue
-    IRP$L_IOQBL = 4, 0, 32, 0 %,
+    IRP$L_IOQFL = 0, 0, 32, 1 %,  ! the UCB's queue, then the AST queue
+    IRP$L_IOQBL = 4, 0, 32, 1 %,
     IRP$W_SIZE = 8, 0, 16, 0 %,  ! with the prompt and data
     IRP$B_TYPE = 10, 0, 8, 0 %,
     IRP$B_RMOD = 11, 0, 8, 0 %,  ! the AST's mode: kernel, then the caller's
     IRP$L_PID = 12, 0, 32, 0 %,  ! the process it is for
     IRP$L_AST = 16, 0, 32, 0 %,  ! the caller's AST routine, or 0
     IRP$L_ASTPRM = 20, 0, 32, 0 %,  ! its parameter
-    IRP$L_KAST = 24, 0, 32, 0 %,  ! IOC$POST once done, then 0
-    IRP$L_UCB = 28, 0, 32, 0 %,  ! the device
+    IRP$L_KAST = 24, 0, 32, 1 %,  ! IOC$POST once done, then 0
+    IRP$L_UCB = 28, 0, 32, 1 %,  ! the device
     IRP$L_FUNC = 32, 0, 32, 0 %,  ! the function code and its modifiers
     IRP$L_EFN = 36, 0, 32, 0 %,  ! the event flag
     IRP$L_IOSB = 40, 0, 32, 0 %,  ! the caller's I/O status block, or 0
@@ -527,7 +527,7 @@ MACRO
     IRP$L_BUFADR = 60, 0, 32, 0 %,  ! the caller's buffer, p1
     IRP$L_BCNT = 64, 0, 32, 0 %,  ! its size, p2
     IRP$L_PROMPT = 68, 0, 32, 0 %,  ! a read's prompt's size: it is past IRP$K_LENGTH, and the data past it
-    IRP$L_MEDIA = 72, 0, 32, 0 %,  ! a disk's LBN, p3
+    IRP$L_MEDIA = 72, 0, 32, 1 %,  ! a disk's LBN, p3
     IRP$L_POST = 76, 0, 32, 0 %,  ! a routine IOC$POST JSBs, R6 the IRP, in its process, or 0
     IRP$L_BOFF = 80, 0, 32, 0 %,  ! the bytes charged to its process's BYTCNT
     IRP$B_QUOTA = 84, 0, 8, 0 %;  ! what it is charged to: IRP$K_BIO, IRP$K_DIO, or 0 for nothing
@@ -898,3 +898,407 @@ MACRO
     UAF$L_BYTLM = 560, 0, 32, 0 %,  ! buffered I/O bytes
     UAF$L_PBYTLM = 564, 0, 32, 0 %,  ! paged buffered I/O bytes
     UAF$L_JTQUOTA = 568, 0, 32, 0 %;  ! the job table's bytes
+
+! The VAX built-ins BLISS-32 had and BLISS on Alpha dropped, as macros,
+! so VAX BLISS-32 code compiles unchanged: written for vaxpunk after UM
+! chapter 4; vdefs copies this file in after LIB's definitions.
+!
+! Such code declares the built-in, BUILTIN FFS, then calls it, FFS(...).
+! FFS is a macro without parameters for both: in the BUILTIN declaration
+! it ends the list with BARRIER, marks the block as having declared FFS
+! with a literal, and starts a new list; once the block has the mark, it
+! is $FFS, the macro that does the work. As on the VAX, the parameters
+! are addresses, of a word for a length or of a byte for a character
+! (%REF(n) gives one), and the output parameters after a semicolon are
+! not taken. The decimal string built-ins and CRC's are left out; BUGW
+! and BUGL wait for the PAL call they need, and CALLG, EMUL and EDIV
+! under BLISS-32 for LIB$CALLG, LIB$EMUL and LIB$EDIV.
+
+MACRO
+    ! In a BUILTIN declaration: the mark that the block declared it, and
+    ! the built-ins it is made of. A block inside one that declared X
+    ! can't declare it again, as with DEC's LIB (oracle NESTB): it
+    ! needn't, X is declared there already.
+    $$VAX_BUILTIN(MARK)[] =
+        BARRIER; LITERAL MARK = 1; BUILTIN %REMAINING %IF %LENGTH GTR 1 %THEN , %FI BARRIER %;
+
+MACRO
+    FFS = %IF %DECLARED($$VAX_FFS) %THEN $FFS %ELSE $$VAX_BUILTIN($$VAX_FFS) %FI %,
+    FFC = %IF %DECLARED($$VAX_FFC) %THEN $FFC %ELSE $$VAX_BUILTIN($$VAX_FFC) %FI %,
+    LOCC = %IF %DECLARED($$VAX_LOCC) %THEN $LOCC %ELSE $$VAX_BUILTIN($$VAX_LOCC) %FI %,
+    SKPC = %IF %DECLARED($$VAX_SKPC) %THEN $SKPC %ELSE $$VAX_BUILTIN($$VAX_SKPC) %FI %,
+    SCANC = %IF %DECLARED($$VAX_SCANC) %THEN $SCANC %ELSE $$VAX_BUILTIN($$VAX_SCANC) %FI %,
+    SPANC = %IF %DECLARED($$VAX_SPANC) %THEN $SPANC %ELSE $$VAX_BUILTIN($$VAX_SPANC) %FI %,
+    MATCHC = %IF %DECLARED($$VAX_MATCHC) %THEN $MATCHC %ELSE $$VAX_BUILTIN($$VAX_MATCHC) %FI %,
+    MOVC3 = %IF %DECLARED($$VAX_MOVC3) %THEN $MOVC3 %ELSE $$VAX_BUILTIN($$VAX_MOVC3) %FI %,
+    MOVC5 = %IF %DECLARED($$VAX_MOVC5) %THEN $MOVC5 %ELSE $$VAX_BUILTIN($$VAX_MOVC5) %FI %,
+    MOVTC = %IF %DECLARED($$VAX_MOVTC) %THEN $MOVTC %ELSE $$VAX_BUILTIN($$VAX_MOVTC) %FI %,
+    MOVTUC = %IF %DECLARED($$VAX_MOVTUC) %THEN $MOVTUC %ELSE $$VAX_BUILTIN($$VAX_MOVTUC) %FI %,
+    CMPC3 = %IF %DECLARED($$VAX_CMPC3) %THEN $CMPC3 %ELSE $$VAX_BUILTIN($$VAX_CMPC3) %FI %,
+    CMPC5 = %IF %DECLARED($$VAX_CMPC5) %THEN $CMPC5 %ELSE $$VAX_BUILTIN($$VAX_CMPC5) %FI %,
+    EMUL = %IF %DECLARED($$VAX_EMUL) %THEN $EMUL %ELSE $$VAX_BUILTIN($$VAX_EMUL) %FI %,
+    EDIV = %IF %DECLARED($$VAX_EDIV) %THEN $EDIV %ELSE $$VAX_BUILTIN($$VAX_EDIV) %FI %,
+    ASHQ = %IF %DECLARED($$VAX_ASHQ) %THEN $ASHQ %ELSE $$VAX_BUILTIN($$VAX_ASHQ) %FI %,
+    ADDM = %IF %DECLARED($$VAX_ADDM) %THEN $ADDM %ELSE $$VAX_BUILTIN($$VAX_ADDM) %FI %,
+    SUBM = %IF %DECLARED($$VAX_SUBM) %THEN $SUBM %ELSE $$VAX_BUILTIN($$VAX_SUBM) %FI %,
+    CMPM = %IF %DECLARED($$VAX_CMPM) %THEN $CMPM %ELSE $$VAX_BUILTIN($$VAX_CMPM) %FI %,
+    INDEX = %IF %DECLARED($$VAX_INDEX) %THEN $INDEX %ELSE $$VAX_BUILTIN($$VAX_INDEX) %FI %,
+    INSQUE = %IF %DECLARED($$VAX_INSQUE) %THEN $INSQUE %ELSE $$VAX_BUILTIN($$VAX_INSQUE, PAL_INSQUEL) %FI %,
+    REMQUE = %IF %DECLARED($$VAX_REMQUE) %THEN $REMQUE %ELSE $$VAX_BUILTIN($$VAX_REMQUE, PAL_REMQUEL) %FI %,
+    INSQHI = %IF %DECLARED($$VAX_INSQHI) %THEN $INSQHI %ELSE $$VAX_BUILTIN($$VAX_INSQHI, PAL_INSQHIL) %FI %,
+    INSQTI = %IF %DECLARED($$VAX_INSQTI) %THEN $INSQTI %ELSE $$VAX_BUILTIN($$VAX_INSQTI, PAL_INSQTIL) %FI %,
+    REMQHI = %IF %DECLARED($$VAX_REMQHI) %THEN $REMQHI %ELSE $$VAX_BUILTIN($$VAX_REMQHI, PAL_REMQHIL) %FI %,
+    REMQTI = %IF %DECLARED($$VAX_REMQTI) %THEN $REMQTI %ELSE $$VAX_BUILTIN($$VAX_REMQTI, PAL_REMQTIL) %FI %,
+    PROBER = %IF %DECLARED($$VAX_PROBER) %THEN $PROBER %ELSE $$VAX_BUILTIN($$VAX_PROBER, PAL_PROBER) %FI %,
+    PROBEW = %IF %DECLARED($$VAX_PROBEW) %THEN $PROBEW %ELSE $$VAX_BUILTIN($$VAX_PROBEW, PAL_PROBEW) %FI %,
+    MTPR = %IF %DECLARED($$VAX_MTPR) %THEN $MTPR %ELSE $$VAX_BUILTIN($$VAX_MTPR, PAL_MTPR_IPL, PAL_MTPR_SIRR, PAL_MTPR_SCBB) %FI %,
+    MFPR = %IF %DECLARED($$VAX_MFPR) %THEN $MFPR %ELSE $$VAX_BUILTIN($$VAX_MFPR, PAL_MFPR_IPL, PAL_MFPR_SISR, PAL_MFPR_SCBB, PAL_MFPR_PCBB) %FI %,
+    MOVPSL = %IF %DECLARED($$VAX_MOVPSL) %THEN $MOVPSL %ELSE $$VAX_BUILTIN($$VAX_MOVPSL, PAL_RD_PS) %FI %,
+    BISPSW = %IF %DECLARED($$VAX_BISPSW) %THEN $BISPSW %ELSE $$VAX_BUILTIN($$VAX_BISPSW) %FI %,
+    BICPSW = %IF %DECLARED($$VAX_BICPSW) %THEN $BICPSW %ELSE $$VAX_BUILTIN($$VAX_BICPSW) %FI %,
+    HALT = %IF %DECLARED($$VAX_HALT) %THEN $HALT %ELSE $$VAX_BUILTIN($$VAX_HALT, PAL_HALT) %FI %,
+    BPT = %IF %DECLARED($$VAX_BPT) %THEN $BPT %ELSE $$VAX_BUILTIN($$VAX_BPT, PAL_BPT) %FI %,
+    NOP = %IF %DECLARED($$VAX_NOP) %THEN $NOP %ELSE $$VAX_BUILTIN($$VAX_NOP) %FI %,
+    BUGW = %IF %DECLARED($$VAX_BUGW) %THEN $BUGW %ELSE $$VAX_BUILTIN($$VAX_BUGW, PAL_BUGCHK) %FI %,
+    BUGL = %IF %DECLARED($$VAX_BUGL) %THEN $BUGL %ELSE $$VAX_BUILTIN($$VAX_BUGL, PAL_BUGCHK) %FI %,
+    CHME = %IF %DECLARED($$VAX_CHME) %THEN $CHME %ELSE $$VAX_BUILTIN($$VAX_CHME, PAL_CHME) %FI %,
+    CHMK = %IF %DECLARED($$VAX_CHMK) %THEN $CHMK %ELSE $$VAX_BUILTIN($$VAX_CHMK, PAL_CHMK) %FI %,
+    CHMS = %IF %DECLARED($$VAX_CHMS) %THEN $CHMS %ELSE $$VAX_BUILTIN($$VAX_CHMS, PAL_CHMS) %FI %,
+    CHMU = %IF %DECLARED($$VAX_CHMU) %THEN $CHMU %ELSE $$VAX_BUILTIN($$VAX_CHMU, PAL_CHMU) %FI %,
+    CALLG = %IF %DECLARED($$VAX_CALLG) %THEN $CALLG %ELSE $$VAX_BUILTIN($$VAX_CALLG) %FI %;
+
+! What each does. Each reads its operands once, in the order written,
+! as the VAX does, before it acts. A loop tests the length with IF, not
+! AND: BLISS evaluates both of AND's operands, and the byte past the end
+! may be in no page. No comma is outside brackets, LOCAL $$A; LOCAL $$B;
+! and not LOCAL $$A, $$B; so that one can be another macro's actual
+! parameter, CHECK(1, FFS(...)), whose commas end it (oracle MACA).
+MACRO
+    ! FFS and FFC: the first bit set or clear in the field of .SIZA<0, 8>
+    ! bits at bit .POSA of BASE; its position to DSTA, or the field's end;
+    ! 1 if there is none.
+    $FFS(POSA, SIZA, BASE, DSTA) = $$VAX_FIND(1, POSA, SIZA, BASE, DSTA) %,
+    $FFC(POSA, SIZA, BASE, DSTA) = $$VAX_FIND(0, POSA, SIZA, BASE, DSTA) %,
+    $$VAX_FIND(STATE, POSA, SIZA, BASE, DSTA) =
+        BEGIN
+        LOCAL $$B; LOCAL $$P; LOCAL $$E; LOCAL $$D;
+        $$P = .(POSA)<0, 32, 1>;
+        $$E = .$$P + .(SIZA)<0, 8>;
+        $$B = BASE;
+        $$D = DSTA;
+        WHILE (IF .$$P LSS .$$E THEN .(.$$B + .$$P ^ -3)<.$$P AND 7, 1> NEQ STATE ELSE 0) DO
+            $$P = .$$P + 1;
+        (.$$D)<0, 32> = .$$P;
+        .$$P GEQ .$$E
+        END %,
+
+    ! The character string ones, by BLISS's CH$ functions: LOCC, SKPC and
+    ! MATCHC 1 if they find what they look for, else 0.
+    $LOCC(CHARA, LENA, ADDR) = $$VAX_LOCATE(CH$FIND_CH, CHARA, LENA, ADDR) %,
+    $SKPC(CHARA, LENA, ADDR) = $$VAX_LOCATE(CH$FIND_NOT_CH, CHARA, LENA, ADDR) %,
+    $$VAX_LOCATE(FIND, CHARA, LENA, ADDR) =
+        BEGIN
+        LOCAL $$C; LOCAL $$N; LOCAL $$A;
+        $$C = .(CHARA)<0, 8>;
+        $$N = .(LENA)<0, 16>;
+        $$A = ADDR;
+        CH$FAIL(FIND(.$$N, .$$A, .$$C)) EQL 0
+        END %,
+    $MATCHC(OBJLENA, OBJ, SRCLENA, SRC) =
+        BEGIN
+        LOCAL $$M; LOCAL $$O; LOCAL $$N; LOCAL $$S;
+        $$M = .(OBJLENA)<0, 16>;
+        $$O = OBJ;
+        $$N = .(SRCLENA)<0, 16>;
+        $$S = SRC;
+        CH$FAIL(CH$FIND_SUB(.$$N, .$$S, .$$M, .$$O)) EQL 0
+        END %,
+    ! MOVC3 and MOVC5 move as if the operands and the source were all
+    ! read first, so that the strings may overlap, which CH$MOVE's and
+    ! CH$COPY's must not (LRM 20.2.5.1): backwards when the destination is
+    ! after the source; MOVC5's fill byte before anything moves.
+    $MOVC3(LENA, SRC, DST) = $$VAX_MOVE(.(LENA)<0, 16>, SRC, DST) %,
+    $MOVC5(SRCLENA, SRC, FILLA, DSTLENA, DST) =
+        BEGIN
+        LOCAL $$L; LOCAL $$S; LOCAL $$F; LOCAL $$N; LOCAL $$D; LOCAL $$M;
+        $$L = .(SRCLENA)<0, 16>;
+        $$S = SRC;
+        $$F = .(FILLA)<0, 8>;
+        $$N = .(DSTLENA)<0, 16>;
+        $$D = DST;
+        $$M = MINU(.$$L, .$$N);
+        $$VAX_MOVE(.$$M, .$$S, .$$D);
+        CH$FILL(.$$F, .$$N - .$$M, .$$D + .$$M);
+        END %,
+    $$VAX_MOVE(LEN, SRC, DST) =
+        BEGIN
+        LOCAL $$MN; LOCAL $$MS; LOCAL $$MD;
+        $$MN = LEN;
+        $$MS = SRC;
+        $$MD = DST;
+        IF .$$MD GTRA .$$MS
+        THEN DECR $$I FROM .$$MN - 1 TO 0 DO (.$$MD + .$$I)<0, 8> = .(.$$MS + .$$I)<0, 8>
+        ELSE CH$MOVE(.$$MN, .$$MS, .$$MD);
+        END %,
+    $MOVTC(SRCLENA, SRC, FILLA, TBL, DSTLENA, DST) =
+        BEGIN
+        LOCAL $$L; LOCAL $$S; LOCAL $$F; LOCAL $$T; LOCAL $$N;
+        $$L = .(SRCLENA)<0, 16>;
+        $$S = SRC;
+        $$F = .(FILLA)<0, 8>;
+        $$T = TBL;
+        $$N = .(DSTLENA)<0, 16>;
+        CH$TRANSLATE(.$$T, .$$L, .$$S, .$$F, .$$N, DST)
+        END %,
+    $CMPC3(LENA, SRC, DST) =
+        BEGIN
+        LOCAL $$N;
+        $$N = .(LENA)<0, 16>;
+        CH$COMPARE(.$$N, SRC, .$$N, DST)
+        END %,
+    $CMPC5(SRCLENA, SRC, FILLA, DSTLENA, DST) =
+        BEGIN
+        LOCAL $$L; LOCAL $$S; LOCAL $$F; LOCAL $$N;
+        $$L = .(SRCLENA)<0, 16>;
+        $$S = SRC;
+        $$F = .(FILLA)<0, 8>;
+        $$N = .(DSTLENA)<0, 16>;
+        CH$COMPARE(.$$L, .$$S, .$$N, DST, .$$F)
+        END %,
+
+    ! SCANC: the address of the first byte whose table entry AND the mask
+    ! isn't 0, or 0; SPANC the first whose is.
+    $SCANC(LENA, ADDR, TBL, MASKA) = $$VAX_SCAN(1, LENA, ADDR, TBL, MASKA) %,
+    $SPANC(LENA, ADDR, TBL, MASKA) = $$VAX_SCAN(0, LENA, ADDR, TBL, MASKA) %,
+    $$VAX_SCAN(HIT, LENA, ADDR, TBL, MASKA) =
+        BEGIN
+        LOCAL $$A; LOCAL $$N; LOCAL $$T; LOCAL $$M;
+        $$N = .(LENA)<0, 16>;
+        $$A = ADDR;
+        $$T = TBL;
+        $$M = .(MASKA)<0, 8>;
+        WHILE (IF .$$N GTR 0 THEN ((.(.$$T + .(.$$A)<0, 8>)<0, 8> AND .$$M) NEQ 0) NEQ HIT ELSE 0) DO
+            ($$A = .$$A + 1; $$N = .$$N - 1);
+        IF .$$N GTR 0 THEN .$$A ELSE 0
+        END %,
+
+    ! MOVTUC: translates until the escape character, read before anything
+    ! moves; 0, or the address of the source byte that was it.
+    $MOVTUC(SRCLENA, SRC, ESCA, TBL, DSTLENA, DST) =
+        BEGIN
+        LOCAL $$S; LOCAL $$D; LOCAL $$N; LOCAL $$T; LOCAL $$C; LOCAL $$E;
+        $$N = .(SRCLENA)<0, 16>;
+        $$S = SRC;
+        $$E = .(ESCA)<0, 8>;
+        $$T = TBL;
+        $$N = MINU(.$$N, .(DSTLENA)<0, 16>);
+        $$D = DST;
+        WHILE (IF .$$N GTR 0 THEN ($$C = .(.$$T + .(.$$S)<0, 8>)<0, 8>) NEQ .$$E ELSE 0) DO
+            ((.$$D)<0, 8> = .$$C; $$S = .$$S + 1; $$D = .$$D + 1; $$N = .$$N - 1);
+        IF .$$N GTR 0 THEN .$$S ELSE 0
+        END %,
+
+    ! EMUL: .MULR * .MULD + .ADDA, longwords, to the quadword at PROD;
+    ! EDIV: the quadword at DVD by the longword at DIVR, quotient and
+    ! remainder to longwords. ASHQ shifts a quadword. Their result, the
+    ! VAX's PSL, is 1 here.
+    $EMUL(MULR, MULD, ADDA, PROD) =
+        %IF %BPVAL EQL 64 %THEN
+            BEGIN
+            LOCAL $$P;
+            $$P = .(MULR)<0, 32, 1> * .(MULD)<0, 32, 1> + .(ADDA)<0, 32, 1>;
+            (PROD)<0, 64> = .$$P;
+            1
+            END
+        %ELSE
+            BEGIN EXTERNAL ROUTINE LIB$EMUL : BLISS; LIB$EMUL(MULR, MULD, ADDA, PROD); 1 END
+        %FI %,
+    $EDIV(DIVR, DVD, QUO, RMD) =
+        %IF %BPVAL EQL 64 %THEN
+            BEGIN
+            LOCAL $$Q; LOCAL $$D; LOCAL $$QA; LOCAL $$RA;
+            $$D = .(DIVR)<0, 32, 1>;
+            $$Q = .(DVD)<0, 64>;
+            $$QA = QUO;
+            $$RA = RMD;
+            (.$$QA)<0, 32> = .$$Q / .$$D;
+            (.$$RA)<0, 32> = .$$Q MOD .$$D;
+            1
+            END
+        %ELSE
+            BEGIN EXTERNAL ROUTINE LIB$EDIV : BLISS; LIB$EDIV(DIVR, DVD, QUO, RMD); 1 END
+        %FI %,
+    $ASHQ(SHIFTA, SRC, DST) =
+        %IF %BPVAL EQL 64 %THEN
+            BEGIN
+            LOCAL $$H; LOCAL $$V;
+            $$H = .(SHIFTA)<0, 8, 1>;
+            $$V = .(SRC)<0, 64>;
+            (DST)<0, 64> = .$$V ^ .$$H;
+            1
+            END
+        %ELSE
+            %ERROR('ASHQ needs BLISS-64: its quadwords are no BLISS-32 values')
+        %FI %,
+
+    ! ADDM, SUBM and CMPM: multiword integers of SIZE fullwords, the low
+    ! one first.
+    $ADDM(SIZE, SRC1, SRC2, DST) = $$VAX_MULTI(1, SIZE, SRC1, SRC2, DST) %,
+    $SUBM(SIZE, SRC1, SRC2, DST) = $$VAX_MULTI(-1, SIZE, SRC1, SRC2, DST) %,
+    $$VAX_MULTI(SIGN, SIZE, SRC1, SRC2, DST) =
+        BEGIN
+        ! Each fullword wraps into the carry, under the caller's OVERFLOW too.
+        SWITCHES NOOVERFLOW;
+        LOCAL $$C; LOCAL $$K; LOCAL $$A; LOCAL $$B; LOCAL $$S;
+        ! Each operand once, in order, as the VAX reads them.
+        LOCAL $$N; LOCAL $$P1; LOCAL $$P2; LOCAL $$PD;
+        $$N = SIZE; $$P1 = SRC1; $$P2 = SRC2; $$PD = DST;
+        $$C = 0;
+        INCR $$I FROM 0 TO .$$N - 1 DO
+            BEGIN
+            $$A = .(.$$P1 + %UPVAL * .$$I)<0, %BPVAL>;
+            $$B = .(.$$P2 + %UPVAL * .$$I)<0, %BPVAL>;
+            ! ADDM: .$$A + .$$B, SUBM: .$$B - .$$A, with the carry or borrow
+            ! from the fullword before.
+            %IF SIGN GTR 0 %THEN
+                $$S = .$$A + .$$B;
+                $$K = .$$S LSSU .$$A;
+                $$S = .$$S + .$$C;
+                $$C = .$$K OR .$$S LSSU .$$C;
+            %ELSE
+                $$S = .$$B - .$$A;
+                $$K = .$$B LSSU .$$A OR .$$S LSSU .$$C;
+                $$S = .$$S - .$$C;
+                $$C = .$$K;
+            %FI
+            (.$$PD + %UPVAL * .$$I)<0, %BPVAL> = .$$S
+            END
+        END %,
+    $CMPM(SIZE, SRC1, SRC2) =
+        BEGIN
+        LOCAL $$R; LOCAL $$A; LOCAL $$B;
+        LOCAL $$N; LOCAL $$P1; LOCAL $$P2;
+        $$N = SIZE; $$P1 = SRC1; $$P2 = SRC2;
+        $$R = 0;
+        DECR $$I FROM .$$N - 1 TO 0 DO
+            BEGIN
+            $$A = .(.$$P1 + %UPVAL * .$$I)<0, %BPVAL>;
+            $$B = .(.$$P2 + %UPVAL * .$$I)<0, %BPVAL>;
+            IF .$$A NEQ .$$B THEN
+                BEGIN
+                $$R = (IF (IF .$$I EQL .$$N - 1
+                        THEN .(.$$P1 + %UPVAL * .$$I)<0, %BPVAL, 1> LSS .(.$$P2 + %UPVAL * .$$I)<0, %BPVAL, 1>
+                        ELSE .$$A LSSU .$$B) THEN -1 ELSE 1);
+                EXITLOOP
+                END
+            END;
+        .$$R
+        END %,
+
+    ! INDEX: (.INA + .SUB) * .SCALE to OUTA, the subscript checked against
+    ! LOW and HIGH; out of range it signals SS$_SUBRNG, 1196. Like the
+    ! VAX's, it never signals an overflow.
+    $INDEX(SUB, LOW, HIGH, SCALE, INA, OUTA) =
+        BEGIN
+        SWITCHES NOOVERFLOW;
+        LOCAL $$S; LOCAL $$L; LOCAL $$H; LOCAL $$K; LOCAL $$I; LOCAL $$O;
+        $$S = .(SUB)<0, 32, 1>;
+        $$L = .(LOW)<0, 32, 1>;
+        $$H = .(HIGH)<0, 32, 1>;
+        $$K = .(SCALE)<0, 32, 1>;
+        $$I = .(INA)<0, 32, 1>;
+        $$O = OUTA;
+        IF .$$S LSS .$$L OR .$$S GTR .$$H
+        THEN SIGNAL(1196);
+        (.$$O)<0, 32> = (.$$I + .$$S) * .$$K
+        END %,
+
+    ! The queues, by the PAL's calls, with the VAX's values (UM 4.64,
+    ! 4.65, 4.83, 4.84) where the PAL's differ: INSQUE 1 if the entry is
+    ! the queue's only one; INSQHI and INSQTI 2 if it is, else 0; REMQUE,
+    ! REMQHI and REMQTI 0 if they removed one, 2 if they removed the
+    ! last, 3 if the queue was empty, with the entry's address to the
+    ! longword ADDR. The interlocked ones are 1 if another CPU held the
+    ! queue.
+    $INSQUE(ENTRY, PRED) =
+        BEGIN
+        LOCAL $$E;
+        $$E = ENTRY;
+        PAL_INSQUEL(PRED, .$$E)
+        END %,
+    $REMQUE(ENTRY, ADDR) =
+        BEGIN
+        LOCAL $$R; LOCAL $$E; LOCAL $$N; LOCAL $$A;
+        $$N = ENTRY;
+        $$A = ADDR;
+        $$R = PAL_REMQUEL(.$$N; $$E);
+        (.$$A)<0, 32> = .$$E;
+        IF .$$R LSS 0 THEN 3 ELSE IF .$$R EQL 0 THEN 2 ELSE 0
+        END %,
+    $INSQHI(ENTRY, HEADER) = $$INSQI(PAL_INSQHIL, ENTRY, HEADER) %,
+    $INSQTI(ENTRY, HEADER) = $$INSQI(PAL_INSQTIL, ENTRY, HEADER) %,
+    $REMQHI(HEADER, ADDR) = $$REMQI(PAL_REMQHIL, HEADER, ADDR) %,
+    $REMQTI(HEADER, ADDR) = $$REMQI(PAL_REMQTIL, HEADER, ADDR) %,
+    ! The PAL's -1, 0 and 1 for an insert.
+    $$INSQI(CALL, ENTRY, HEADER) =
+        BEGIN
+        LOCAL $$R; LOCAL $$E;
+        $$E = ENTRY;
+        $$R = CALL(HEADER, .$$E);
+        IF .$$R LSS 0 THEN 1 ELSE 2 * .$$R
+        END %,
+    ! The PAL's -1, 0, 1 and 2 for a remove.
+    $$REMQI(CALL, HEADER, ADDR) =
+        BEGIN
+        LOCAL $$R; LOCAL $$E; LOCAL $$H; LOCAL $$A;
+        $$H = HEADER;
+        $$A = ADDR;
+        $$R = CALL(.$$H; $$E);
+        ! Busy, the VAX stops before it writes ADDR.
+        IF .$$R GEQ 0 THEN (.$$A)<0, 32> = .$$E;
+        IF .$$R LSS 0 THEN 1 ELSE IF .$$R EQL 0 THEN 3 ELSE IF .$$R EQL 1 THEN 0 ELSE 2
+        END %,
+
+    ! Probes, the PS, processor registers and the rest of the machine.
+    $PROBER(MODEA, LENA, BASE) = $$VAX_PROBE(PAL_PROBER, MODEA, LENA, BASE) %,
+    $PROBEW(MODEA, LENA, BASE) = $$VAX_PROBE(PAL_PROBEW, MODEA, LENA, BASE) %,
+    $$VAX_PROBE(CALL, MODEA, LENA, BASE) =
+        BEGIN
+        LOCAL $$M; LOCAL $$N;
+        $$M = .(MODEA)<0, 8>;
+        $$N = .(LENA)<0, 16>;
+        CALL(BASE, .$$N, .$$M)
+        END %,
+    $MOVPSL(DSTA) = (DSTA)<0, 32> = PAL_RD_PS() %,
+    ! The VAX's arithmetic trap enables: ARM64 has none to set, but the
+    ! mask is read, as the VAX reads it.
+    $BISPSW(MASKA) = (.(MASKA)<0, 16>; 0) %,
+    $BICPSW(MASKA) = (.(MASKA)<0, 16>; 0) %,
+    $MTPR(SRCA, PROCREG) =
+        %IF %IDENTICAL(PROCREG, PR$_IPL) %THEN PAL_MTPR_IPL(.(SRCA)<0, 32>)
+        %ELSE %IF %IDENTICAL(PROCREG, PR$_SIRR) %THEN PAL_MTPR_SIRR(.(SRCA)<0, 32>)
+        %ELSE %IF %IDENTICAL(PROCREG, PR$_SCBB) %THEN PAL_MTPR_SCBB(.(SRCA)<0, 32>)
+        %ELSE %ERROR('MTPR: vaxpunk''s PAL has calls for PR$_IPL, PR$_SIRR and PR$_SCBB')
+        %FI %FI %FI %,
+    $MFPR(PROCREG, DSTA) =
+        %IF %IDENTICAL(PROCREG, PR$_IPL) %THEN (DSTA)<0, 32> = PAL_MFPR_IPL()
+        %ELSE %IF %IDENTICAL(PROCREG, PR$_SISR) %THEN (DSTA)<0, 32> = PAL_MFPR_SISR()
+        %ELSE %IF %IDENTICAL(PROCREG, PR$_SCBB) %THEN (DSTA)<0, 32> = PAL_MFPR_SCBB()
+        %ELSE %IF %IDENTICAL(PROCREG, PR$_PCBB) %THEN (DSTA)<0, 32> = PAL_MFPR_PCBB()
+        %ELSE %ERROR('MFPR: vaxpunk''s PAL has calls for PR$_IPL, PR$_SISR, PR$_SCBB and PR$_PCBB')
+        %FI %FI %FI %FI %,
+    ! No operands, but a call's (): X takes them, so that NOP() is no
+    ! call of 0.
+    $HALT(X) = PAL_HALT() %,
+    $BPT(X) = PAL_BPT() %,
+    $NOP(X) = (0) %,
+    $BUGW(CODEA) = PAL_BUGCHK(.(CODEA)<0, 16>) %,
+    $BUGL(CODEA) = PAL_BUGCHK(.(CODEA)<0, 32>) %,
+    $CHME(CODEA) = PAL_CHME(.(CODEA)<0, 16, 1>) %,
+    $CHMK(CODEA) = PAL_CHMK(.(CODEA)<0, 16, 1>) %,
+    $CHMS(CODEA) = PAL_CHMS(.(CODEA)<0, 16, 1>) %,
+    $CHMU(CODEA) = PAL_CHMU(.(CODEA)<0, 16, 1>) %,
+
+    ! CALLG: the routine called with the argument list at ARGLIST.
+    $CALLG(ARGLIST, RTN) =
+        BEGIN EXTERNAL ROUTINE LIB$CALLG : BLISS; LIB$CALLG(ARGLIST, RTN) END %;

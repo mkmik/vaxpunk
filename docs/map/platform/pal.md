@@ -126,27 +126,40 @@ note = "PRD-0003 tier 4 #38; main.c ponytail on UART_PADDR"
 
 [[feature]]
 id = "floating-point"
-title = "MTPR_FEN and CLRFEN: floating point enabled per process"
-status = "todo"
-note = "DESIGN-0001 The Alpha calls: kept, with floating point"
+title = "MFPR_FEN, MTPR_FEN and CLRFEN: floating point enabled per process"
+status = "done"
+note = "DESIGN-0001 Process contexts: FEN clear sets seL4's fpuDisabled on the context's threads, and a floating point instruction is a reserved instruction (vms/sysexe/paltest.b64)"
 
 [[feature]]
 id = "interlocked-queues"
-title = "INSQHIL ... REMQUEQ, the interlocked queue calls"
-status = "todo"
-note = "DESIGN-0001 The Alpha calls: kept; ADR-0002 says hot paths may want inline code"
+title = "INSQHIL ... REMQUEQ/D, the queue calls"
+status = "done"
+note = "DESIGN-0001 Queues: interlocked as the PAL makes each while the executive waits; vmacro's INSQUE and REMQUE and vbliss's PAL_INSQUEx stay inline (ADR-0002); vms/sysexe/paltest.b64"
+
+[[feature]]
+id = "mces"
+title = "MFPR_MCES and MTPR_MCES: the machine check error summary"
+status = "done"
+note = "DESIGN-0001 Interrupts and exceptions: DPC and DSC kept, MCK, SCE and PCE never set"
 
 [[feature]]
 id = "machine-checks"
-title = "Machine checks: MCES and the machine check vector"
+title = "Machine checks through the SCB, from the hardware errors seL4 reports"
 status = "todo"
-note = "DESIGN-0001 The Alpha calls: MFPR_MCES, MTPR_MCES kept"
+needs = ["#mces"]
+note = "DESIGN-0001 Interrupts and exceptions: the PAL takes none; the VAX's vector is 0x04, at IPL 31"
 
 [[feature]]
 id = "smp-calls"
-title = "MTPR_IPIR, MFPR_WHAMI and a current process per CPU"
+title = "MTPR_IPIR and MFPR_WHAMI"
+status = "done"
+note = "DESIGN-0001 Interrupts and exceptions: CPU 0, and IPIR does nothing, with no other CPU; an interrupt at IPL 22 and a current process per CPU come with t8y:/platform/smp"
+
+[[feature]]
+id = "bugchk"
+title = "BUGCHK, a bugcheck from any mode"
 status = "todo"
-note = "ADR-0003 consequences; with t8y:/platform/smp"
+note = "DESIGN-0001 The Alpha calls: kept. VAX's BUGW and BUGL, LIB's macros of them (t8y:/host/vdefs#vax-builtin-macros), wait for it"
 
 [[needs]]
 on = "/platform/sel4"

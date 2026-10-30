@@ -1,0 +1,16 @@
+MODULE DIAG2 (MAIN = M) =
+BEGIN
+! Messages: a NOVALUE routine's value used, a macro without its actuals,
+! an unknown name in a block, an extra END.
+ROUTINE NV : NOVALUE = 0;
+MACRO TWO(A, B) = A + B %;
+ROUTINE M =
+    BEGIN
+    LOCAL Z;
+    Z = NV();
+    Z = TWO;
+    Z = .UNKNOWN;
+    1
+    END;
+END
+ELUDOM

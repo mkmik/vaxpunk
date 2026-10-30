@@ -1,0 +1,14 @@
+MODULE NEGO (MAIN = M) =
+BEGIN
+! OVERFLOW and unary minus: the most negative fullword has no negative.
+REQUIRE 'PRINT';
+OWN N : INITIAL(%X'8000000000000000'), K : INITIAL(5);
+ROUTINE M =
+    BEGIN
+    SWITCHES OVERFLOW;
+    PRINT(-.K);
+    PRINT(-.N);
+    1
+    END;
+END
+ELUDOM

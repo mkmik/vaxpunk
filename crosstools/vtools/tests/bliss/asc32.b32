@@ -1,0 +1,13 @@
+MODULE ASC32 (MAIN = M) =
+BEGIN
+! Probe 17: %ASCID under /A32, its first four bytes.
+REQUIRE 'PRINT32';
+BIND D = %ASCID 'HELLO' : VECTOR[, BYTE];
+ROUTINE M =
+    BEGIN
+    INCR I FROM 0 TO 3 DO
+        PRINT(.D[.I]);
+    1
+    END;
+END
+ELUDOM

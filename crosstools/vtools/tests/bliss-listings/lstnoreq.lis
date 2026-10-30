@@ -1,0 +1,45 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTNOREQ.B64;1
+
+    0	      1 ! BLISS: /SOURCE_LIST=(EXPAND_MACROS,NOREQUIRE)
+    0	      2 MODULE LSTNOREQ (MAIN = M) =
+    0	      3 BEGIN
+    1	      4 ! The listing with /SOURCE_LIST=(EXPAND_MACROS,NOREQUIRE).
+    1	      5 REQUIRE 'PRINT';
+    1	     55 LIBRARY 'LA';
+    1	     57 MACRO
+    1	     58     TWICE(X) = X + X %,
+    1	     59     SUM[A] = + A %;
+    1	     60 ROUTINE M =
+    1	     61     BEGIN
+    2	     62     LOCAL Y;
+    2	     63     Y = TWICE(3) SUM(1, 2);
+
+LSTNOREQ                        Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTNOREQ.B64;1
+
+		;;    [TWICE]=  3 + 3
+		;;    [SUM]=  ( + 1 , + 2 )
+    2	     64     PRINT(.Y);
+    2	     65     1
+    2	     66     END;
+    1	     67 END
+    1	     68 ELUDOM
+
+
+;				Library Statistics
+;
+;					     -------- Symbols --------	    Pages
+;	File				     Total    Loaded   Percent      Mapped
+;
+;  SYS$SYSDEVICE:[ORACLE]LA.L64;1	         2         0         0         5
+
+
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTNOREQ.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE/SOURCE_LIST=(EXPAND_MACROS,NOREQUIRE) LSTNOREQ.B64

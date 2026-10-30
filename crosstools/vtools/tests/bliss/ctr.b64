@@ -1,0 +1,15 @@
+MODULE CTR (MAIN = M) =
+BEGIN
+! A required file.s COMPILETIME name after %ASSIGN, read by name and by a
+! macro bound to it.
+REQUIRE 'PRINT';
+REQUIRE 'CTREQ';
+%ASSIGN(N, 5)
+ROUTINE M =
+    BEGIN
+    PRINT(READ_N);
+    PRINT(N);
+    1
+    END;
+END
+ELUDOM

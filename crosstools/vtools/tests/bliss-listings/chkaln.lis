@@ -1,0 +1,44 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CHKALN.B64;1
+
+    0	      1 ! BLISS: /CHECK=ALIGNMENT
+    0	      2 MODULE CHKALN (MAIN = M) =
+    0	      3 BEGIN
+    1	      4 ! /CHECK=ALIGNMENT: declarations and field references poorly aligned.
+    1	      5 OWN
+    1	      6     B : BYTE,
+    1	      7     W : WORD ALIGN(0),
+		.....................1 
+%BLS64-W-TEXT, (1) Alignment less than default will cause reduced performance
+
+    1	      8     L : LONG ALIGN(0),
+		.....................1 
+%BLS64-W-TEXT, (1) Alignment less than default will cause reduced performance
+
+    1	      9     Q : ALIGN(2),
+		................1 
+%BLS64-I-TEXT, (1) Alignment less than default may cause reduced performance
+
+    1	     10     V : VECTOR[4, BYTE] ALIGN(0),
+    1	     11     Z : ALIGN(2);
+		................1 
+%BLS64-W-TEXT, (1) Alignment less than default will cause reduced performance
+
+    1	     12 ROUTINE M =
+    1	     13     BEGIN
+    2	     14     LOCAL X;
+    2	     15     X = .Q<4, 32>;
+    2	     16     X = .Q<0, 32>;
+    2	     17     X = .Q<8, 16>;
+    2	     18     1
+    2	     19     END;
+    1	     20 END
+    1	     21 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]CHKALN.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE/CHECK=ALIGNMENT CHKALN.B64

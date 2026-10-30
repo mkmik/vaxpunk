@@ -16,8 +16,16 @@ from. Nothing is written if there are errors.
 instructions; `docs/macro32.md` describes what changes there.
 
 Status: work order step 8. Not there yet: listings, procedure descriptors,
-literal pools (`ldr x0, =value`), and floating-point and SIMD arithmetic. Loads
-and stores of B/H/S/D/Q registers work.
+literal pools (`ldr x0, =value`), and SIMD arithmetic. Loads and stores of
+B/H/S/D/Q registers work, and scalar floating point: `FADD`, `FSUB`, `FMUL`,
+`FDIV`, `FMAX`, `FMIN`, `FNMUL`, `FABS`, `FNEG`, `FSQRT`, the `FRINT`s,
+`FCVT` between S and D, `FCMP` and `FCMPE` (with a register or `#0.0`),
+`SCVTF`, `UCVTF`, the `FCVT` conversions to integers, and `FMOV` between
+floating point registers or to and from a general register of the same
+size.
+
+A symbol named like a register (`X1`, `FP`) is a register as an operand;
+`#X1` is the symbol.
 
 ## Lines
 

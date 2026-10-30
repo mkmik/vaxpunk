@@ -1,0 +1,9 @@
+MODULE LANG4 (MAIN = M, LANGUAGE(BLISS16, BLISS32)) =
+BEGIN
+! LANGUAGE(BLISS16, BLISS32): the subset checks.
+OWN
+    B : BYTE,
+    L : LONG;
+ROUTINE M = (B = 1; L = 2; 1);
+END
+ELUDOM

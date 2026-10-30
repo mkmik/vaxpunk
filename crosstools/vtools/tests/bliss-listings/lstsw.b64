@@ -1,0 +1,16 @@
+MODULE LSTSW (MAIN = M, LIST(NOEXPAND, NOREQUIRE)) =
+BEGIN
+! The listing with LIST(NOEXPAND, NOREQUIRE) in the module head, then
+! SWITCHES LIST(EXPAND) for the routine.
+REQUIRE 'PRINT';
+MACRO TWICE(X) = X + X %;
+SWITCHES LIST(EXPAND);
+ROUTINE M =
+    BEGIN
+    LOCAL Y;
+    Y = TWICE(3);
+    PRINT(.Y);
+    1
+    END;
+END
+ELUDOM

@@ -1,0 +1,23 @@
+MODULE AP2 (MAIN = M) =
+BEGIN
+! ACTUALPARAMETER of floating actuals past the eight floating point
+! registers, from the stack.
+REQUIRE 'PRINT';
+BUILTIN ACTUALPARAMETER;
+OWN
+    X : INITIAL(%T'1.5'),
+    Z : INITIAL(%T'-3.0');
+ROUTINE R9 = ACTUALPARAMETER(9);
+ROUTINE R10 = ACTUALPARAMETER(10);
+ROUTINE M =
+    BEGIN
+    PRINT(R9(%TFLOAT(X), %TFLOAT(X), %TFLOAT(X), %TFLOAT(X), %TFLOAT(X),
+        %TFLOAT(X), %TFLOAT(X), %TFLOAT(X), %TFLOAT(Z)));
+    PRINT(R10(%TFLOAT(X), %TFLOAT(X), %TFLOAT(X), %TFLOAT(X), %TFLOAT(X),
+        %TFLOAT(X), %TFLOAT(X), %TFLOAT(X), 9, %TFLOAT(Z)));
+    PRINT(R9(%TFLOAT(X), %TFLOAT(X), %TFLOAT(X), %TFLOAT(X), %TFLOAT(X),
+        %TFLOAT(X), %TFLOAT(X), %TFLOAT(X), 9, %TFLOAT(Z)));
+    1
+    END;
+END
+ELUDOM

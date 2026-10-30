@@ -1,0 +1,17 @@
+MODULE P17 (MAIN = M) =
+BEGIN
+! Probe 17: BLISS-64 passing 1^32 + 5 and -1 to BLISS-32, and a BLISS-32
+! value back.
+! LINK: A32CALL
+REQUIRE '[-]PRINT';
+EXTERNAL ROUTINE
+    R32 : NOVALUE,
+    V32;
+ROUTINE M =
+    BEGIN
+    R32((1^32) + 5, -1);
+    PRINT(V32());
+    1
+    END;
+END
+ELUDOM

@@ -1,0 +1,28 @@
+MODULE AP (MAIN = M) =
+BEGIN
+! ACTUALPARAMETER of floating actuals: what the homed list holds, from
+! registers and from the stack.
+REQUIRE 'PRINT';
+BUILTIN ACTUALPARAMETER;
+OWN
+    X : INITIAL(%T'1.5'),
+    Y : LONG INITIAL(%S'2.5'),
+    Z : INITIAL(%T'-3.0');
+ROUTINE R1 = ACTUALPARAMETER(1);
+ROUTINE R2 = ACTUALPARAMETER(2);
+ROUTINE R3 = ACTUALPARAMETER(3);
+ROUTINE R9 = ACTUALPARAMETER(9);
+ROUTINE R10 = ACTUALPARAMETER(10);
+ROUTINE M =
+    BEGIN
+    PRINT(R1(%TFLOAT(X)));
+    PRINT(R1(%SFLOAT(Y)));
+    PRINT(R2(1, %TFLOAT(X), 3));
+    PRINT(R3(1, %TFLOAT(X), 3));
+    PRINT(R2(1, %SFLOAT(Y), 3));
+    PRINT(R9(%TFLOAT(X), 2, 3, 4, 5, 6, 7, 8, 9));
+    PRINT(R10(%TFLOAT(X), 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    1
+    END;
+END
+ELUDOM

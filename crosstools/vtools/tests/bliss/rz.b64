@@ -1,0 +1,29 @@
+MODULE RZ (MAIN = M) =
+BEGIN
+! Fields of size 0 on BUILTIN registers and in memory: a fetch is 0, a
+! store changes nothing.
+REQUIRE 'PRINT';
+OWN W;
+ROUTINE M =
+    BEGIN
+    LOCAL A, B, C, D;
+    BUILTIN R0, R2;
+    R0 = 42;
+    R0<0, 0> = 123;
+    A = .R0;
+    R0 = -1;
+    B = .R0<3, 0>;
+    R2 = 7;
+    R2<5, 0> = 1;
+    C = .R2 + .R2<0, 0, 1>;
+    W = 9;
+    W<4, 0> = 1;
+    D = .W + .W<2, 0>;
+    PRINT(.A);
+    PRINT(.B);
+    PRINT(.C);
+    PRINT(.D);
+    1
+    END;
+END
+ELUDOM

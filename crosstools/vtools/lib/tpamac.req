@@ -1,0 +1,136 @@
+! TPAMAC: macros that make LIB$TPARSE's state tables (UM 8.5.2), written
+! for vaxpunk after the RTL reference's description of the tables, for
+! BLISS-64 and BLISS-32 alike. With LIBRARY 'SYS$LIBRARY:STARLET' for
+! $TPADEF's token types and flags:
+!
+!     $INIT_STATE(STATE_TABLE, KEY_TABLE);
+!     $STATE(LABEL, (TYPE, TARGET, ACTION, MASK, ADDRESS, PARAMETER), ...);
+!
+! A transition's type is a character ('A'), a keyword (a quoted string
+! of two characters or more; 'A*' is the one-letter keyword A), a token
+! type (TPA$_EOS and the rest), or a state in parentheses, (NAME), the
+! subexpression starting there. Everything after the type may be left
+! out. The target is a state's label, or TPA$_EXIT or TPA$_FAIL.
+!
+! The tables go in psects of their own. A state is its transitions in a
+! row in _LIB$STATE$, and each transition is a word, the type with a
+! TPA$M_ flag for each part that follows, then those parts in this
+! order: a byte of more flags if there is a parameter (TPA$M_PARMFLAG
+! shifted down 16), the subexpression's address, the parameter, the
+! action routine, the address and the mask, longwords; and the target's
+! address. A keyword's type is TPA$_KEYWORD plus its number in the
+! table; KEY_TABLE in _LIB$KEY0$ holds each keyword's address by its
+! number, and the keyword's text is in _LIB$KEY1$, ended by 255, with a
+! 255 after each state's keywords.
+
+COMPILETIME
+    $$TPA_KEYS = 0,
+    $$TPA_KEYED = 0,
+    $$TPA_TYPE = 0,
+    $$TPA_ALIGN = 0,
+    $$TPA_SHARE = 0;
+
+MACRO
+    $$TPA_STATE_PSECT = PSECT OWN = _LIB$STATE$ (NOWRITE, SHARE, PIC, NOEXECUTE, ALIGN(1)) %,
+    $$TPA_KEY0_PSECT = PSECT OWN = _LIB$KEY0$ (NOWRITE, SHARE, PIC, NOEXECUTE, ALIGN(2)) %,
+    $$TPA_KEY1_PSECT = PSECT OWN = _LIB$KEY1$ (NOWRITE, SHARE, PIC, NOEXECUTE, ALIGN(0)) %;
+
+MACRO
+    ! The tables are packed, and hold addresses in shareable psects: the
+    ! checks of both are off while they are made, then as they were.
+    $$TPA_UNCHECKED =
+        %ASSIGN($$TPA_ALIGN, %SWITCHES(CHECK_ALIGNMENT))
+        %ASSIGN($$TPA_SHARE, %SWITCHES(CHECK_SHARE))
+        SWITCHES NOCHECK_ALIGNMENT, NOCHECK_SHARE;
+        %,
+    $$TPA_CHECKED =
+        %IF $$TPA_ALIGN %THEN SWITCHES CHECK_ALIGNMENT; %FI
+        %IF $$TPA_SHARE %THEN SWITCHES CHECK_SHARE; %FI
+        %;
+
+MACRO
+    $INIT_STATE(STATE_TABLE, KEY_TABLE) =
+        %ASSIGN($$TPA_KEYS, 0)
+        PSECT GLOBAL = _LIB$KEY0$ (NOWRITE, SHARE, PIC, NOEXECUTE, ALIGN(2));
+        GLOBAL KEY_TABLE : VECTOR[0];
+        PSECT GLOBAL = _LIB$STATE$ (NOWRITE, SHARE, PIC, NOEXECUTE, ALIGN(1));
+        GLOBAL STATE_TABLE : VECTOR[0];
+        PSECT GLOBAL = $GLOBAL$;
+        %,
+
+    $STATE(STATE_NAME) =
+        $$TPA_UNCHECKED
+        $$TPA_STATE_PSECT;
+        %IF NOT %NULL(STATE_NAME) %THEN OWN STATE_NAME : VECTOR[0] ALIGN(0); %FI
+        %ASSIGN($$TPA_KEYED, 0)
+        $$TPA_TRANSITIONS(%REMAINING)
+        %IF $$TPA_KEYED %THEN
+            $$TPA_KEY1_PSECT;
+            OWN $$TPA_FILL : VECTOR[1, BYTE] ALIGN(0) INITIAL(BYTE(255));
+            UNDECLARE $$TPA_FILL;
+        %FI
+        PSECT OWN = $OWN$;
+        $$TPA_CHECKED
+        %,
+
+    ! Each transition, the last one marked.
+    $$TPA_TRANSITIONS[T] = $$TPA_TRANSITION(%NULL(%REMAINING), %REMOVE(T)) %,
+
+    $$TPA_TRANSITION(LAST, TYPE, TARGET, ACTION, MASK, ADDRESS, PARAMETER) =
+        %IF NOT %IDENTICAL(TYPE, %REMOVE(TYPE)) %THEN
+            %ASSIGN($$TPA_TYPE, TPA$_SUBEXPR)
+            %IF NOT %DECLARED(%REMOVE(TYPE)) %THEN FORWARD %REMOVE(TYPE) : VECTOR[0]; %FI
+        %ELSE %IF %ISSTRING(TYPE) %THEN %IF %CHARCOUNT(TYPE) GTR 1 %THEN
+            $$TPA_KEYWORD($$TPA_TEXT(TYPE))
+        %ELSE
+            %ASSIGN($$TPA_TYPE, %C TYPE)
+        %FI %ELSE
+            %ASSIGN($$TPA_TYPE, TYPE)
+        %FI %FI
+        %IF NOT %NULL(TARGET) %THEN
+            %IF NOT %DECLARED(TARGET) %THEN FORWARD TARGET : VECTOR[0]; %FI
+        %FI
+        $$TPA_STATE_PSECT;
+        OWN $$TPA_WORD : WORD ALIGN(0) INITIAL($$TPA_TYPE
+            %IF LAST %THEN + TPA$M_LASTFLAG %FI
+            %IF NOT %IDENTICAL(TYPE, %REMOVE(TYPE)) %THEN + TPA$M_EXTFLAG %FI
+            %IF NOT %NULL(PARAMETER) %THEN + TPA$M_EXTRAFLAG %FI
+            %IF NOT %NULL(ACTION) %THEN + TPA$M_ACTFLAG %FI
+            %IF NOT %NULL(ADDRESS) %THEN + TPA$M_ADDRFLAG %FI
+            %IF NOT %NULL(MASK) %THEN + TPA$M_MASKFLAG %FI
+            %IF NOT %NULL(TARGET) %THEN + TPA$M_TRANFLAG %FI);
+        UNDECLARE $$TPA_WORD;
+        %IF NOT %NULL(PARAMETER) %THEN $$TPA_PART(BYTE, TPA$M_PARMFLAG / 65536) %FI
+        %IF NOT %IDENTICAL(TYPE, %REMOVE(TYPE)) %THEN $$TPA_PART(LONG, %REMOVE(TYPE)) %FI
+        %IF NOT %NULL(PARAMETER) %THEN $$TPA_PART(LONG, PARAMETER) %FI
+        %IF NOT %NULL(ACTION) %THEN $$TPA_PART(LONG, ACTION) %FI
+        %IF NOT %NULL(ADDRESS) %THEN $$TPA_PART(LONG, ADDRESS) %FI
+        %IF NOT %NULL(MASK) %THEN $$TPA_PART(LONG, MASK) %FI
+        %IF NOT %NULL(TARGET) %THEN $$TPA_PART(LONG, TARGET) %FI
+        %,
+
+    ! A part of a transition after its type.
+    $$TPA_PART(UNIT, VALUE) =
+        OWN $$TPA_ITEM : UNIT ALIGN(0) INITIAL(VALUE);
+        UNDECLARE $$TPA_ITEM;
+        %,
+
+    ! A keyword: its text in _LIB$KEY1$, its address in the key table, and
+    ! its number as the type.
+    $$TPA_KEYWORD(TEXT) =
+        %ASSIGN($$TPA_TYPE, TPA$_KEYWORD + $$TPA_KEYS)
+        %ASSIGN($$TPA_KEYS, $$TPA_KEYS + 1)
+        %ASSIGN($$TPA_KEYED, 1)
+        $$TPA_KEY1_PSECT;
+        OWN $$TPA_TEXT_AT : VECTOR[%CHARCOUNT(TEXT) + 1, BYTE] ALIGN(0)
+            INITIAL(BYTE(TEXT, 255));
+        $$TPA_KEY0_PSECT;
+        OWN $$TPA_KEY_AT : LONG ALIGN(0) INITIAL($$TPA_TEXT_AT);
+        UNDECLARE $$TPA_TEXT_AT, $$TPA_KEY_AT;
+        %,
+
+    ! A keyword's text: 'A*' is the one-letter keyword A.
+    $$TPA_TEXT(TEXT) =
+        %IF %CHARCOUNT(TEXT) EQL 2 %THEN $$TPA_ONE(%EXPLODE(TEXT)) %ELSE TEXT %FI %,
+    $$TPA_ONE(A, B) =
+        %IF %IDENTICAL(B, '*') %THEN A %ELSE %STRING(A, B) %FI %;

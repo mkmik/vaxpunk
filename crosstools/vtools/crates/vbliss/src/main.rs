@@ -1,10 +1,13 @@
 //! vbliss: compiles one BLISS-64 source file into an object module.
 //!
 //!     vbliss [/A64 | /A32] [/ASSUME=(LONG_DEFAULT, REF_LONG, SIGNED_LONG)]
-//!            [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n]
-//!            [/INCLUDE=(dir,...) | -I dir] [--ir] [--asm] SOURCE
+//!            [/OBJECT=file | -o file | /NOOBJECT] [/LIST[=file] | /NOLIST]
+//!            [/SOURCE_LIST=(...)] [/[NO]MACHINE_CODE] [/VARIANT=n]
+//!            [/INCLUDE=(dir,...) | -I dir] [/LIBRARY] [--ir] [--asm] SOURCE
 //!
-//! A .B32 source is BLISS-32 as with /A32.
+//! and the BLISS verb's other qualifiers (docs/bliss64.md, *Switches and
+//! qualifiers*). A .B32 source is BLISS-32 as with /A32. /LIBRARY checks a
+//! library's source and writes nothing: LIBRARY reads the source itself.
 //!
 //! --ir and --asm print the IR or the assembly instead of writing an object.
 //! Diagnostics go to stderr as BLISS writes them to the terminal.
@@ -34,17 +37,29 @@ fn qualifier<'a>(arg: &'a str, name: &str) -> Option<Option<&'a str>> {
 
 fn run() -> Result<(), String> {
     let usage = || {
-        "USAGE, usage: vbliss [/OBJECT=file | -o file] [/LIST[=file]] [/VARIANT=n] [--ir] [--asm] SOURCE"
+        "USAGE, usage: vbliss [qualifiers] [/OBJECT=file | -o file] [/LIST[=file]] [--ir] [--asm] SOURCE"
             .to_string()
     };
     let (mut source, mut output, mut list, mut ir, mut asm) = (None, None, None, false, false);
-    let mut opts = vbliss::Options::default();
+    let mut noobject = false;
+    let mut opts = vbliss::Options {
+        command: ["vbliss".to_string()]
+            .into_iter()
+            .chain(env::args().skip(1))
+            .collect::<Vec<_>>()
+            .join(" "),
+        ..vbliss::Options::default()
+    };
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         if let Some(v) = qualifier(&arg, "/OBJECT") {
             output = Some(PathBuf::from(v.ok_or_else(usage)?));
+        } else if qualifier(&arg, "/NOOBJECT").is_some() {
+            noobject = true;
         } else if let Some(v) = qualifier(&arg, "/LIST") {
             list = Some(v.map(PathBuf::from));
+        } else if qualifier(&arg, "/NOLIST").is_some() {
+            list = None;
         } else if arg.starts_with('/')
             && opts.qualifier(&arg).map_err(|e| format!("BADVALUE, {e}"))?
         {
@@ -71,7 +86,7 @@ fn run() -> Result<(), String> {
     }
     let source = source.ok_or_else(usage)?;
     let text =
-        fs::read_to_string(&source).map_err(|e| format!("OPENIN, {}: {e}", source.display()))?;
+        vbliss::read_source(&source).map_err(|e| format!("OPENIN, {}: {e}", source.display()))?;
     let stem = source
         .file_stem()
         .map(|s| s.to_string_lossy().to_ascii_uppercase())
@@ -86,18 +101,25 @@ fn run() -> Result<(), String> {
     for m in &out.messages {
         eprintln!("{m}");
     }
-    for d in &out.diags {
-        report(d, "BLS64");
+    // /TERMINAL=NOERRORS: the listing has them.
+    if !opts.switches.contains(&("ERRS".into(), false)) {
+        for d in &out.diags {
+            report(d, "BLS64");
+        }
     }
     for d in &out.lints {
         report(d, "VBLISS");
     }
     if let Some(list) = list {
         let path = list.unwrap_or_else(|| source.with_extension("lis"));
-        fs::write(&path, &out.listing).map_err(|e| format!("WRITEERR, {}: {e}", path.display()))?;
+        fs::write(&path, vbliss::latin1(&out.listing))
+            .map_err(|e| format!("WRITEERR, {}: {e}", path.display()))?;
     }
     if out.error().is_some() {
         return Err("ENDDIAGS, compilation failed".into());
+    }
+    if out.nocode || noobject {
+        return Ok(());
     }
     if ir || asm {
         print!("{}", if ir { out.ir } else { out.asm }.unwrap_or_default());
@@ -121,7 +143,7 @@ fn run() -> Result<(), String> {
 /// A diagnostic as BLISS writes it on the terminal: the line, a marker
 /// under the place, the message and where.
 fn report(d: &vbliss::Diag, facility: &str) {
-    let line = fs::read_to_string(Path::new(&d.file)).ok().and_then(|t| {
+    let line = vbliss::read_source(Path::new(&d.file)).ok().and_then(|t| {
         t.lines()
             .nth((d.line as usize).wrapping_sub(1))
             .map(String::from)

@@ -1,0 +1,34 @@
+MODULE GSMALL (MAIN = M) =
+BEGIN
+! G floating at the bottom of G's range, below the double's normal
+! range: 2**-1024, G's smallest, and 2**-1023, read, written, computed
+! and compared to their lowest bit; half the smallest is zero.
+REQUIRE 'PRINT';
+BUILTIN
+    ADDG, SUBG, MULG, DIVG, CMPG, CVTTG;
+OWN
+    A, B, C;
+ROUTINE M =
+    BEGIN
+    B = %G'0';
+    A = %X'10'; ADDG(A, B, C); PRINT(.C);
+    A = %X'8018'; ADDG(A, B, C); PRINT(.C);
+    A = %X'20'; ADDG(A, B, C); PRINT(.C);
+    A = %X'0001000000000020'; ADDG(A, B, C); PRINT(.C);
+    A = %X'30'; B = %G'2'; DIVG(B, A, C); PRINT(.C);
+    B = %G'4'; DIVG(B, A, C); PRINT(.C);
+    B = %G'8'; DIVG(B, A, C); PRINT(.C);
+    A = %X'10'; B = %G'4'; MULG(A, B, C); PRINT(.C);
+    A = %G'1E-307'; B = %G'8'; DIVG(B, A, C); PRINT(.C);
+    MULG(B, C, A); PRINT(.A);
+    A = %X'30'; B = %X'0001000000000020'; SUBG(B, A, C); PRINT(.C);
+    A = %X'0008000000000000'; CVTTG(A, C); PRINT(.C);
+    A = %X'0001000000000020'; B = %G'1E-300'; DIVG(A, B, C); PRINT(.C);
+    A = %X'0003000000000020'; B = %X'30'; ADDG(A, B, C); PRINT(.C);
+    A = %X'0001000000000020'; B = %X'20';
+    PRINT(CMPG(A, B)); PRINT(CMPG(B, A));
+    A = %X'FFFFFFFFFFFF002F'; B = %X'30'; PRINT(CMPG(A, B));
+    1
+    END;
+END
+ELUDOM

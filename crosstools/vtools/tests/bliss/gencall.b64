@@ -1,0 +1,17 @@
+MODULE GENCALL (MAIN = M) =
+BEGIN
+! General routine calls: a linkage name and an address.
+REQUIRE 'PRINT';
+LINKAGE
+    LC = CALL;
+ROUTINE R (A) = .A + 1;
+ROUTINE M =
+    BEGIN
+    LOCAL P;
+    P = R;
+    PRINT(LC(.P, 5));
+    PRINT(BLISS(.P, 6));
+    1
+    END;
+END
+ELUDOM

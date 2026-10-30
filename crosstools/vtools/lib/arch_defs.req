@@ -1,0 +1,23 @@
+! ARCH_DEFS: which machine the code is for, as OpenVMS's SYS$LIBRARY has
+! it for code built for more than one (VAX, Alpha, Itanium), written for
+! vaxpunk. vaxpunk runs OpenVMS Alpha's interfaces on ARM64, so code takes
+! its Alpha side: EVAX and ALPHA are 1, and ARM64 says it is vaxpunk.
+
+%IF NOT %DECLARED(%QUOTE ARCH_DEFS) %THEN
+
+MACRO
+    VAX = 0 %,                  ! VAX/VMS
+    EVAX = 1 %,                 ! OpenVMS Alpha
+    ALPHA = 1 %,
+    IA64 = 0 %,                 ! OpenVMS Itanium
+    ARM64 = 1 %,                ! vaxpunk
+    VAXPAGE = 0 %,              ! 512-byte pages
+    BIGPAGE = 1 %,              ! pages bigger than 512 bytes
+    AXTOOLS = 0 %,              ! built with cross tools
+    IXTOOLS = 0 %,
+    AXVMS = 0 %,                ! built on another system than the target
+    IXVMS = 0 %,
+    ADDRESSBITS = %BPADDR %,    ! 64 under BLISS-64, 32 under BLISS-32
+    ARCH_DEFS = 1 %;
+
+%FI

@@ -8,7 +8,9 @@
 
 mod arm64;
 mod builtin;
+mod checks;
 mod data;
+mod float;
 mod ir;
 mod irgen;
 mod lex;
@@ -43,6 +45,8 @@ pub struct Diag {
 pub struct Output {
     pub ir: Option<String>,
     pub asm: Option<String>,
+    /// NOCODE: no IR, assembly or object, and that's no error.
+    pub nocode: bool,
     pub diags: Vec<Diag>,
     /// The dot lint's warnings (PRD-0004 *The dot lint*), which aren't
     /// BLISS's diagnostics and stay out of the listing.
@@ -66,6 +70,7 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
     let name = path.display().to_string();
     // A .B32 source is BLISS-32, as /A32 says.
     let mut opts = opts.clone();
+    opts.date.get_or_insert_with(vasm::date_time);
     if path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("b32"))
@@ -101,29 +106,68 @@ pub fn translate(path: &Path, source: &str, opts: &Options) -> Output {
         })
         .collect();
     let (mut ir, mut asm) = (None, None);
-    if let Ok(module) = front.module {
+    let nocode = front.module.as_ref().is_ok_and(|m| m.nocode);
+    let mut listed = front.listing;
+    if let Ok(module) = front.module
+        && !module.nocode
+    {
         match irgen::generate(&module) {
             Ok(m) => {
                 asm = Some(arm64::module(&m));
                 ir = Some(m.to_string());
             }
-            Err(msg) => diags.push(Diag {
-                sev: 'E',
-                file: name,
-                line: 0,
-                col: 0,
-                msg,
-            }),
+            Err(msg) => {
+                let d = Diag {
+                    sev: 'E',
+                    file: name.clone(),
+                    line: 0,
+                    col: 0,
+                    msg,
+                };
+                listed.diags.push(listing::Diag {
+                    sev: d.sev,
+                    file: 0,
+                    line: 0,
+                    col: 0,
+                    msg: d.msg.clone(),
+                });
+                diags.push(d);
+            }
         }
     }
+    let layout = listing::Layout {
+        files: listed.files,
+        module: listed.module,
+        date: opts.date.clone().unwrap_or_default(),
+        page: opts.page_size.unwrap_or(60) as usize,
+        code: asm.as_deref().filter(|_| opts.machine_code),
+        libraries: listed.libraries,
+        command: opts.command.clone(),
+    };
+    let listing = listing::render(&layout, &listed.entries, &listed.diags);
     Output {
         ir,
         asm,
+        nocode,
         diags,
         lints,
-        listing: front.listing,
+        listing,
         messages: front.messages,
     }
+}
+
+/// A source or require file's text: VMS files are DEC MCS, a character a
+/// byte, read here as Latin-1 so that every file reads.
+pub fn read_source(path: &Path) -> std::io::Result<String> {
+    fs::read(path).map(|b| b.into_iter().map(char::from).collect())
+}
+
+/// Text as the bytes it stands for in DEC MCS: a character a byte, `?` for
+/// one past Latin-1.
+pub fn latin1(text: &str) -> Vec<u8> {
+    text.chars()
+        .map(|c| u8::try_from(c).unwrap_or(b'?'))
+        .collect()
 }
 
 /// Compiles BLISS-64 `source` into object records, as `vmacro::compile`
@@ -204,6 +248,6 @@ fn require(dirs: &[std::path::PathBuf], name: &str, types: &[&str]) -> Result<St
                 .flat_map(|n| [n.clone(), n.to_ascii_lowercase(), n.to_ascii_uppercase()])
                 .map(move |n| d.join(n))
         })
-        .find_map(|p| fs::read_to_string(p).ok())
+        .find_map(|p| read_source(&p).ok())
         .ok_or_else(|| format!("can't find require file {name}"))
 }

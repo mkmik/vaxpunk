@@ -3265,3 +3265,63 @@ LBR$_TOOMNYARG = ^X2690F2               ; too many arguments
 LBR$_USRINPERR = ^X2690FA               ; user input routine returned error status
 LBR$_NOHLPLIBS = ^X269102               ; no default help libraries can be opened
         .ENDM   $LBRMSG
+
+; $TPADEF: LIB$TPARSE's parameter block, and its state tables' token
+; types and transition flags, as the RTL reference documents them.
+        .MACRO  $TPADEF
+TPA$K_COUNT0 = 8                        ; the block's longwords after the count
+TPA$L_COUNT = 0
+TPA$L_OPTIONS = 4
+TPA$V_BLANKS = 0                        ; blanks and tabs are tokens
+TPA$V_ABBREV = 1                        ; keywords may be shortened as far as unique
+TPA$V_ABBRFM = 2                        ; keywords may be shortened to the first match
+TPA$V_AMBIG = 16                        ; a keyword at this state was ambiguous
+TPA$M_BLANKS = 1
+TPA$M_ABBREV = 2
+TPA$M_ABBRFM = 4
+TPA$M_AMBIG = ^X10000
+TPA$B_MCOUNT = 7                        ; the fewest characters of a shortened keyword
+TPA$L_STRINGCNT = 8
+TPA$L_STRINGPTR = 12
+TPA$L_TOKENCNT = 16
+TPA$L_TOKENPTR = 20
+TPA$L_CHAR = 24                         ; a one-character token
+TPA$B_CHAR = 24
+TPA$L_NUMBER = 28                       ; a number token's value
+TPA$L_PARAM = 32                        ; the transition's parameter
+TPA$K_LENGTH0 = 36
+TPA$C_LENGTH0 = 36
+TPA$_KEYWORD = 256                      ; the first keyword's type
+TPA$_EXIT = -1                          ; a target: the parse is done
+TPA$_FAIL = -2                          ; a target: the parse failed
+TPA$_DECIMAL_64 = 484
+TPA$_OCTAL_64 = 485
+TPA$_HEX_64 = 486
+TPA$_NODE_ACS = 487
+TPA$_NODE_PRIMARY = 488
+TPA$_NODE = 489
+TPA$_FILESPEC = 490
+TPA$_UIC = 491
+TPA$_IDENT = 492
+TPA$_ANY = 493
+TPA$_ALPHA = 494
+TPA$_DIGIT = 495
+TPA$_STRING = 496
+TPA$_SYMBOL = 497
+TPA$_BLANK = 498
+TPA$_DECIMAL = 499
+TPA$_OCTAL = 500
+TPA$_HEX = 501
+TPA$_LAMBDA = 502
+TPA$_EOS = 503
+TPA$_SUBEXPR = 504
+TPA$M_CODEFLAG = 256                    ; the type is a keyword's or a token type
+TPA$M_EXTRAFLAG = 512                   ; a byte of more flags follows the type
+TPA$M_LASTFLAG = 1024                   ; the state's last transition
+TPA$M_EXTFLAG = 2048                    ; a subexpression's state follows
+TPA$M_TRANFLAG = 4096                   ; a target state follows
+TPA$M_MASKFLAG = 8192                   ; a mask follows
+TPA$M_ADDRFLAG = 16384                  ; an address to store the mask in follows
+TPA$M_ACTFLAG = 32768                   ; an action routine follows
+TPA$M_PARMFLAG = 65536                  ; the action routine's parameter follows
+        .ENDM   $TPADEF

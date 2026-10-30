@@ -1,0 +1,23 @@
+
+        X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+..........................^
+%BLS64-I-TEXT, Numeric literal overflow
+at line number 23 in file SYS$SYSDEVICE:[ORACLE]PRINT.R64;1
+
+        X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+..........................^
+%BLS64-I-TEXT, Numeric literal with bit 31 set will be sign extended
+at line number 23 in file SYS$SYSDEVICE:[ORACLE]PRINT.R64;1
+
+    PRINT(%X'FFFFFFFF');
+............^
+%BLS64-I-TEXT, Numeric literal with bit 31 set will be sign extended
+at line number 7 in file SYS$SYSDEVICE:[ORACLE]QLIT.B64;1
+
+    PRINT(%X'100000000');
+............^
+%BLS64-I-TEXT, Numeric literal overflow
+at line number 9 in file SYS$SYSDEVICE:[ORACLE]QLIT.B64;1
+BLISS status %X106F1263
+LINK status %X10000001
+RUN status %X00010001

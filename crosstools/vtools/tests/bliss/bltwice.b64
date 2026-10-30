@@ -1,0 +1,14 @@
+MODULE BLTWICE (MAIN = M) =
+BEGIN
+! The same BUILTIN twice in one scope, as DEC's VAX built-in macros do.
+REQUIRE 'PRINT';
+BUILTIN ROT;
+BUILTIN BARRIER;
+BUILTIN ROT, BARRIER;
+ROUTINE M =
+    BEGIN
+    PRINT(ROT(1, 1));
+    1
+    END;
+END
+ELUDOM

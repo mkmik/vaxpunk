@@ -4,7 +4,7 @@
         $CHFDEF
         $SSDEF
 
-        .EXTERNAL BADD, BTWICE, BSIGNAL, LIB$SIGNAL, SYS$UNWIND
+        .EXTERNAL BADD, BTWICE, BSIGNAL, BARG1, LIB$SIGNAL, SYS$UNWIND
 
         .PSECT  $CODE$
 
@@ -23,6 +23,28 @@ MSCRATCH::
         CLRL    R4
         CLRL    R5
         RSB
+
+; MCLOBBER x: a CALL routine that changes R2 and R3, which it doesn't
+; keep: R0 = 5.
+MCLOBBER::
+        .CALL_ENTRY SCRATCH=<R2, R3>
+        CLRL    R2
+        CLRL    R3
+        MOVL    #5, R0
+        RET
+
+; MSARGB: calls BARG1 as another language's caller may, with an S
+; argument whose register's upper half isn't 0: R0 = what it returns.
+        .ENTRY  MSARGB, ^M<R2>
+        .DISABLE FLAGGING
+        movz    x16, #0x3F80, lsl #16
+        movk    x16, #0xBEEF, lsl #32
+        movk    x16, #0xDEAD, lsl #48
+        fmov    d0, x16
+        mov     x9, #257
+        bl      BARG1
+        .ENABLE FLAGGING
+        RET
 
 ; MTRIPLE n: R0 = 3 * n.
         .ENTRY  MTRIPLE, ^M<>

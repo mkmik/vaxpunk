@@ -1,0 +1,24 @@
+! BLISS: /CHECK=LONGWORD
+MODULE CHKRV (MAIN = M) =
+BEGIN
+! /CHECK=LONGWORD and a routine's value: QUAD, LONG and plain.
+EXTERNAL ROUTINE
+    Q : QUAD,
+    L : LONG,
+    P,
+    ER (A : LONG UNSIGNED) : NOVALUE;
+OWN
+    X : LONG UNSIGNED,
+    Y : LONG SIGNED;
+ROUTINE M =
+    BEGIN
+    X = Q();
+    Y = L();
+    X = P();
+    ER(Q());
+    ER(P());
+    X = Q() + 1;
+    1
+    END;
+END
+ELUDOM

@@ -1,0 +1,11 @@
+MODULE DIAG1 (MAIN = M) =
+BEGIN
+! Going on after errors: what BLISSA64 reports of a module with several.
+OWN QUAD;
+OWN X : FOO;
+ROUTINE N = .Y;
+ROUTINE P = (X = ; 1);
+ROUTINE Q (A) = .A + ;
+ROUTINE M = 1;
+END
+ELUDOM

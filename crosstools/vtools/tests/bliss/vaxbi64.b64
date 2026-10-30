@@ -1,0 +1,143 @@
+MODULE VAXBI64 (MAIN = M) =
+BEGIN
+! The VAX built-ins BLISS on Alpha dropped, as vaxpunk's LIB has them
+! back for BLISS-64 (t8y:/host/vdefs#vax-builtin-macros): no oracle, as
+! BLISSA64 has DEC's LIB; the output is what UM chapter 4 says.
+REQUIRE 'PRINT';
+LIBRARY 'SYS$LIBRARY:LIB';
+BUILTIN
+    FFS, FFC, LOCC, SKPC, MOVC3, MOVC5, CMPC3, CMPC5, MATCHC, SCANC, SPANC,
+    ADDM, SUBM, CMPM, INDEX, MOVTUC, MOVTC, EMUL, EDIV, ASHQ, NOP, BISPSW, BICPSW;
+OWN
+    W : VECTOR[2] INITIAL(%X'00F00000', 0),
+    POS,
+    STR : VECTOR[16, BYTE] INITIAL(BYTE('HELLO, WORLD    ')),
+    DST : VECTOR[16, BYTE],
+    TBL : VECTOR[256, BYTE],
+    A : VECTOR[2] INITIAL(-1, 1),
+    B : VECTOR[2] INITIAL(1, 2),
+    C : VECTOR[2],
+    OVL : VECTOR[8, BYTE] INITIAL(BYTE('ABCDEF  ')),
+    CALLS,
+    TR,
+    ONE : INITIAL(1);
+MACRO
+    ! Another macro, whose actual parameter ends at a comma.
+    ID(X) = X %;
+ROUTINE NEXT (P) =
+    BEGIN
+    ! The calls an operand makes, as if it advanced through buffers.
+    CALLS = .CALLS + 1;
+    .P
+    END;
+ROUTINE OVF : NOVALUE =
+    BEGIN
+    ! Under OVERFLOW too, each fullword wraps into the carry or borrow:
+    ! 2^63 - 1 and 1 add to 2^63, which fits two fullwords, and back.
+    SWITCHES OVERFLOW;
+    A[0] = %X'7FFFFFFFFFFFFFFF';
+    A[1] = 0;
+    B[0] = 1;
+    B[1] = 0;
+    ADDM(2, A, B, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    SUBM(2, B, C, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    ! Each operand evaluated once, however many fullwords.
+    CALLS = 0;
+    ADDM(2, NEXT(A), B, C);
+    CMPM(2, NEXT(A), B);
+    CMPC3(NEXT(ONE), UPLIT('A'), UPLIT('A'));
+    INDEX(NEXT(ONE), %REF(0), %REF(2), %REF(1), %REF(0), POS);
+    PRINT(.CALLS);
+    PRINT(.POS)
+    END;
+ROUTINE T (D, P) =
+    BEGIN
+    ! Operand number D read: its digit after those read before.
+    TR = .TR * 10 + .D;
+    .P
+    END;
+ROUTINE ORD : NOVALUE =
+    BEGIN
+    ! Each operand read once, in the order written, as the VAX reads them.
+    TR = 0; FFS(T(1, %REF(0)), T(2, %REF(32)), T(3, W), T(4, POS)); PRINT(.TR);
+    TR = 0; LOCC(T(1, %REF(%C',')), T(2, %REF(16)), T(3, STR)); PRINT(.TR);
+    TR = 0; SKPC(T(1, %REF(%C'H')), T(2, %REF(16)), T(3, STR)); PRINT(.TR);
+    TR = 0; MATCHC(T(1, %REF(5)), T(2, UPLIT('WORLD')), T(3, %REF(16)), T(4, STR)); PRINT(.TR);
+    TR = 0; MOVC3(T(1, %REF(5)), T(2, STR), T(3, DST)); PRINT(.TR);
+    TR = 0; MOVC5(T(1, %REF(2)), T(2, STR), T(3, %REF(%C'*')), T(4, %REF(4)), T(5, DST)); PRINT(.TR);
+    TR = 0; MOVTC(T(1, %REF(2)), T(2, STR), T(3, %REF(%C'*')), T(4, TBL), T(5, %REF(4)), T(6, DST)); PRINT(.TR);
+    TR = 0; CMPC3(T(1, %REF(5)), T(2, STR), T(3, DST)); PRINT(.TR);
+    TR = 0; CMPC5(T(1, %REF(5)), T(2, STR), T(3, %REF(%C' ')), T(4, %REF(5)), T(5, DST)); PRINT(.TR);
+    TR = 0; SCANC(T(1, %REF(16)), T(2, STR), T(3, TBL), T(4, %REF(1))); PRINT(.TR);
+    TR = 0; MOVTUC(T(1, %REF(5)), T(2, STR), T(3, %REF(%C'L')), T(4, TBL), T(5, %REF(5)), T(6, DST)); PRINT(.TR);
+    TR = 0; INDEX(T(1, ONE), T(2, %REF(0)), T(3, %REF(2)), T(4, %REF(1)), T(5, %REF(0)), T(6, POS)); PRINT(.TR);
+    TR = 0; CMPM(T(1, 2), T(2, A), T(3, B)); PRINT(.TR);
+    TR = 0; EMUL(T(1, %REF(3)), T(2, %REF(4)), T(3, %REF(5)), T(4, C)); PRINT(.TR);
+    TR = 0; EDIV(T(1, %REF(3)), T(2, %REF(17)), T(3, POS), T(4, C)); PRINT(.TR);
+    TR = 0; ASHQ(T(1, %REF(1)), T(2, %REF(3)), T(3, C)); PRINT(.TR);
+    ! Both destinations too before either is written: 7 / 3 is 2 to C[0],
+    ! though finding C[1] sets C[0] to 99.
+    EDIV(%REF(3), %REF(7), C, (C[0] = 99; C[1]));
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    ! NOP() does nothing; BISPSW and BICPSW change nothing on ARM64 but
+    ! read their mask.
+    TR = 0; NOP(); BISPSW(T(1, %REF(0))); BICPSW(T(2, %REF(0))); PRINT(.TR)
+    END;
+ROUTINE M =
+    BEGIN
+    PRINT(FFS(%REF(0), %REF(32), W, POS));
+    PRINT(.POS);
+    PRINT(FFC(%REF(20), %REF(8), W, POS));
+    PRINT(.POS);
+    PRINT(FFS(%REF(0), %REF(20), W, POS));
+    PRINT(.POS);
+    PRINT(LOCC(%REF(%C','), %REF(16), STR));
+    PRINT(LOCC(%REF(%C'X'), %REF(16), STR));
+    PRINT(SKPC(%REF(%C'H'), %REF(16), STR));
+    MOVC3(%REF(5), STR, DST);
+    PRINT(.DST[4]);
+    MOVC5(%REF(2), STR, %REF(%C'*'), %REF(4), DST);
+    PRINT(.DST[3]);
+    PRINT(CMPC3(%REF(5), STR, DST));
+    PRINT(MATCHC(%REF(5), UPLIT('WORLD'), %REF(16), STR));
+    TBL[%C'O'] = 1;
+    PRINT(SCANC(%REF(16), STR, TBL, %REF(1)) - STR);
+    ! Nothing to look at: no byte read, not even at 0, which isn't mapped.
+    PRINT(SCANC(%REF(0), 0, TBL, %REF(1)));
+    PRINT(MOVTUC(%REF(0), 0, %REF(0), TBL, %REF(0), DST));
+    PRINT(FFS(%REF(0), %REF(0), 0, POS));
+    ADDM(2, A, B, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    SUBM(2, B, A, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    PRINT(CMPM(2, A, B));
+    ! In its actual parameter: none of LIB's macros has a comma outside
+    ! brackets.
+    PRINT(ID(CMPM(2, A, B)));
+    ! Overlapping strings move as if the source were read first: ABCDEF
+    ! to the next byte is AABCDE, and AAB to two bytes on, then *, AAAAB*.
+    MOVC3(%REF(5), OVL, OVL[1]);
+    PRINT(.OVL[5]);
+    MOVC5(%REF(3), OVL, %REF(%C'*'), %REF(4), OVL[2]);
+    PRINT(.OVL[4]);
+    PRINT(.OVL[5]);
+    ! MOVC5's fill byte is read before the move, though the move writes it.
+    MOVC5(%REF(2), UPLIT('XY'), OVL, %REF(4), OVL);
+    PRINT(.OVL[3]);
+    ! So is MOVTUC's escape byte: L stops it at HE.
+    INCR I FROM 0 TO 255 DO TBL[.I] = .I;
+    OVL[0] = %C'L';
+    PRINT(MOVTUC(%REF(5), STR, OVL, TBL, %REF(5), OVL) EQL STR + 2);
+    OVF();
+    ORD();
+    1
+    END;
+END
+ELUDOM

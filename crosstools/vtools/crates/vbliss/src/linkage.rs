@@ -13,6 +13,7 @@
 
 use std::rc::Rc;
 
+use crate::builtin::Special;
 use crate::lex::Tok;
 use crate::parse::{Expr, Kind, Link, Parser, R, Storage};
 
@@ -20,6 +21,12 @@ use crate::parse::{Expr, Kind, Link, Parser, R, Storage};
 #[derive(Debug, PartialEq)]
 pub struct Linkage {
     pub jsb: bool,
+    /// INTERRUPT or EXCEPTION: entered by the PAL with its frame on the
+    /// stack, never called, returning with REI (`docs/bliss64.md`).
+    pub interrupt: bool,
+    /// COUNT or NOCOUNT, for a CALL linkage: whether calls pass the
+    /// argument count in x9; neither says, the module's default.
+    pub count: Option<bool>,
     /// Each input parameter's VAX register, or None for STANDARD; past
     /// the list, parameters are STANDARD, which JSB can't pass.
     pub params: Vec<Option<u8>>,
@@ -37,22 +44,31 @@ impl Parser<'_> {
         loop {
             let name = self.name()?;
             self.expect_punct('=')?;
-            let jsb = if self.eat("JSB") {
-                true
+            let (jsb, interrupt) = if self.eat("JSB") {
+                (true, false)
             } else if self.eat("CALL") {
-                false
+                (false, false)
+            } else if self.eat("INTERRUPT") || self.eat("EXCEPTION") {
+                (false, true)
             } else {
                 let found = self.describe();
-                return self.err(format!("expected CALL or JSB, found {found}"));
+                return self.err(format!(
+                    "expected CALL, JSB, INTERRUPT or EXCEPTION, found {found}"
+                ));
             };
             let mut l = Linkage {
                 jsb,
+                interrupt,
+                count: None,
                 params: Vec::new(),
                 outs: Vec::new(),
                 globals: Vec::new(),
                 nopreserve: Vec::new(),
             };
             let mut used = Vec::new();
+            if interrupt && self.at_punct('(') {
+                return self.err("an INTERRUPT or EXCEPTION linkage takes no parameter locations");
+            }
             if self.eat_punct('(') {
                 if !self.at_punct(';') && !self.at_punct(')') {
                     loop {
@@ -86,7 +102,9 @@ impl Parser<'_> {
                         // The same register may be an input and an output.
                         let r = self.register()?;
                         if l.outs.contains(&r) {
-                            return self.err(format!("register {r} is given twice"));
+                            return self.err(format!(
+                                "Multiple specification of register {r} in LINKAGE declaration"
+                            ));
                         }
                         l.outs.push(r);
                         if !self.eat_punct(',') {
@@ -128,6 +146,13 @@ impl Parser<'_> {
                             }
                             self.expect_punct(')')?;
                         }
+                        "COUNT" | "NOCOUNT" => {
+                            if jsb || interrupt {
+                                return self.err(format!("{option} is for CALL linkages"));
+                            }
+                            self.pos += 1;
+                            l.count = Some(option == "COUNT");
+                        }
                         _ => break,
                     }
                 }
@@ -156,7 +181,9 @@ impl Parser<'_> {
     fn linkage_register(&mut self, used: &mut Vec<u8>, high: bool) -> R<u8> {
         let r = self.register()?;
         if used.contains(&r) {
-            return self.err(format!("register {r} is given twice"));
+            return self.err(format!(
+                "Multiple specification of register {r} in LINKAGE declaration"
+            ));
         }
         if high && r < 2 {
             return self.err(format!(
@@ -203,6 +230,24 @@ impl Parser<'_> {
                 }
                 number = Some(r);
             } else if global {
+                // CHECK_REDECLARE: the linkage's global register again,
+                // which starts a lifetime of its own (RN 2.30).
+                if let Some(l) = self.linkage_now()
+                    && l.globals.iter().any(|(g, _)| *g == name)
+                    && self.switch_on("CHECK_REDECLARE")
+                {
+                    let lname = self
+                        .m
+                        .syms
+                        .iter()
+                        .find(|s| matches!(&s.kind, Kind::Linkage(k) if Rc::ptr_eq(k, &l)))
+                        .map_or(String::new(), |s| s.name.clone());
+                    let at = self.last();
+                    let msg = format!(
+                        "LINKAGE {lname}'s GLOBAL REGISTER {name} is being redeclared locally"
+                    );
+                    self.diag('I', &at, msg);
+                }
                 match number {
                     Some(2..=11) => {}
                     Some(r) => {
@@ -241,21 +286,48 @@ impl Parser<'_> {
     pub(crate) fn link_call(
         &mut self,
         target: Expr,
-        args: Vec<Expr>,
-        outs: Vec<Option<Expr>>,
+        mut args: Vec<Expr>,
+        mut outs: Vec<Option<Expr>>,
+        general: Option<Rc<Linkage>>,
     ) -> R<Expr> {
-        let linkage = match &target {
+        // %xFLOAT output actuals are the routine's floating result, at most
+        // two of one format (RN 2.10.4): after the inputs, for irgen.
+        let floats: Vec<Expr> = outs
+            .iter()
+            .flatten()
+            .filter(|o| matches!(o, Expr::Special(Special::FloatOut(_), _)))
+            .cloned()
+            .collect();
+        if !floats.is_empty() {
+            if floats.len() != outs.len() || floats.len() > 2 {
+                return self.err("a call's floating results are one or two %xFLOAT output actuals");
+            }
+            outs.clear();
+            args.extend(floats);
+        }
+        // A general call calls by the linkage it names, even a routine's
+        // name (LRM 12.2.3, oracle GCL); a routine's name otherwise by its
+        // linkage (LRM 12.1.3), an address by the LINKAGE switch's.
+        let named = match &target {
             Expr::Name(id) => match &self.m.syms[*id].kind {
-                Kind::Routine { linkage, .. } => linkage.clone(),
+                Kind::Routine { linkage, .. } => Some(linkage.clone()),
                 _ => None,
             },
             _ => None,
         };
+        let explicit = match named {
+            Some(_) => general,
+            None => general.or_else(|| self.default_linkage()),
+        };
+        let linkage = explicit.clone().or_else(|| named.flatten());
+        if linkage.as_ref().is_some_and(|l| l.interrupt) {
+            return self.err("a routine with an INTERRUPT or EXCEPTION linkage can't be called");
+        }
         let Some(l) = linkage else {
             if !outs.is_empty() {
                 return self.err("output actuals need a linkage with output parameters");
             }
-            return Ok(Expr::Call(Box::new(target), args, Vec::new()));
+            return Ok(Expr::Call(Box::new(target), args, Vec::new(), None));
         };
         if l.jsb && args.len() > l.params.len() {
             return self.err("more actuals than the JSB linkage has registers");
@@ -266,6 +338,16 @@ impl Parser<'_> {
         let (mut std, mut links) = (Vec::new(), Vec::new());
         for (i, a) in args.into_iter().enumerate() {
             match l.params.get(i).copied().flatten() {
+                // Floating actuals go in floating registers, which only
+                // the calling standard's linkage has.
+                Some(_)
+                    if matches!(
+                        a,
+                        Expr::Special(Special::FloatIn(_) | Special::FloatOut(_), _)
+                    ) =>
+                {
+                    return self.err("%xFLOAT actuals need the calling standard's linkage");
+                }
                 Some(reg) => links.push(Link {
                     reg,
                     input: Some(a),
@@ -301,6 +383,37 @@ impl Parser<'_> {
                 output: Some(Expr::Name(id)),
             });
         }
-        Ok(Expr::Call(Box::new(target), std, links))
+        Ok(Expr::Call(Box::new(target), std, links, explicit))
+    }
+
+    /// The linkage the LINKAGE switch gives routines declared without one
+    /// and calls through an address, if it names one (LRM 18.2).
+    pub(crate) fn default_linkage(&self) -> Option<Rc<Linkage>> {
+        match self.lookup("%LINKAGE").map(|id| &self.m.syms[id].kind) {
+            Some(Kind::Linkage(l)) => Some(l.clone()),
+            _ => None,
+        }
+    }
+
+    /// The predeclared linkages (LRM 13.5): BLISS, the default, and the
+    /// FORTRAN ones, which on OpenVMS are the calling standard too.
+    pub(crate) fn predeclare_linkages(&mut self) {
+        for name in ["BLISS", "FORTRAN", "FORTRAN_SUB", "FORTRAN_FUNC"] {
+            let l = Linkage {
+                jsb: false,
+                interrupt: false,
+                count: None,
+                params: Vec::new(),
+                outs: Vec::new(),
+                globals: Vec::new(),
+                nopreserve: Vec::new(),
+            };
+            self.scopes[0].insert(name.into(), self.m.syms.len());
+            self.m.syms.push(crate::parse::Sym {
+                name: name.into(),
+                asm: name.into(),
+                kind: Kind::Linkage(Rc::new(l)),
+            });
+        }
     }
 }

@@ -196,6 +196,10 @@ fn evax(mn: &str) -> Option<(Op, Size)> {
                 ("RXCS", MTPR_RXCS, MFPR_RXCS),
                 ("RXDB", 0, MFPR_RXDB),
                 ("DOORBELL", MTPR_DOORBELL, 0),
+                ("FEN", MTPR_FEN, MFPR_FEN),
+                ("IPIR", MTPR_IPIR, 0),
+                ("MCES", MTPR_MCES, MFPR_MCES),
+                ("WHAMI", 0, MFPR_WHAMI),
             ];
             let find = |pr: &str, to: bool| {
                 calls
@@ -1481,13 +1485,19 @@ pub fn compile(
 /// PAL function codes (docs/design/0001-pal-interface.md): Alpha OpenVMS's,
 /// and vaxpunk's own from 0x40.
 const HALT: u32 = 0x00;
+const MFPR_FEN: u32 = 0x0B;
+const MTPR_FEN: u32 = 0x0C;
+const MTPR_IPIR: u32 = 0x0D;
 const MFPR_IPL: u32 = 0x0E;
 const MTPR_IPL: u32 = 0x0F;
+const MFPR_MCES: u32 = 0x10;
+const MTPR_MCES: u32 = 0x11;
 const MFPR_PCBB: u32 = 0x12;
 const MFPR_SCBB: u32 = 0x16;
 const MTPR_SCBB: u32 = 0x17;
 const MTPR_SIRR: u32 = 0x18;
 const MFPR_SISR: u32 = 0x19;
+const MFPR_WHAMI: u32 = 0x3F;
 const MTPR_TXDB: u32 = 0x40;
 const MTPR_RXCS: u32 = 0x43;
 const MFPR_RXCS: u32 = 0x44;

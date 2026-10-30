@@ -1,0 +1,17 @@
+MODULE VF1 (MAIN = M) =
+BEGIN
+! A field of R0 whose size, 64, is known only when it runs.
+REQUIRE 'PRINT';
+ROUTINE M =
+    BEGIN
+    LOCAL F, N;
+    BUILTIN R0;
+    N = 64;
+    R0 = 0;
+    R0<0, .N> = 77;
+    F = .R0;
+    PRINT(.F);
+    1
+    END;
+END
+ELUDOM

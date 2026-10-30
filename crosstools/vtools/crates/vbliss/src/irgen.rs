@@ -38,6 +38,10 @@ struct Gen<'a> {
     ascids: HashMap<Vec<u8>, V>,
     /// The registers the routine leaves values in when it returns.
     exits: Vec<(u8, usize)>,
+    /// An INTERRUPT routine's formals, by number: they are the stack the
+    /// PAL left, so that what the routine stores in the PC and PSL is
+    /// what REI restores.
+    frame: HashMap<usize, u32>,
 }
 
 /// Generates the IR of a parsed module.
@@ -54,6 +58,7 @@ pub fn generate(m: &parse::Module) -> R<ir::Module> {
         plits: HashMap::new(),
         ascids: HashMap::new(),
         exits: Vec::new(),
+        frame: HashMap::new(),
     };
     for s in &m.statics {
         g.statics(s)?;
@@ -190,7 +195,7 @@ impl Gen<'_> {
             psect: s.psect.clone(),
             name: sym.asm.clone(),
             global,
-            align: 3,
+            align: s.align,
             items,
         });
         Ok(())
@@ -236,6 +241,11 @@ impl Gen<'_> {
 
     /// The address a data or routine name stands for.
     fn address(&mut self, id: usize) -> R<V> {
+        if let Some(&n) = self.frame.get(&id) {
+            let d = self.temp();
+            self.emit(Ins::StackAddr(d, n));
+            return Ok(V::T(d));
+        }
         let sym = &self.m.syms[id];
         Ok(match sym.kind {
             Kind::Data {
@@ -279,17 +289,29 @@ impl Gen<'_> {
             ..Func::default()
         };
         self.cur = self.block();
-        let params = match &sym.kind {
+        let (params, interrupt) = match &sym.kind {
             Kind::Routine {
                 linkage: Some(l), ..
-            } => l.params.clone(),
-            _ => Vec::new(),
+            } => (l.params.clone(), l.interrupt),
+            _ => (Vec::new(), false),
         };
+        if interrupt {
+            self.f.rei = Some(r.formals.len().saturating_sub(2) as u32);
+        }
         let mut standard = 0;
+        self.frame.clear();
         for (i, &formal) in r.formals.iter().enumerate() {
+            if interrupt {
+                self.frame.insert(formal, i as u32);
+                continue;
+            }
             let t = self.temp();
             match params.get(i).copied().flatten() {
                 Some(reg) => self.emit(Ins::RegArg(t, reg)),
+                // The general arguments in order, as AAPCS64 places them
+                // (DESIGN-0004): %xFLOAT actuals are for other languages'
+                // routines (RN 2.10.4), and a BLISS routine passed one
+                // reads its arguments with ACTUALPARAMETER, by x9's classes.
                 None => {
                     self.emit(Ins::Arg(t, standard));
                     standard += 1;
@@ -356,7 +378,8 @@ impl Gen<'_> {
                 | Special::TestBit { .. }
                 | Special::Adawi
                 | Special::Insque { .. }
-                | Special::Remque { .. }),
+                | Special::Remque { .. }
+                | Special::PalOut(_)),
                 args,
             ) => self.machine(*s, args)?,
             Expr::Special(s, args) => {
@@ -394,6 +417,60 @@ impl Gen<'_> {
                     }
                     Special::Bpt => {
                         self.emit(Ins::Bpt);
+                        V::C(0)
+                    }
+                    Special::FArith(op, f) => {
+                        let (a, b, d) = (vals.remove(0), vals.remove(0), vals.remove(0));
+                        self.emit(Ins::FArith(*op, *f, a, b, d));
+                        V::C(0)
+                    }
+                    Special::Checked(o) => {
+                        // The wrapped value, and SS$_INTOVF (1148, VMS's)
+                        // signaled if it overflowed: 64 bits, or under
+                        // BLISS-32 32.
+                        let (a, b) = (vals.remove(0), vals.remove(0));
+                        let r = self.bin(*o, a.clone(), b.clone());
+                        let flag = if self.m.dialect.a32 {
+                            let n = self.narrow(r.clone());
+                            self.bin(Op::Cne, r.clone(), n)
+                        } else {
+                            let v = match o {
+                                Op::Add => Op::Addv,
+                                Op::Sub => Op::Subv,
+                                _ => Op::Mulv,
+                            };
+                            self.bin(v, a, b)
+                        };
+                        let (sig, ok) = (self.block(), self.block());
+                        self.end(Term::Jlbs(flag, sig, ok));
+                        self.start(sig);
+                        self.externals.insert("LIB$SIGNAL".into());
+                        let d = self.temp();
+                        self.emit(Ins::Call(
+                            Some(d),
+                            V::Sym("LIB$SIGNAL".into(), 0),
+                            vec![V::C(1148)],
+                        ));
+                        self.jump(ok);
+                        self.start(ok);
+                        self.narrow(r)
+                    }
+                    Special::FCmp(f) => {
+                        let d = self.temp();
+                        let (a, b) = (vals.remove(0), vals.remove(0));
+                        self.emit(Ins::FCmp(d, *f, a, b));
+                        V::T(d)
+                    }
+                    Special::FCvt(from, to, r) => {
+                        let (a, d) = (vals.remove(0), vals.remove(0));
+                        self.emit(Ins::FCvt(*from, *to, *r, a, d));
+                        V::C(0)
+                    }
+                    Special::Reg(r) => {
+                        return Err(format!("R{r} is a register: it has no address"));
+                    }
+                    Special::Comment(n) => {
+                        self.emit(Ins::Comment(self.m.comments[*n as usize].clone()));
                         V::C(0)
                     }
                     Special::RetAddr => {
@@ -442,6 +519,30 @@ impl Gen<'_> {
                 self.value(body)?
             }
             Expr::Fetch(a) => {
+                if let Expr::Special(Special::Reg(r), _) = **a {
+                    let d = self.temp();
+                    self.emit(Ins::RegArg(d, r));
+                    return Ok(self.narrow(V::T(d)));
+                }
+                if let Expr::Field(b, pos, size, ext) = &**a
+                    && let Expr::Special(Special::Reg(r), _) = **b
+                {
+                    let (pos, size, mut signed) = self.reg_field(pos, size, ext)?;
+                    if size == V::C(0) {
+                        return Ok(V::C(0));
+                    }
+                    // A BLISS-32 fullword is kept sign-extended, as load()
+                    // keeps one from memory; one of a size known only at
+                    // run time isn't, as in BLISSA64 (oracle RV32).
+                    if self.m.dialect.a32 && size == V::C(32) {
+                        signed = true;
+                    }
+                    let d = self.temp();
+                    self.emit(Ins::RegArg(d, r));
+                    let e = self.temp();
+                    self.emit(Ins::Ext(e, V::T(d), pos, size, signed));
+                    return Ok(V::T(e));
+                }
                 let p = self.place(a)?;
                 self.load(p)
             }
@@ -479,21 +580,118 @@ impl Gen<'_> {
             }
             Expr::Assign(l, r) => {
                 let v = self.value(r)?;
-                let p = self.place(l)?;
-                self.store(p, v.clone());
-                v
+                self.assign(l, v)?
             }
-            Expr::Call(target, args, links) => {
-                let mut linkage = None;
+            Expr::Call(target, args, links, general)
+                if args.iter().any(|a| {
+                    matches!(
+                        a,
+                        Expr::Special(Special::FloatIn(_) | Special::FloatOut(_), _)
+                    )
+                }) =>
+            {
+                let linkage = match **target {
+                    Expr::Name(id) if general.is_none() => match &self.m.syms[id].kind {
+                        Kind::Routine { linkage: l, .. } => l.clone(),
+                        _ => None,
+                    },
+                    _ => general.clone(),
+                };
+                if linkage.as_ref().is_some_and(|l| l.jsb) || !links.is_empty() {
+                    return Err("%xFLOAT actuals need the calling standard's linkage".into());
+                }
                 let t = match **target {
-                    Expr::Name(id) => match &self.m.syms[id].kind {
+                    Expr::Name(id) if general.is_none() => self.address(id)?,
+                    ref t => self.value(t)?,
+                };
+                let (mut vals, mut results, mut dests) = (Vec::new(), Vec::new(), Vec::new());
+                for a in args {
+                    match a {
+                        Expr::Special(Special::FloatIn(f), e) => {
+                            // Its bits now, as a later actual may change
+                            // them (oracle FV).
+                            let a = self.value(&e[0])?;
+                            let long = matches!(f, ir::Fl::F | ir::Fl::S);
+                            let t = self.temp();
+                            self.emit(Ins::Load(t, a, if long { 4 } else { 8 }, *f == ir::Fl::F));
+                            vals.push((V::T(t), Some(*f)));
+                        }
+                        Expr::Special(Special::FloatOut(f), e) => {
+                            let t = self.temp();
+                            results.push((*f, t));
+                            dests.push((&e[0], *f, t));
+                        }
+                        a => {
+                            let v = self.value(a)?;
+                            vals.push((self.fix(v), None));
+                        }
+                    }
+                }
+                // x9's count is 8 bits, as in a call without them.
+                if vals.len() > 255 {
+                    return Err("more than 255 arguments".into());
+                }
+                let d = self.temp();
+                self.emit(Ins::FCall(Box::new(ir::FCall {
+                    dst: d,
+                    target: t,
+                    args: vals,
+                    results,
+                    nopreserve: linkage.map(|l| l.nopreserve.clone()).unwrap_or_default(),
+                })));
+                // Where the results go, found after the call, as a
+                // linkage's output parameters are.
+                for (e, f, t) in &dests {
+                    let addr = self.value(e)?;
+                    let long = matches!(f, ir::Fl::F | ir::Fl::S);
+                    let p = Place {
+                        addr,
+                        pos: V::C(0),
+                        size: V::C(if long { 32 } else { 64 }),
+                        signed: false,
+                    };
+                    self.store(p, V::T(*t));
+                }
+                // A call with a floating result has no other value.
+                if dests.is_empty() {
+                    self.narrow(V::T(d))
+                } else {
+                    V::C(0)
+                }
+            }
+            Expr::Call(target, args, links, general) => {
+                let mut linkage = general.clone();
+                let t = match **target {
+                    Expr::Name(id) if general.is_none() => match &self.m.syms[id].kind {
                         Kind::Routine { linkage: l, .. } => {
-                            linkage = l.clone().filter(|l| l.jsb || !links.is_empty());
+                            linkage = l.clone();
                             self.address(id)?
                         }
                         _ => return Err(format!("{} is not a routine", self.m.syms[id].name)),
                     },
                     ref t => self.value(t)?,
+                };
+                // A CALL without the count, by its linkage or the module's
+                // NOCOUNT, or whose callee may change registers the caller
+                // keeps, goes as a linkage call does.
+                let count = linkage
+                    .as_ref()
+                    .and_then(|l| l.count)
+                    .unwrap_or(!self.m.nocount);
+                let linkage = match linkage {
+                    Some(l) if l.jsb || !links.is_empty() || !count || !l.nopreserve.is_empty() => {
+                        Some(l)
+                    }
+                    None if !count => Some(std::rc::Rc::new(crate::linkage::Linkage {
+                        jsb: false,
+                        interrupt: false,
+                        count: Some(false),
+                        params: Vec::new(),
+                        outs: Vec::new(),
+                        globals: Vec::new(),
+                        nopreserve: Vec::new(),
+                    })),
+                    _ => None,
                 };
                 let mut vals = Vec::new();
                 for a in args {
@@ -518,6 +716,7 @@ impl Gen<'_> {
                         dst: Some(d),
                         target: t,
                         jsb: l.jsb,
+                        count,
                         args: vals,
                         ins,
                         outs: outs.clone(),
@@ -530,9 +729,8 @@ impl Gen<'_> {
                         .collect();
                     for (k, (_, t)) in results.into_iter().zip(&outs) {
                         if let Some(place) = &k.output {
-                            let p = self.place(place)?;
                             let v = self.narrow(V::T(*t));
-                            self.store(p, v);
+                            self.assign(place, v)?;
                         }
                     }
                     return Ok(self.narrow(V::T(d)));
@@ -1028,8 +1226,7 @@ impl Gen<'_> {
                     V::T(c)
                 });
                 if old {
-                    let place = self.place(&args[args.len() - 1])?;
-                    self.store(place, V::T(was));
+                    self.assign(&args[args.len() - 1], V::T(was))?;
                 }
                 ok
             }
@@ -1121,8 +1318,7 @@ impl Gen<'_> {
                     V::T(c)
                 });
                 if flag {
-                    let place = self.place(&args[args.len() - 1])?;
-                    self.store(place, ok);
+                    self.assign(&args[args.len() - 1], ok)?;
                 }
                 match was_set {
                     true => V::T(was),
@@ -1221,8 +1417,7 @@ impl Gen<'_> {
                 }
                 let e = self.fix(e);
                 if addr {
-                    let place = self.place(&args[1])?;
-                    self.store(place, e.clone());
+                    self.assign(&args[1], e.clone())?;
                 }
                 let (s, p, r) = (self.temp(), self.temp(), self.temp());
                 self.emit(Ins::Load(s, e.clone(), n, n == 4));
@@ -1243,6 +1438,19 @@ impl Gen<'_> {
                 self.jump(out);
                 self.start(out);
                 V::T(r)
+            }
+            Special::PalOut(code) => {
+                let (out, ins) = args.split_last().unwrap();
+                let mut vals = Vec::new();
+                for a in ins {
+                    let v = self.value(a)?;
+                    vals.push(self.fix(v));
+                }
+                let (d, r1) = (self.temp(), self.temp());
+                self.emit(Ins::Pal(d, V::C(code.into()), vals));
+                self.emit(Ins::PalR1(r1));
+                self.assign(out, V::T(r1))?;
+                V::T(d)
             }
             _ => unreachable!(),
         })
@@ -1363,6 +1571,35 @@ impl Gen<'_> {
 
     /// Where a fetch reads and an assignment writes: a name's own field, a
     /// field reference, or a fullword at the address an expression gives.
+    /// Stores v where `l` says, an assignment's left side or an output
+    /// parameter's actual: a place in memory, or a register built-in or
+    /// a field of one (LRM 12.1.2). Returns v.
+    fn assign(&mut self, l: &Expr, v: V) -> R<V> {
+        if let Expr::Special(Special::Reg(r), _) = *l {
+            let v = self.fix(v);
+            self.emit(Ins::SetReg(r, v.clone()));
+            return Ok(v);
+        }
+        if let Expr::Field(b, pos, size, ext) = l
+            && let Expr::Special(Special::Reg(r), _) = **b
+        {
+            let (pos, size, _) = self.reg_field(pos, size, ext)?;
+            let v = self.fix(v);
+            if size == V::C(0) {
+                return Ok(v);
+            }
+            let d = self.temp();
+            self.emit(Ins::RegArg(d, r));
+            let n = self.temp();
+            self.emit(Ins::Insert(n, V::T(d), v.clone(), pos, size));
+            self.emit(Ins::SetReg(r, V::T(n)));
+            return Ok(v);
+        }
+        let p = self.place(l)?;
+        self.store(p, v.clone());
+        Ok(v)
+    }
+
     fn place(&mut self, e: &Expr) -> R<Place> {
         Ok(match e {
             Expr::Name(id) => {
@@ -1407,6 +1644,22 @@ impl Gen<'_> {
                 self.full(addr)
             }
         })
+    }
+
+    /// A field of a register (LRM 11.2, oracle RFLD): its position, size
+    /// and sign extension, in the register's 64 bits, not memory's; of a
+    /// size of 0, as in memory, 0 to fetch and nothing to store.
+    fn reg_field(&mut self, pos: &Expr, size: &Expr, ext: &Expr) -> R<(V, V, bool)> {
+        let (pos, size) = (self.value(pos)?, self.value(size)?);
+        if let (V::C(p), V::C(s)) = (&pos, &size)
+            && (*p < 0 || *s < 0 || p + s > 64)
+        {
+            return Err(format!("field <{p}, {s}> out of range"));
+        }
+        match parse::fold(ext) {
+            Some(x) => Ok((pos, size, x & 1 != 0)),
+            None => Err("a field's sign extension isn't constant".into()),
+        }
     }
 
     /// The width of memory to access for a field, and where: for constant
@@ -1462,7 +1715,13 @@ impl Gen<'_> {
         }
         self.emit(Ins::Load(d, addr, width, false));
         let e = self.temp();
+        // So is one whose size is known only at run time, when it is 32
+        // bits (oracle RV32).
+        let fullword = self.m.dialect.a32 && !matches!(p.size, V::C(_));
         self.emit(Ins::Ext(e, V::T(d), bit, p.size, p.signed));
+        if fullword {
+            return self.narrow(V::T(e));
+        }
         V::T(e)
     }
 
@@ -1664,6 +1923,7 @@ fn jacket() -> Func {
         slots: Vec::new(),
         temps: 9,
         long_args: false,
+        rei: None,
         psect: "$CODE$".into(),
         blocks: vec![Block {
             ins,

@@ -1,0 +1,18 @@
+MODULE FE (MAIN = M) =
+BEGIN
+! Floating literals with exponents far out of range: overflow and
+! underflow.
+REQUIRE 'PRINT';
+OWN
+    A : INITIAL(%T'1E-2147483648'),
+    B : INITIAL(%T'1E2147483647'),
+    C : INITIAL(%T'-1E-99999');
+ROUTINE M =
+    BEGIN
+    PRINT(.A);
+    PRINT(.B);
+    PRINT(.C);
+    1
+    END;
+END
+ELUDOM

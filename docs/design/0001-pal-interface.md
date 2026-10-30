@@ -126,7 +126,8 @@ The executive calls the PAL with `svc #0`:
 | --- | --- | --- |
 | x7 | function code, in bits 15:0; `CHMx`'s code in 31:16 | unchanged |
 | x0 | a0, the first argument | v0, the result, if the call has one |
-| x1-x5 | a1-a5 | unchanged |
+| x1 | a1 | unchanged, or R1, the entry a queue call removed (*Queues*) |
+| x2-x5 | a2-a5 | unchanged |
 | x6 | passed, not used | unchanged |
 | x8-x29 | not seen by the PAL | unchanged |
 | x30, `sp`, NZCV | seen, NZCV in the SPSR that `RD_PS` returns | unchanged |
@@ -263,6 +264,14 @@ the current mode runs; `MFPR #PR$_PCBB` returns its HWPCB.
   is in kernel mode, in its `SWPCTX`, and gets back the previous mode it
   had.
 
+Each context has FEN, Alpha's floating point enable, set when it starts.
+`MTPR_FEN` (a0 = 0 or 1) sets or clears the current context's, `CLRFEN`
+clears it from any mode, and `MFPR_FEN` reads it. While it is clear, seL4
+traps each floating point instruction of the context's threads, which is
+a reserved instruction, as on Alpha. vaxpunk: FEN isn't in the HWPCB, as
+seL4 keeps each thread's floating point registers, so the executive has
+nothing to save for a context without it.
+
 `DELCTX` (a0 = a HWPCB) deletes the context of a process that isn't
 current, and stops its threads. The PAL empties its address spaces and
 forgets its P0 and P1 PTEs; the executive frees their PFNs first, from the
@@ -371,6 +380,16 @@ starts as `REI` from the frame at its KSP, with R0 the HWPCB the CPU left.
   VAX's `PROBE`. Services check the addresses their callers pass with it.
 - **`WTINT`.** Returns once an interrupt IPL lets through has been
   delivered: at once if one is pending, or at the next tick.
+- **Machine checks.** The PAL takes none: seL4 tells it of no hardware
+  error. `MFPR_MCES` reads the machine check error summary, Alpha's MCES,
+  and `MTPR_MCES` writes it: a 1 in MCK, SCE or PCE, bits 0-2, clears
+  that bit, which is never set, and DPC and DSC, bits 3 and 4, which turn
+  off reports of correctable errors, are written.
+- **Other CPUs.** There is one CPU
+  ([ADR-0003](../adr/0003-one-cpu-many-threads.md)): `MFPR_WHAMI` gives
+  its number, 0, and `MTPR_IPIR` (a0 = a CPU's number), the
+  interprocessor interrupt request, does nothing, as there is no other
+  CPU to interrupt. ponytail: an interrupt at IPL 22 when there are more.
 
 ### Exceptions
 
@@ -381,8 +400,8 @@ took it.
 
 | Event | Vector | Parameters, below the frame |
 | --- | --- | --- |
-| Undefined instruction, `brk`, a privileged or unimplemented PAL call, a `CHMx` with no vector, a bad `REI` | 0x10, reserved instruction | none |
-| Page fault the PTE doesn't allow (*Memory*) | 0x20, access violation | a mask, bit 2 set for a write, then the address |
+| Undefined instruction, `brk`, a privileged or unimplemented PAL call, a `CHMx` with no vector, a bad `REI`, a queue call's misaligned link, a floating point instruction without FEN | 0x10, reserved instruction | none |
+| Page fault the PTE doesn't allow (*Memory*), a queue call's link the mode may not write | 0x20, access violation | a mask, bit 2 set for a write, then the address |
 
 ### Faults and HALT
 
@@ -392,14 +411,47 @@ instruction naming the HWPCB of the process that took it:
 
 | Event | The PAL prints |
 | --- | --- |
-| Page fault the PTE doesn't allow | `%PAL-F-ACCVIO` with the address and PC |
-| Undefined instruction, `brk` (`BPT`) | `%PAL-F-OPCDEC` with the PC |
-| Reserved PAL call, bad `WRPTE` | `%PAL-F-OPCDEC` with the code, PC, R0 and R1 |
+| Page fault the PTE doesn't allow, a queue call's link kernel mode may not write | `%PAL-F-ACCVIO` with the address and PC |
+| Undefined instruction, `brk` (`BPT`), a floating point instruction without FEN | `%PAL-F-OPCDEC` with the PC |
+| Reserved PAL call, bad `WRPTE`, a queue call's misaligned link | `%PAL-F-OPCDEC` with the code, PC, R0 and R1 |
 | Delivery with no vector or stack | `%PAL-F-NOVEC` |
 | `REI` without a frame | `%PAL-F-REI` |
 | `HALT` | `%PAL-I-HALT` with the PC and R0 |
 
 The root task then prints `root task done` and suspends itself.
+
+## Queues
+
+The queue calls are the VAX's queue instructions, as Alpha's PALcode made
+them, for any mode. A queue is a header and entries, each with a forward
+link, then a backward one, in a ring.
+
+- **Self-relative.** `INSQHIL` and `INSQTIL` insert an entry at the head
+  or the tail, `REMQHIL` and `REMQTIL` remove one, as the VAX's `INSQHI`,
+  `INSQTI`, `REMQHI` and `REMQTI`. Each link is the distance from its
+  entry to the one it links: a longword, in quadword-aligned entries, or
+  for the `Q` forms a quadword, in octaword-aligned ones. An empty queue's
+  header holds zeros. Bit 0 of the header's forward link is the secondary
+  interlock, which a CPU holds while it changes the queue: a call that
+  finds it set returns -1 and changes nothing. The PAL makes each call
+  while every thread of the executive waits, so the calls are interlocked
+  without taking it. The `R` forms, for queues in resident memory, are the
+  same calls.
+- **By address.** `INSQUEL` inserts an entry after its predecessor,
+  `REMQUEL` removes one, as the VAX's `INSQUE` and `REMQUE`, with
+  longword addresses, or quadword ones in the `Q` forms. An empty queue's
+  header links to itself. The `/D` forms take the address of the
+  predecessor's or the entry's address.
+- **Status.** An insert returns 1 if the entry is now the only one, else
+  0. `REMQHIL` and `REMQTIL` return 0 if the queue was empty, 1 if an
+  entry was removed and others are left, 2 if none is; `REMQUEL` -1 if
+  the queue was empty, 0 if it is now, else 1. A remove gives the entry
+  in R1, or `REMQHIL` and `REMQTIL` the header if there was none.
+- **Errors.** Each link a call reads or writes, and a `/D` form's
+  address, must be one the current mode may write, else the call is an
+  access violation at its address, and naturally aligned, else a reserved
+  instruction, which stands in for the VAX's reserved operand. Either
+  leaves the queue as it was.
 
 ## How MACRO-32 calls it
 
@@ -466,14 +518,20 @@ unused.
 | --- | --- | --- | --- | --- | --- |
 | 0x00 | `HALT` | Alpha | | | stops the executive; prints its PC and R0 |
 | 0x05 | `SWPCTX` | Alpha, changed | a0 = new HWPCB | v0 = the HWPCB left | switches the CPU to the HWPCB's context, making it the first time |
+| 0x0B | `MFPR_FEN` | Alpha | | v0 = FEN | 1 if the current context has floating point (*Process contexts*) |
+| 0x0C | `MTPR_FEN` | Alpha | a0 = FEN, bit 0 | | gives the current context floating point, or takes it away |
+| 0x0D | `MTPR_IPIR` | Alpha | a0 = a CPU | | nothing: there is no other CPU to interrupt (*Interrupts and exceptions*) |
 | 0x0E | `MFPR_IPL` | Alpha | | v0 = IPL | |
 | 0x0F | `MTPR_IPL` | Alpha | a0 = new IPL | v0 = old IPL | sets the IPL, 0-31, and delivers what it lets through |
+| 0x10 | `MFPR_MCES` | Alpha | | v0 = MCES | the machine check error summary (*Interrupts and exceptions*) |
+| 0x11 | `MTPR_MCES` | Alpha | a0 = MCES | | a 1 in bits 0-2 clears that bit; bits 3 and 4 are written |
 | 0x12 | `MFPR_PCBB` | Alpha | | v0 = HWPCB | the current context's HWPCB address, not a physical one |
 | 0x16 | `MFPR_SCBB` | Alpha | | v0 = SCB | |
 | 0x17 | `MTPR_SCBB` | Alpha | a0 = SCB | | the SCB's address, longword aligned |
 | 0x18 | `MTPR_SIRR` | Alpha | a0 = level | | requests a software interrupt, 1-15 |
 | 0x19 | `MFPR_SISR` | Alpha | | v0 = summary | bit n: level n pending |
 | 0x3E | `WTINT` | Alpha | | v0 = 0 | waits for an interrupt; the clock's comes within 10 ms |
+| 0x3F | `MFPR_WHAMI` | Alpha | | v0 = 0 | the CPU's number: the only one's |
 | 0x40 | `MTPR_TXDB` | vaxpunk | a0 = character | | writes a0's low byte on the console |
 | 0x41 | `WRPTE` | vaxpunk | a0 = address, a1 = PTE | v0 = old PTE, or -1 with no room | maps, unmaps or protects a page |
 | 0x42 | `DELCTX` | vaxpunk | a0 = HWPCB | | deletes a context that isn't current |
@@ -489,10 +547,35 @@ unused.
 | 0x83 | `CHMK` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to kernel mode |
 | 0x84 | `CHMS` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to supervisor mode |
 | 0x85 | `CHMU` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, in user mode |
+| 0x87 | `INSQHIL` | Alpha | a0 = header, a1 = entry | v0 = status | inserts the entry at the head of a self-relative queue of longwords (*Queues*) |
+| 0x88 | `INSQTIL` | Alpha | a0 = header, a1 = entry | v0 = status | the same at the tail |
+| 0x89 | `INSQHIQ` | Alpha | a0 = header, a1 = entry | v0 = status | inserts at the head of a self-relative queue of quadwords |
+| 0x8A | `INSQTIQ` | Alpha | a0 = header, a1 = entry | v0 = status | the same at the tail |
+| 0x8B | `INSQUEL` | Alpha | a0 = predecessor, a1 = entry | v0 = status | inserts the entry after its predecessor in a queue of longword addresses |
+| 0x8C | `INSQUEQ` | Alpha | a0 = predecessor, a1 = entry | v0 = status | the same with quadword addresses |
+| 0x8D | `INSQUEL/D` | Alpha | a0 = the predecessor's address, a1 = entry | v0 = status | `INSQUEL` with the predecessor's address at a0 |
+| 0x8E | `INSQUEQ/D` | Alpha | a0 = the predecessor's address, a1 = entry | v0 = status | `INSQUEQ` the same way |
 | 0x8F | `PROBER` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if readable | checks a mode's read access |
 | 0x90 | `PROBEW` | Alpha | a0 = address, a1 = length, a2 = mode | v0 = 1 if writable | checks a mode's write access |
 | 0x91 | `RD_PS` | Alpha | | v0 = PSL | the current and previous modes, IPL and the condition codes |
 | 0x92 | `REI` | Alpha | | | pops a frame: PC, PSL, registers, SPs |
+| 0x93 | `REMQHIL` | Alpha | a0 = header | v0 = status, R1 = entry | removes the entry at the head of a self-relative queue of longwords |
+| 0x94 | `REMQTIL` | Alpha | a0 = header | v0 = status, R1 = entry | the same at the tail |
+| 0x95 | `REMQHIQ` | Alpha | a0 = header | v0 = status, R1 = entry | removes at the head of a self-relative queue of quadwords |
+| 0x96 | `REMQTIQ` | Alpha | a0 = header | v0 = status, R1 = entry | the same at the tail |
+| 0x97 | `REMQUEL` | Alpha | a0 = entry | v0 = status, R1 = entry | removes the entry from its queue of longword addresses |
+| 0x98 | `REMQUEQ` | Alpha | a0 = entry | v0 = status, R1 = entry | the same with quadword addresses |
+| 0x99 | `REMQUEL/D` | Alpha | a0 = the entry's address | v0 = status, R1 = entry | `REMQUEL` with the entry's address at a0 |
+| 0x9A | `REMQUEQ/D` | Alpha | a0 = the entry's address | v0 = status, R1 = entry | `REMQUEQ` the same way |
+| 0xA2 | `INSQHILR` | Alpha | a0 = header, a1 = entry | v0 = status | `INSQHIL`'s, for resident pages: the same call |
+| 0xA3 | `INSQTILR` | Alpha | a0 = header, a1 = entry | v0 = status | `INSQTIL`'s, for resident pages: the same call |
+| 0xA4 | `INSQHIQR` | Alpha | a0 = header, a1 = entry | v0 = status | `INSQHIQ`'s, for resident pages: the same call |
+| 0xA5 | `INSQTIQR` | Alpha | a0 = header, a1 = entry | v0 = status | `INSQTIQ`'s, for resident pages: the same call |
+| 0xA6 | `REMQHILR` | Alpha | a0 = header | v0 = status, R1 = entry | `REMQHIL`'s, for resident pages: the same call |
+| 0xA7 | `REMQTILR` | Alpha | a0 = header | v0 = status, R1 = entry | `REMQTIL`'s, for resident pages: the same call |
+| 0xA8 | `REMQHIQR` | Alpha | a0 = header | v0 = status, R1 = entry | `REMQHIQ`'s, for resident pages: the same call |
+| 0xA9 | `REMQTIQR` | Alpha | a0 = header | v0 = status, R1 = entry | `REMQTIQ`'s, for resident pages: the same call |
+| 0xAE | `CLRFEN` | Alpha | | | takes floating point away from the current context |
 
 `MTPR_TXDB` stands in for the VAX console transmit register: VMS's
 `CON$PUTCHAR` writes each character with `MTPR R0, #PR$_TXDB`. Alpha had no
@@ -540,10 +623,10 @@ Privileged, 0x00-0x3F:
 | 0x06 | `MFPR_ASN` | dropped: address space numbers are seL4's |
 | 0x07, 0x08, 0x26, 0x27 | `MTPR_ASTEN`, `MTPR_ASTSR`, `MFPR_ASTEN`, `MFPR_ASTSR` | changed: bytes of the HWPCB, which the executive writes and the PAL reads ([ADR-0011](../adr/0011-asts-on-the-kernel-stack.md)) |
 | 0x09, 0x0A | `CSERVE`, `SWPPAL` | dropped: firmware services |
-| 0x0B, 0x0C | `MFPR_FEN`, `MTPR_FEN` | kept, with floating point |
-| 0x0D | `MTPR_IPIR` | kept, with more than one CPU |
+| 0x0B, 0x0C | `MFPR_FEN`, `MTPR_FEN` | kept, implemented: seL4 traps a context's floating point without it |
+| 0x0D | `MTPR_IPIR` | kept, implemented: with one CPU, it does nothing |
 | 0x0E, 0x0F | `MFPR_IPL`, `MTPR_IPL` | kept, implemented |
-| 0x10, 0x11 | `MFPR_MCES`, `MTPR_MCES` | kept |
+| 0x10, 0x11 | `MFPR_MCES`, `MTPR_MCES` | kept, implemented: no machine checks set its bits |
 | 0x12 | `MFPR_PCBB` | kept, implemented |
 | 0x13, 0x14 | `MFPR_PRBR`, `MTPR_PRBR` | kept |
 | 0x15 | `MFPR_PTBR` | dropped: page tables are the PAL's |
@@ -555,7 +638,7 @@ Privileged, 0x00-0x3F:
 | 0x2B, 0x2E | `MTPR_PERFMON`, `MTPR_DATFX` | dropped |
 | 0x30-0x33 | `MFPR_VIRBND`, `MTPR_VIRBND`, `MFPR_SYSPTBR`, `MTPR_SYSPTBR` | dropped: page tables are the PAL's |
 | 0x3E | `WTINT` | kept, implemented: the idle loop waits for an interrupt |
-| 0x3F | `MFPR_WHAMI` | kept |
+| 0x3F | `MFPR_WHAMI` | kept, implemented: CPU 0 |
 
 Unprivileged, 0x80-0xBF:
 
@@ -565,7 +648,7 @@ Unprivileged, 0x80-0xBF:
 | 0x81 | `BUGCHK` | kept |
 | 0x82-0x85 | `CHME`, `CHMK`, `CHMS`, `CHMU` | changed, implemented: the PAL moves the call to the process's thread for that mode |
 | 0x86 | `IMB` | kept |
-| 0x87-0x8E, 0x93-0x9A, 0xA2-0xA9 | `INSQHIL` ... `REMQUEQ/D`, the resident forms | kept; `INSQUE` and `REMQUE` are inline code, since one thread runs at a time |
+| 0x87-0x8E, 0x93-0x9A, 0xA2-0xA9 | `INSQHIL` ... `REMQUEQ/D`, the resident forms | kept, implemented; vmacro's `INSQUE` and `REMQUE`, and vbliss's `PAL_INSQUEL` to `PAL_REMQUEQ_D`, are inline code, as one thread runs at a time |
 | 0x8F, 0x90 | `PROBER`, `PROBEW` | kept, implemented |
 | 0x91, 0x92 | `RD_PS`, `REI` | kept, implemented |
 | 0x9B, 0x9C | `SWASTEN`, `WR_PS_SW` | `SWASTEN` changed: `$SETAST` writes `ASTEN`; `WR_PS_SW` kept |
@@ -573,7 +656,7 @@ Unprivileged, 0x80-0xBF:
 | 0x9E, 0x9F | `READ_UNQ`, `WRITE_UNQ` | dropped: user mode writes TPIDR_EL0 itself |
 | 0xA0, 0xA1 | `AMOVRR`, `AMOVRM` | dropped: ARM64 has atomics |
 | 0xAA | `GENTRAP` | kept |
-| 0xAE | `CLRFEN` | kept, with floating point |
+| 0xAE | `CLRFEN` | kept, implemented |
 
 vaxpunk's own, 0x40-0x7F:
 

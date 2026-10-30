@@ -1,0 +1,16 @@
+MODULE AL3 (MAIN = M) =
+BEGIN
+! ALIGN past the psect's, octaword by default, or the stack's: a
+! warning, and the most they have.
+REQUIRE 'PRINT';
+OWN A : ALIGN(32);
+ROUTINE M =
+    BEGIN
+    LOCAL L : ALIGN(32);
+    L = 7;
+    PRINT(A AND 15);
+    PRINT(.L);
+    1
+    END;
+END
+ELUDOM

@@ -1,0 +1,36 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]SWIT.B64;1
+
+    0	      1 MODULE SWIT (MAIN = M, NOSAFE, ZIP, LIST(NOEXPAND)) =
+    0	      2 BEGIN
+    1	      3 ! What %SWITCHES says after the module head and SWITCHES set switches.
+    1	      4 %PRINT('head ', %SWITCHES(SAFE), %SWITCHES(ZIP), %SWITCHES(ERRS), %SWITCHES(OPTIMIZE))
+		; %PRINT:	head 0111
+    1	      5 %PRINT('align ', %SWITCHES(CHECK_ALIGNMENT), %SWITCHES(OVERFLOW), %SWITCHES(QUAD_LITERALS))
+		; %PRINT:	align 101
+    1	      6 SWITCHES SAFE, NOZIP, NOCHECK_ALIGNMENT;
+    1	      7 %PRINT('decl ', %SWITCHES(SAFE), %SWITCHES(ZIP), %SWITCHES(CHECK_ALIGNMENT))
+		; %PRINT:	decl 100
+    1	      8 ROUTINE M =
+    1	      9     BEGIN
+    2	     10     SWITCHES NOSAFE;
+    2	     11     %PRINT('block ', %SWITCHES(SAFE))
+		; %PRINT:	block 0
+    2	     12     0
+    2	     13     END;
+    1	     14 %PRINT('after ', %SWITCHES(SAFE))
+
+SWIT                            Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]SWIT.B64;1
+
+		; %PRINT:	after 1
+    1	     15 END
+    1	     16 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]SWIT.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE SWIT.B64

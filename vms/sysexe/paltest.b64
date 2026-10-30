@@ -1,0 +1,218 @@
+MODULE PALTEST (MAIN = START, IDENT = 'V0.1') =
+%TITLE 'PALTEST: the PAL calls of the PAL_ built-ins'
+BEGIN
+!
+! PALTEST puts to work the PAL calls BLISS-64's PAL_ built-ins make
+! (DESIGN-0001). The interlocked queue calls, on a queue of longwords and
+! one of quadwords: inserts at the head and the tail, removes from both,
+! each status and entry removed, and the links they leave; a secondary
+! interlock some code set, which they don't take; a misaligned header, a
+! reserved instruction, and one in no page, an access violation. LIB's
+! VAX built-ins on them, INSQHI and the rest, with the VAX's statuses
+! and a longword for the entry a remove gives. INSQUE
+! and REMQUE's calls, by CALL_PAL. In kernel mode: MFPR_WHAMI, MCES's
+! bits, MTPR_IPIR and FEN, which CLRFEN clears from user mode, after
+! which a floating point instruction is a reserved instruction, until
+! MTPR_FEN sets it. Prints PALTEST: ok, or the check that failed.
+!
+LIBRARY 'SYS$LIBRARY:STARLET';
+LIBRARY 'SYS$LIBRARY:LIB';
+
+EXTERNAL ROUTINE
+    LIB$PUT_OUTPUT,
+    LIB$SIG_TO_RET;
+
+BUILTIN
+    CALL_PAL,
+    CVTLT,
+    CVTTL,
+    ESTABLISH,
+    PAL_INSQHIL,
+    PAL_INSQTIL,
+    PAL_REMQHIL,
+    PAL_REMQTIL,
+    PAL_INSQHIQ,
+    PAL_INSQTIQ,
+    PAL_REMQHIQ,
+    PAL_REMQTIQ,
+    PAL_INSQHILR,
+    PAL_REMQHILR,
+    PAL_MFPR_WHAMI,
+    PAL_MTPR_IPIR,
+    PAL_MFPR_MCES,
+    PAL_MTPR_MCES,
+    PAL_MFPR_FEN,
+    PAL_MTPR_FEN;
+
+LITERAL
+    INSQUEL = %X'8B',
+    REMQUEL = %X'97',
+    CLRFEN = %X'AE',
+    STATIC = %X'010E0000';              ! a static text descriptor's class and type
+
+OWN
+    ! Longword links in quadword-aligned entries, quadword ones in
+    ! octaword-aligned entries.
+    LH : VECTOR[2, LONG, SIGNED] ALIGN(3),
+    L1 : VECTOR[2, LONG, SIGNED] ALIGN(3),
+    L2 : VECTOR[2, LONG, SIGNED] ALIGN(3),
+    L3 : VECTOR[2, LONG, SIGNED] ALIGN(3),
+    QH : VECTOR[2] ALIGN(4),
+    Q1 : VECTOR[2] ALIGN(4),
+    Q2 : VECTOR[2] ALIGN(4),
+    ! INSQUE's queue, linked by address.
+    AH : VECTOR[2, LONG],
+    A1 : VECTOR[2, LONG],
+    GOT,                                ! the entry a remove gave
+    VAXGOT : VECTOR[2, LONG],           ! and a VAX built-in's, a longword
+    WHO,                                ! what kernel mode read
+    MCES,
+    FEN;
+
+MACRO
+    ! Check n fails unless WHAT holds.
+    CHECK(N, WHAT) = IF NOT (WHAT) THEN RETURN N %;
+
+! A misaligned header: a reserved instruction, LIB$SIG_TO_RET's status.
+ROUTINE MISALIGNED =
+    BEGIN
+    ESTABLISH(LIB$SIG_TO_RET);
+    PAL_INSQHIL(LH + 4, L1);
+    1
+    END;
+
+! A header in no page: an access violation.
+ROUTINE NOWHERE =
+    BEGIN
+    ESTABLISH(LIB$SIG_TO_RET);
+    PAL_REMQHIL(0; GOT);
+    1
+    END;
+
+! 1 if floating point works, or the reserved instruction's status.
+ROUTINE FLOATS =
+    BEGIN
+    LOCAL
+        I,
+        T;
+    ESTABLISH(LIB$SIG_TO_RET);
+    I = 3;
+    CVTLT(I, T);
+    I = 0;
+    CVTTL(T, I);
+    .I EQL 3
+    END;
+
+! In kernel mode: the CPU's number, MCES, whose DPC and DSC stay, an
+! interprocessor interrupt for no CPU, and FEN.
+ROUTINE KERNEL =
+    BEGIN
+    WHO = PAL_MFPR_WHAMI();
+    PAL_MTPR_MCES(%B'11111');
+    MCES = PAL_MFPR_MCES();
+    PAL_MTPR_MCES(0);
+    PAL_MTPR_IPIR(1);
+    FEN = PAL_MFPR_FEN();
+    SS$_NORMAL
+    END;
+
+ROUTINE GETFEN =
+    BEGIN
+    FEN = PAL_MFPR_FEN();
+    SS$_NORMAL
+    END;
+
+ROUTINE SETFEN =
+    BEGIN
+    PAL_MTPR_FEN(1);
+    FEN = PAL_MFPR_FEN();
+    SS$_NORMAL
+    END;
+
+! LIB's VAX built-ins (UM 4.64, 4.83): an insert 2 if the entry is the
+! first, else 0; a remove 0, or 2 for the last entry, or 3 for none, the
+! entry's address in a longword; 1 if the interlock is set, with no
+! address written. 0 if all is well, else the check that failed.
+ROUTINE VAXQUEUES =
+    BEGIN
+    BUILTIN
+        INSQHI,
+        INSQTI,
+        REMQHI,
+        REMQTI;
+    VAXGOT[1] = 7;
+    CHECK(28, INSQHI(L1, LH) EQL 2);
+    CHECK(29, INSQTI(L2, LH) EQL 0);
+    CHECK(30, REMQHI(LH, VAXGOT) EQL 0 AND .VAXGOT[0] EQL L1);
+    CHECK(31, REMQTI(LH, VAXGOT) EQL 2 AND .VAXGOT[0] EQL L2);
+    CHECK(32, REMQHI(LH, VAXGOT) EQL 3 AND .VAXGOT[1] EQL 7);
+    LH[0] = 1;
+    CHECK(33, INSQTI(L1, LH) EQL 1);
+    VAXGOT[0] = 5;
+    CHECK(34, REMQTI(LH, VAXGOT) EQL 1 AND .VAXGOT[0] EQL 5);
+    LH[0] = 0;
+    0
+    END;
+
+ROUTINE CHECKS =
+    BEGIN
+    ! L1 alone, its links and the header's to each other.
+    CHECK(1, PAL_INSQHIL(LH, L1) EQL 1);
+    CHECK(2, .LH[0] EQL L1 - LH AND .LH[1] EQL L1 - LH AND .L1[0] EQL LH - L1 AND .L1[1] EQL LH - L1);
+    ! L3, L1, L2.
+    CHECK(3, PAL_INSQTIL(LH, L2) EQL 0);
+    CHECK(4, PAL_INSQHIL(LH, L3) EQL 0);
+    CHECK(5, .LH[0] EQL L3 - LH AND .LH[1] EQL L2 - LH AND .L1[0] EQL L2 - L1 AND .L1[1] EQL L3 - L1);
+    CHECK(6, PAL_REMQTIL(LH; GOT) EQL 1 AND .GOT EQL L2);
+    CHECK(7, PAL_REMQHIL(LH; GOT) EQL 1 AND .GOT EQL L3);
+    CHECK(8, PAL_REMQHIL(LH; GOT) EQL 2 AND .GOT EQL L1 AND .LH[0] EQL 0 AND .LH[1] EQL 0);
+    CHECK(9, PAL_REMQHIL(LH; GOT) EQL 0 AND .GOT EQL LH);
+    ! The secondary interlock, set.
+    LH[0] = 1;
+    CHECK(10, PAL_INSQHIL(LH, L1) EQL -1 AND PAL_REMQTIL(LH; GOT) EQL -1 AND .LH[0] EQL 1);
+    LH[0] = 0;
+    ! Quadwords: Q2, Q1.
+    CHECK(11, PAL_INSQTIQ(QH, Q1) EQL 1 AND PAL_INSQHIQ(QH, Q2) EQL 0);
+    CHECK(12, .QH[0] EQL Q2 - QH AND .QH[1] EQL Q1 - QH AND .Q2[0] EQL Q1 - Q2);
+    CHECK(13, PAL_REMQTIQ(QH; GOT) EQL 1 AND .GOT EQL Q1);
+    CHECK(14, PAL_REMQHIQ(QH; GOT) EQL 2 AND .GOT EQL Q2 AND .QH[0] EQL 0);
+    ! The resident forms.
+    CHECK(15, PAL_INSQHILR(LH, L1) EQL 1 AND PAL_REMQHILR(LH; GOT) EQL 2 AND .GOT EQL L1);
+    CHECK(16, MISALIGNED() EQL SS$_OPCDEC);
+    CHECK(17, NOWHERE() EQL SS$_ACCVIO);
+    ! INSQUE and REMQUE's: an empty queue's header links to itself.
+    AH[0] = AH[1] = AH;
+    CHECK(18, CALL_PAL(INSQUEL, AH, A1) EQL 1);
+    CHECK(19, .AH[0] EQL A1 AND .AH[1] EQL A1 AND .A1[0] EQL AH AND .A1[1] EQL AH);
+    CHECK(20, CALL_PAL(REMQUEL, A1) EQL 0 AND .AH[0] EQL AH AND .AH[1] EQL AH);
+    CHECK(21, CALL_PAL(REMQUEL, AH) EQL -1);
+    ! Kernel mode's calls.
+    CHECK(22, $CMKRNL(ROUTIN = KERNEL) EQL SS$_NORMAL);
+    CHECK(23, .WHO EQL 0 AND .MCES EQL %B'11000' AND .FEN EQL 1);
+    ! FEN.
+    CALL_PAL(CLRFEN);
+    CHECK(24, $CMKRNL(ROUTIN = GETFEN) EQL SS$_NORMAL AND .FEN EQL 0);
+    CHECK(25, FLOATS() EQL SS$_OPCDEC);
+    CHECK(26, $CMKRNL(ROUTIN = SETFEN) EQL SS$_NORMAL AND .FEN EQL 1);
+    CHECK(27, FLOATS() EQL 1);
+    VAXQUEUES()
+    END;
+
+ROUTINE START =
+    BEGIN
+    OWN
+        FAILED : VECTOR[24, BYTE] INITIAL(BYTE ('PALTEST: failed check   ')),
+        DESC : VECTOR[2, LONG];
+    LOCAL
+        N;
+    N = CHECKS();
+    IF .N EQL 0 THEN RETURN LIB$PUT_OUTPUT(%ASCID 'PALTEST: ok');
+    CH$WCHAR(%C'0' + .N / 10, CH$PTR(FAILED, 22));
+    CH$WCHAR(%C'0' + .N MOD 10, CH$PTR(FAILED, 23));
+    DESC[0] = STATIC OR 24;
+    DESC[1] = FAILED;
+    LIB$PUT_OUTPUT(DESC)
+    END;
+
+END
+ELUDOM

@@ -1,0 +1,17 @@
+MODULE OVFL (MAIN = M) =
+BEGIN
+! OVERFLOW and link-time constants: an address plus a constant in an
+! OWN's INITIAL and a UPLIT, inside a routine.
+REQUIRE 'PRINT';
+OWN X : VECTOR[4];
+ROUTINE M =
+    BEGIN
+    SWITCHES OVERFLOW;
+    OWN P : INITIAL(X + 8);
+    BIND Q = UPLIT(X + 16) : VECTOR[1];
+    PRINT(.P - X);
+    PRINT(.Q[0] - X);
+    1
+    END;
+END
+ELUDOM

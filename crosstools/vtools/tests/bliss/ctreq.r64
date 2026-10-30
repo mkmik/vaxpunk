@@ -1,0 +1,3 @@
+! A COMPILETIME name and a macro bound to it by %UNQUOTE.
+COMPILETIME N = 0;
+MACRO READ_N = %UNQUOTE N %;

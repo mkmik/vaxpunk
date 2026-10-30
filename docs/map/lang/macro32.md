@@ -50,7 +50,7 @@ note = "macro32.md: not yet"
 id = "interlocked"
 title = "Interlocked queue instructions, and the other string and privileged ones"
 status = "todo"
-note = "macro32.md: not yet; INSQUE and REMQUE aren't interlocked"
+note = "macro32.md: not yet; INSQUE and REMQUE aren't interlocked. The PAL has the queue calls (t8y:/platform/pal#interlocked-queues)"
 
 [[feature]]
 id = "listing"

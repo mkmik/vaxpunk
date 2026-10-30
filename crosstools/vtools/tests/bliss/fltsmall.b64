@@ -1,0 +1,25 @@
+MODULE FLTSMALL (MAIN = M) =
+BEGIN
+! F floating results at the ends of F's range, which single precision
+! hasn't: 1E-38 and F's smallest, 2**-128, below single's normal range,
+! the largest, and a product below the smallest, which is zero.
+REQUIRE 'PRINT';
+BUILTIN
+    ADDF, MULF, CVTGF;
+OWN
+    A, B, C;
+ROUTINE M =
+    BEGIN
+    B = %E'0';
+    A = %E'1E-38'; ADDF(A, B, C); PRINT(.C);
+    A = %E'1.5E-38'; ADDF(A, B, C); PRINT(.C);
+    A = %X'80'; ADDF(A, B, C); PRINT(.C);
+    A = %X'FFFF0080'; ADDF(A, B, C); PRINT(.C);
+    A = %X'FFFF7FFF'; ADDF(A, B, C); PRINT(.C);
+    A = %X'80'; B = %E'0.5'; MULF(A, B, C); PRINT(.C);
+    A = %X'80'; B = %E'3'; MULF(A, B, C); PRINT(.C);
+    A = %G'2E-38'; CVTGF(A, C); PRINT(.C);
+    1
+    END;
+END
+ELUDOM

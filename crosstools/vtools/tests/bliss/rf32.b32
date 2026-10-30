@@ -1,0 +1,21 @@
+MODULE RF32 (MAIN = M) =
+BEGIN
+! Under /A32 a register's longword field is a fullword, sign-extended as
+! one in memory is.
+REQUIRE 'PRINT32';
+OWN X;
+ROUTINE F =
+    BEGIN
+    BUILTIN R0;
+    R0 = -1;
+    IF .R0<0, 32, 0> EQL -1 THEN 1 ELSE 2
+    END;
+ROUTINE M =
+    BEGIN
+    X = -1;
+    PRINT(IF .X<0, 32, 0> EQL -1 THEN 1 ELSE 2);
+    PRINT(F());
+    1
+    END;
+END
+ELUDOM

@@ -1,0 +1,26 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LANG4.B64;1
+
+    0	      1 MODULE LANG4 (MAIN = M, LANGUAGE(BLISS16, BLISS32)) =
+		........................1                             
+%BLS64-W-TEXT, (1) LANGUAGE switch specification excludes BLISS-64E
+
+    0	      2 BEGIN
+    1	      3 ! LANGUAGE(BLISS16, BLISS32): the subset checks.
+    1	      4 OWN
+    1	      5     B : BYTE,
+    1	      6     L : LONG;
+		........1     
+%BLS64-W-TEXT, (1) Language feature not transportable: LONG
+
+    1	      7 ROUTINE M = (B = 1; L = 2; 1);
+    1	      8 END
+    1	      9 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LANG4.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE LANG4.B64

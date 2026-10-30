@@ -71,10 +71,109 @@ pub enum Special {
     /// A PAL call with this function code; for CHMx, the first operand
     /// is the change mode code.
     Pal(u32),
+    /// A queue call that removes an entry, R1, the entry, stored in its
+    /// last operand, an output parameter.
+    PalOut(u32),
     Chm(u32),
     Bpt,
     RetAddr,
     Rpcc,
+    /// CODECOMMENT's text, the module's comment n: a comment in the code.
+    Comment(u32),
+    /// The floating point built-ins (RN 2.10.1): ADDx and the like, CMPx,
+    /// and CVT[R]xy.
+    FArith(crate::ir::FOp, crate::ir::Fl),
+    FCmp(crate::ir::Fl),
+    FCvt(crate::ir::Fl, crate::ir::Fl, bool),
+    /// `%FFLOAT(a)` to `%TFLOAT(a)` as a call's actual (RN 2.10.4): the
+    /// floating value at a, passed by value; as an output actual, where
+    /// the routine's floating result is stored. Only in a call's actuals.
+    FloatIn(crate::ir::Fl),
+    FloatOut(crate::ir::Fl),
+    /// a + b, a - b or a * b under the OVERFLOW switch: an overflow
+    /// signals SS$_INTOVF, and the value is the wrapped one.
+    Checked(crate::ir::Op),
+    /// `BUILTIN R0` or `R1`: the register itself, x0 or x1, which may only
+    /// be fetched or assigned (LRM 10.7.4).
+    Reg(u8),
+}
+
+/// The register a register built-in names, R0 to R11.
+pub fn register(name: &str) -> Option<u8> {
+    let n: u8 = name.strip_prefix('R')?.parse().ok()?;
+    (n <= 11 && name.len() == if n < 10 { 2 } else { 3 }).then_some(n)
+}
+
+/// The format `%FFLOAT` to `%TFLOAT` name.
+pub fn float_actual(name: &str) -> Option<crate::ir::Fl> {
+    use crate::ir::Fl;
+    Some(match name {
+        "%FFLOAT" => Fl::F,
+        "%DFLOAT" => Fl::D,
+        "%GFLOAT" => Fl::G,
+        "%SFLOAT" => Fl::S,
+        "%TFLOAT" => Fl::T,
+        _ => return None,
+    })
+}
+
+/// A floating point built-in by its name, if `name` is one; `i` is the
+/// fullword integer's: L under BLISS-32, Q under BLISS-64.
+pub fn float_builtin(name: &str, i: crate::ir::Fl) -> Option<Special> {
+    use crate::ir::{FOp, Fl};
+    let fl = |c: u8| match c {
+        b'F' => Some(Fl::F),
+        b'D' => Some(Fl::D),
+        b'G' => Some(Fl::G),
+        b'S' => Some(Fl::S),
+        b'T' => Some(Fl::T),
+        b'L' => Some(Fl::L),
+        b'Q' => Some(Fl::Q),
+        b'I' => Some(i),
+        _ => None,
+    };
+    let is_float = |f: Fl| !matches!(f, Fl::L | Fl::Q);
+    let n = name.as_bytes();
+    if n.len() == 4 {
+        let op = match &name[..3] {
+            "ADD" => Some(FOp::Add),
+            "SUB" => Some(FOp::Sub),
+            "MUL" => Some(FOp::Mul),
+            "DIV" => Some(FOp::Div),
+            _ => None,
+        };
+        let f = fl(n[3]).filter(|&f| is_float(f) && n[3] != b'I')?;
+        return match (op, &name[..3]) {
+            (Some(op), _) => Some(Special::FArith(op, f)),
+            (None, "CMP") => Some(Special::FCmp(f)),
+            _ => None,
+        };
+    }
+    let rest = name.strip_prefix("CVT")?;
+    let (round, rest) = match rest.strip_prefix('R') {
+        Some(r) if r.len() == 2 => (true, r),
+        _ => (false, rest),
+    };
+    let [a, b] = rest.as_bytes() else {
+        return None;
+    };
+    let (from, to) = (fl(*a)?, fl(*b)?);
+    let ok = match (is_float(from), is_float(to)) {
+        // CVTRxL and CVTRxQ round; CVTxL, CVTxQ and CVTxI truncate.
+        (true, false) => !round || b"LQ".contains(b),
+        (false, true) => !round,
+        // RN's list, the provisional ones too.
+        (true, true) => {
+            !round
+                && [
+                    "FD", "DF", "FG", "GF", "ST", "TS", "DG", "GD", "FS", "SF", "DT", "TD", "GT",
+                    "TG",
+                ]
+                .contains(&rest)
+        }
+        (false, false) => false,
+    };
+    ok.then_some(Special::FCvt(from, to, round))
 }
 
 /// The PAL calls vaxpunk's PAL has (DESIGN-0001), as BLISS-64's PAL_
@@ -83,37 +182,44 @@ pub enum Special {
 const PAL: &[(&str, u32, usize, bool)] = &[
     ("PAL_HALT", 0x00, 0, false),
     ("PAL_SWPCTX", 0x05, 1, true),
+    ("PAL_MFPR_FEN", 0x0B, 0, true),
+    ("PAL_MTPR_FEN", 0x0C, 1, false),
+    ("PAL_MTPR_IPIR", 0x0D, 1, false),
     ("PAL_MFPR_IPL", 0x0E, 0, true),
     ("PAL_MTPR_IPL", 0x0F, 1, true),
+    ("PAL_MFPR_MCES", 0x10, 0, true),
+    ("PAL_MTPR_MCES", 0x11, 1, false),
     ("PAL_MFPR_PCBB", 0x12, 0, true),
     ("PAL_MFPR_SCBB", 0x16, 0, true),
     ("PAL_MTPR_SCBB", 0x17, 1, false),
     ("PAL_MTPR_SIRR", 0x18, 1, false),
     ("PAL_MFPR_SISR", 0x19, 0, true),
+    ("PAL_MFPR_WHAMI", 0x3F, 0, true),
+    ("PAL_INSQHIL", 0x87, 2, true),
+    ("PAL_INSQTIL", 0x88, 2, true),
+    ("PAL_INSQHIQ", 0x89, 2, true),
+    ("PAL_INSQTIQ", 0x8A, 2, true),
     ("PAL_PROBER", 0x8F, 3, true),
     ("PAL_PROBEW", 0x90, 3, true),
     ("PAL_RD_PS", 0x91, 0, true),
+    // The removes take the entry removed as an output parameter too.
+    ("PAL_REMQHIL", 0x93, 1, true),
+    ("PAL_REMQTIL", 0x94, 1, true),
+    ("PAL_REMQHIQ", 0x95, 1, true),
+    ("PAL_REMQTIQ", 0x96, 1, true),
+    ("PAL_INSQHILR", 0xA2, 2, true),
+    ("PAL_INSQTILR", 0xA3, 2, true),
+    ("PAL_INSQHIQR", 0xA4, 2, true),
+    ("PAL_INSQTIQR", 0xA5, 2, true),
+    ("PAL_REMQHILR", 0xA6, 1, true),
+    ("PAL_REMQTILR", 0xA7, 1, true),
+    ("PAL_REMQHIQR", 0xA8, 1, true),
+    ("PAL_REMQTIQR", 0xA9, 1, true),
 ];
 
 /// BLISS-64's PAL built-ins vaxpunk's PAL doesn't have (RN 2.9.2): a
 /// compile error, but known names for BUILTIN.
 const NO_PAL: &[&str] = &[
-    "PAL_INSQHIL",
-    "PAL_INSQTIL",
-    "PAL_INSQHIQ",
-    "PAL_INSQTIQ",
-    "PAL_INSQHILR",
-    "PAL_INSQHIQR",
-    "PAL_INSQTILR",
-    "PAL_INSQTIQR",
-    "PAL_REMQHIL",
-    "PAL_REMQTIL",
-    "PAL_REMQHIQ",
-    "PAL_REMQTIQ",
-    "PAL_REMQHILR",
-    "PAL_REMQHIQR",
-    "PAL_REMQTILR",
-    "PAL_REMQTIQR",
     "PAL_BUGCHK",
     "PAL_IMB",
     "PAL_SWASTEN",
@@ -127,11 +233,8 @@ const NO_PAL: &[&str] = &[
     "PAL_READ_UNQ",
     "PAL_WRITE_UNQ",
     "PAL_MTPR_ASTSR",
-    "PAL_MTPR_FEN",
     "PAL_MTPR_PRBR",
     "PAL_MTPR_TBIAP",
-    "PAL_MTPR_IPIR",
-    "PAL_MTPR_MCES",
     "PAL_MTPR_TBIS",
     "PAL_MTPR_SSP",
     "PAL_MTPR_ASTEN",
@@ -144,14 +247,11 @@ const NO_PAL: &[&str] = &[
     "PAL_MTPR_DATFX",
     "PAL_MTPR_ASN",
     "PAL_MTPR_PERFMON",
-    "PAL_MFPR_MCES",
     "PAL_MFPR_SSP",
-    "PAL_MFPR_WHAMI",
     "PAL_MFPR_PTBR",
     "PAL_MFPR_TBCHK",
     "PAL_MFPR_ESP",
     "PAL_MFPR_USP",
-    "PAL_MFPR_FEN",
     "PAL_MFPR_PRBR",
     "PAL_MFPR_ASTEN",
     "PAL_MFPR_ASTSR",
@@ -206,7 +306,9 @@ const MACHINE: &[&str] = &[
 
 /// Whether `name` is a built-in vbliss knows, for BUILTIN.
 fn known(name: &str) -> bool {
-    BUILTINS.contains(&name)
+    register(name).is_some()
+        || float_builtin(name, crate::ir::Fl::Q).is_some()
+        || BUILTINS.contains(&name)
         || MACHINE.contains(&name)
         || NO_PAL.contains(&name)
         || PAL.iter().any(|p| p.0 == name)
@@ -310,15 +412,25 @@ fn add(a: Expr, b: Expr) -> Expr {
 
 impl Parser<'_> {
     /// A routine the module calls without declaring it: the run-time
-    /// library's, for SIGNAL and the like.
+    /// library's, for SIGNAL and the like. Its calls pass the count, as
+    /// LIB$SIGNAL needs it, under NOCOUNT too.
     fn library_routine(&mut self, name: &str) -> usize {
-        if let Some(id) =
-            self.m.syms.iter().position(|s| {
-                s.asm == name && matches!(s.kind, Kind::Routine { external: true, .. })
-            })
-        {
+        let counted = |s: &Sym| {
+            matches!(&s.kind, Kind::Routine { external: true, linkage: Some(l), .. }
+                if l.count == Some(true) && !l.jsb)
+        };
+        if let Some(id) = self.m.syms.iter().position(|s| s.asm == name && counted(s)) {
             return id;
         }
+        let linkage = crate::linkage::Linkage {
+            jsb: false,
+            interrupt: false,
+            count: Some(true),
+            params: Vec::new(),
+            outs: Vec::new(),
+            globals: Vec::new(),
+            nopreserve: Vec::new(),
+        };
         self.m.syms.push(Sym {
             name: name.into(),
             asm: name.into(),
@@ -326,7 +438,7 @@ impl Parser<'_> {
                 global: false,
                 external: true,
                 novalue: false,
-                linkage: None,
+                linkage: Some(std::rc::Rc::new(linkage)),
             },
         });
         self.m.syms.len() - 1
@@ -412,22 +524,42 @@ impl Parser<'_> {
                 "{name}: vaxpunk's PAL has no such call (DESIGN-0001), or ARM64 no such operation"
             ));
         }
+        // The linkage functions read the count a NOCOUNT call doesn't pass
+        // (RN 2.8.5).
+        if matches!(
+            name,
+            "ACTUALCOUNT" | "ACTUALPARAMETER" | "NULLPARAMETER" | "ARGPTR"
+        ) && !self
+            .linkage_now()
+            .and_then(|l| l.count)
+            .unwrap_or(!self.m.nocount)
+        {
+            return self.err(format!(
+                "{name} can't be used in a routine whose linkage is NOCOUNT"
+            ));
+        }
         let (mut args, mut outs) = self.builtin_args()?;
         let n = args.len();
         let takes_outputs = name.contains("_ATOMIC_")
             || name.starts_with("TESTBIT")
-            || name.starts_with("PAL_REMQUE");
-        if !outs.is_empty() && !takes_outputs {
-            return self.err(format!("{name} has no output parameters"));
-        }
-        if outs.len() > 1 {
-            return self.err(format!("{name} has one output parameter"));
+            || name.starts_with("PAL_REMQ");
+        // BLISSA64 warns, and goes on without them (probe).
+        let most = usize::from(takes_outputs);
+        if outs.len() > most {
+            let at = self.last();
+            let msg = "Extra output parameter in call to built-in function";
+            self.diag('W', &at, msg.into());
+            outs.truncate(most);
         }
         let want = |p: &mut Self, k: usize| -> R<()> {
-            if n == k {
-                Ok(())
-            } else {
-                p.err(format!("{name} takes {k} parameters, not {n}"))
+            match n.cmp(&k) {
+                std::cmp::Ordering::Equal => Ok(()),
+                std::cmp::Ordering::Greater => {
+                    p.err(format!("Extra actual parameters in call to {name}"))
+                }
+                std::cmp::Ordering::Less => p.err(format!(
+                    "Omitted actual parameter in call to {name} has no default value"
+                )),
             }
         };
         let special = |s: Special, args: Vec<Expr>| Expr::Special(s, args);
@@ -562,7 +694,7 @@ impl Parser<'_> {
                 } else {
                     "LIB$STOP"
                 });
-                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new())
+                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new(), None)
             }
             "SETUNWIND" => {
                 want(self, 0)?;
@@ -571,6 +703,7 @@ impl Parser<'_> {
                     Box::new(Expr::Name(r)),
                     vec![Expr::Num(0), Expr::Num(0)],
                     Vec::new(),
+                    None,
                 )
             }
             "ESTABLISH" => {
@@ -741,7 +874,7 @@ impl Parser<'_> {
                     "LIB$STOP"
                 });
                 args[0] = Expr::Fetch(Box::new(word(args.remove(0))));
-                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new())
+                Expr::Call(Box::new(Expr::Name(r)), args, Vec::new(), None)
             }
             "ADD_ATOMIC_LONG" | "ADD_ATOMIC_QUAD" | "AND_ATOMIC_LONG" | "AND_ATOMIC_QUAD"
             | "OR_ATOMIC_LONG" | "OR_ATOMIC_QUAD" => {
@@ -846,6 +979,21 @@ impl Parser<'_> {
                 want(self, 0)?;
                 Expr::Num(0)
             }
+            n if let Some(s) = float_builtin(n, self.int_fl()) => {
+                if self.m.nofp {
+                    let at = self.last();
+                    let msg =
+                        "Illegal use of floating point built-in function with ENVIRONMENT(NOFP)";
+                    self.diag('W', &at, msg.into());
+                }
+                // Operands by address; only CMPx has a value (RN 2.10.1).
+                let k = match s {
+                    Special::FArith(..) => 3,
+                    _ => 2,
+                };
+                want(self, k)?;
+                special(s, args)
+            }
             "UMULH" => {
                 want(self, 2)?;
                 Expr::Op(
@@ -859,6 +1007,11 @@ impl Parser<'_> {
                 self.byte_op(name, args.remove(0), args.remove(0))
             }
             _ => match PAL.iter().find(|p| p.0 == name) {
+                Some(&(_, code, k, _)) if !outs.is_empty() => {
+                    want(self, k)?;
+                    args.append(&mut outs);
+                    special(Special::PalOut(code), args)
+                }
                 Some(&(_, code, k, _)) => {
                     want(self, k)?;
                     special(Special::Pal(code), args)
@@ -1042,6 +1195,15 @@ impl Parser<'_> {
         Ok(())
     }
 
+    /// The fullword integer the floating point built-ins' I means.
+    fn int_fl(&self) -> crate::ir::Fl {
+        if self.m.dialect.a32 {
+            crate::ir::Fl::L
+        } else {
+            crate::ir::Fl::Q
+        }
+    }
+
     /// Whether `name` is a predeclared built-in, when no declaration
     /// hides it; the others must be declared BUILTIN, as in BLISSA64.
     pub(crate) fn is_builtin(&self, name: &str) -> bool {
@@ -1059,7 +1221,33 @@ impl Parser<'_> {
             if !known(&name) {
                 return Err(self.error_at(&at, format!("{name} is not a built-in vbliss knows")));
             }
-            self.declare(name, Kind::Builtin)?;
+            if !matches!(name.as_str(), "ACTUALCOUNT" | "ACTUALPARAMETER") {
+                self.transport(&name, &at, true);
+            }
+            // R2 to R11 in a routine are its register data, as `REGISTER
+            // R2 = 2` declares it (docs/bliss64.md, *Registers*).
+            if register(&name).is_some_and(|r| r >= 2) && self.slots_open() {
+                if !self.scopes.last().unwrap().contains_key(&name) {
+                    let kind =
+                        self.data_kind(Storage::Local(0), &mut crate::data::Attrs::default())?;
+                    self.declare(name, kind)?;
+                }
+                if !self.eat_punct(',') {
+                    return Ok(());
+                }
+                continue;
+            }
+            // Again in the same block is no new declaration: BLISSA64 takes
+            // it, as DEC's VAX built-in macros need (t8y:/host/vdefs).
+            let again = self
+                .scopes
+                .last()
+                .unwrap()
+                .get(&name)
+                .is_some_and(|&id| self.m.syms[id].kind == Kind::Builtin);
+            if !again {
+                self.declare(name, Kind::Builtin)?;
+            }
             if !self.eat_punct(',') {
                 return Ok(());
             }

@@ -1,0 +1,32 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTSW.B64;1
+
+    0	      1 MODULE LSTSW (MAIN = M, LIST(NOEXPAND, NOREQUIRE)) =
+    0	      2 BEGIN
+    1	      3 ! The listing with LIST(NOEXPAND, NOREQUIRE) in the module head, then
+    1	      4 ! SWITCHES LIST(EXPAND) for the routine.
+    1	      5 REQUIRE 'PRINT';
+    1	     55 MACRO TWICE(X) = X + X %;
+    1	     56 SWITCHES LIST(EXPAND);
+    1	     57 ROUTINE M =
+    1	     58     BEGIN
+    2	     59     LOCAL Y;
+    2	     60     Y = TWICE(3);
+
+LSTSW                           Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTSW.B64;1
+
+		;;    [TWICE]=  3 + 3
+    2	     61     PRINT(.Y);
+    2	     62     1
+    2	     63     END;
+    1	     64 END
+    1	     65 ELUDOM
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTSW.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE LSTSW.B64

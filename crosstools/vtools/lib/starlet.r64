@@ -589,19 +589,19 @@ MACRO
     FAB$B_FAC = 22, 0, 8, 0 %,  ! access wanted: FAB$M_PUT to FAB$M_BRO
     FAB$B_SHR = 23, 0, 8, 0 %,  ! access others may have: FAB$M_SHRPUT to FAB$M_NQL
     FAB$L_CTX = 24, 0, 32, 0 %,  ! the caller's
-    FAB$B_RTV = 28, 0, 8, 0 %,  ! retrieval window size
+    FAB$B_RTV = 28, 0, 8, 1 %,  ! retrieval window size
     FAB$B_ORG = 29, 0, 8, 0 %,  ! organization: FAB$C_SEQ, REL or IDX
     FAB$B_RAT = 30, 0, 8, 0 %,  ! record attributes: FAB$M_FTN to FAB$M_BLK
     FAB$B_RFM = 31, 0, 8, 0 %,  ! record format: FAB$C_UDF to FAB$C_STMCR
     FAB$B_JOURNAL = 32, 0, 8, 0 %,
-    FAB$L_XAB = 36, 0, 32, 0 %,  ! the first XAB, or 0
-    FAB$L_NAM = 40, 0, 32, 0 %,  ! a NAM block, or 0
-    FAB$L_FNA = 44, 0, 32, 0 %,  ! the file specification
-    FAB$L_DNA = 48, 0, 32, 0 %,  ! the default one
+    FAB$L_XAB = 36, 0, 32, 1 %,  ! the first XAB, or 0
+    FAB$L_NAM = 40, 0, 32, 1 %,  ! a NAM block, or 0
+    FAB$L_FNA = 44, 0, 32, 1 %,  ! the file specification
+    FAB$L_DNA = 48, 0, 32, 1 %,  ! the default one
     FAB$B_FNS = 52, 0, 8, 0 %,  ! their lengths
     FAB$B_DNS = 53, 0, 8, 0 %,
     FAB$W_MRS = 54, 0, 16, 0 %,  ! maximum record size, 0 for any
-    FAB$L_MRN = 56, 0, 32, 0 %,  ! maximum record number of a relative file
+    FAB$L_MRN = 56, 0, 32, 1 %,  ! maximum record number of a relative file
     FAB$W_BLS = 60, 0, 16, 0 %,  ! block size, magnetic tape
     FAB$B_BKS = 62, 0, 8, 0 %,  ! bucket size, blocks
     FAB$B_FSZ = 63, 0, 8, 0 %,  ! VFC header size
@@ -694,19 +694,19 @@ MACRO
     RAB$B_TMO = 31, 0, 8, 0 %,  ! timeout, seconds
     RAB$W_USZ = 32, 0, 16, 0 %,  ! the user's buffer: its size
     RAB$W_RSZ = 34, 0, 16, 0 %,  ! the record's size
-    RAB$L_UBF = 36, 0, 32, 0 %,  ! the user's buffer
-    RAB$L_RBF = 40, 0, 32, 0 %,  ! where $GET put the record, what $PUT writes
-    RAB$L_RHB = 44, 0, 32, 0 %,  ! a VFC record's fixed control header
-    RAB$L_KBF = 48, 0, 32, 0 %,  ! the key, or relative record number
-    RAB$L_PBF = 48, 0, 32, 0 %,  ! the prompt, for terminals
+    RAB$L_UBF = 36, 0, 32, 1 %,  ! the user's buffer
+    RAB$L_RBF = 40, 0, 32, 1 %,  ! where $GET put the record, what $PUT writes
+    RAB$L_RHB = 44, 0, 32, 1 %,  ! a VFC record's fixed control header
+    RAB$L_KBF = 48, 0, 32, 1 %,  ! the key, or relative record number
+    RAB$L_PBF = 48, 0, 32, 1 %,  ! the prompt, for terminals
     RAB$B_KSZ = 52, 0, 8, 0 %,  ! the key's size
     RAB$B_PSZ = 52, 0, 8, 0 %,
     RAB$B_KRF = 53, 0, 8, 0 %,  ! key of reference
-    RAB$B_MBF = 54, 0, 8, 0 %,  ! multibuffer count
+    RAB$B_MBF = 54, 0, 8, 1 %,  ! multibuffer count
     RAB$B_MBC = 55, 0, 8, 0 %,  ! multiblock count
     RAB$L_BKT = 56, 0, 32, 0 %,  ! bucket or VBN, for $READ, $WRITE, $SPACE; a relative file's record number
-    RAB$L_FAB = 60, 0, 32, 0 %,  ! the FAB $CONNECT connects to
-    RAB$L_XAB = 64, 0, 32, 0 %;
+    RAB$L_FAB = 60, 0, 32, 1 %,  ! the FAB $CONNECT connects to
+    RAB$L_XAB = 64, 0, 32, 1 %;
 
 ! $NAMDEF
 LITERAL
@@ -719,10 +719,10 @@ MACRO
     NAM$B_BLN = 1, 0, 8, 0 %,
     NAM$B_RSS = 2, 0, 8, 0 %,  ! the resultant string area: size
     NAM$B_RSL = 3, 0, 8, 0 %,  ! the string's length
-    NAM$L_RSA = 4, 0, 32, 0 %,  ! its address
+    NAM$L_RSA = 4, 0, 32, 1 %,  ! its address
     NAM$B_ESS = 10, 0, 8, 0 %,  ! the expanded string area: size
     NAM$B_ESL = 11, 0, 8, 0 %,
-    NAM$L_ESA = 12, 0, 32, 0 %,
+    NAM$L_ESA = 12, 0, 32, 1 %,
     NAM$W_FID = 36, 0, 16, 0 %,  ! file ID, 3 words
     NAM$W_DID = 42, 0, 16, 0 %,  ! directory ID, 3 words
     NAM$L_WCC = 48, 0, 32, 0 %,  ! $SEARCH's context
@@ -732,11 +732,11 @@ MACRO
     NAM$B_NAME = 59, 0, 8, 0 %,
     NAM$B_TYPE = 60, 0, 8, 0 %,
     NAM$B_VER = 61, 0, 8, 0 %,
-    NAM$L_DEV = 68, 0, 32, 0 %,  ! and their addresses
-    NAM$L_DIR = 72, 0, 32, 0 %,
-    NAM$L_NAME = 76, 0, 32, 0 %,
-    NAM$L_TYPE = 80, 0, 32, 0 %,
-    NAM$L_VER = 84, 0, 32, 0 %;
+    NAM$L_DEV = 68, 0, 32, 1 %,  ! and their addresses
+    NAM$L_DIR = 72, 0, 32, 1 %,
+    NAM$L_NAME = 76, 0, 32, 1 %,
+    NAM$L_TYPE = 80, 0, 32, 1 %,
+    NAM$L_VER = 84, 0, 32, 1 %;
 
 ! $DVIDEF
 LITERAL
@@ -1047,7 +1047,7 @@ LITERAL
 MACRO
     XAB$B_COD = 0, 0, 8, 0 %,  ! its type: XAB$C_KEY, ALL, SUM, FHC, DAT, RDT, PRO
     XAB$B_BLN = 1, 0, 8, 0 %,  ! its size
-    XAB$L_NXT = 4, 0, 32, 0 %;  ! the next XAB, or 0
+    XAB$L_NXT = 4, 0, 32, 1 %;  ! the next XAB, or 0
 
 ! $XABKEYDEF
 LITERAL
@@ -1109,7 +1109,7 @@ MACRO
     XAB$W_POS0 = 30, 0, 16, 0 %,
     XAB$B_SIZ = 46, 0, 8, 0 %,  ! segment sizes, 8 bytes
     XAB$B_SIZ0 = 46, 0, 8, 0 %,
-    XAB$L_KNM = 56, 0, 32, 0 %,  ! the key's name, 32 bytes, or 0
+    XAB$L_KNM = 56, 0, 32, 1 %,  ! the key's name, 32 bytes, or 0
     XAB$L_DVB = 60, 0, 32, 0 %,  ! first data bucket's VBN
     XAB$B_TYP = 64, 0, 8, 0 %,  ! segment types, 8 bytes
     XAB$B_TYP0 = 64, 0, 8, 0 %,
@@ -1181,10 +1181,10 @@ LITERAL
     XAB$C_DATLEN_V2 = 36;
 MACRO
     XAB$W_RVN = 8, 0, 16, 0 %,  ! revision number
-    XAB$Q_RDT = 12, 0, 64, 0 %,  ! revised
-    XAB$Q_CDT = 20, 0, 64, 0 %,  ! created
-    XAB$Q_EDT = 28, 0, 64, 0 %,  ! expires
-    XAB$Q_BDT = 36, 0, 64, 0 %;  ! backed up
+    XAB$Q_RDT = 12, 0, 64, 1 %,  ! revised
+    XAB$Q_CDT = 20, 0, 64, 1 %,  ! created
+    XAB$Q_EDT = 28, 0, 64, 1 %,  ! expires
+    XAB$Q_BDT = 36, 0, 64, 1 %;  ! backed up
 
 ! $XABRDTDEF
 LITERAL
@@ -1228,7 +1228,7 @@ MACRO
     DSC64$W_MBO = 0, 0, 16, 0 %,  ! 1
     DSC64$B_DTYPE = 2, 0, 8, 0 %,
     DSC64$B_CLASS = 3, 0, 8, 0 %,
-    DSC64$L_MBMO = 4, 0, 32, 0 %,  ! -1
+    DSC64$L_MBMO = 4, 0, 32, 1 %,  ! -1
     DSC64$Q_LENGTH = 8, 0, 64, 0 %,
     DSC64$PQ_POINTER = 16, 0, 64, 1 %;
 
@@ -1244,12 +1244,12 @@ MACRO
     ILE3$PS_RETLEN_ADDR = 8, 0, 32, 1 %,
     ILEA_64$W_MBO = 0, 0, 16, 0 %,  ! 1
     ILEA_64$W_CODE = 2, 0, 16, 0 %,
-    ILEA_64$L_MBMO = 4, 0, 32, 0 %,  ! -1
+    ILEA_64$L_MBMO = 4, 0, 32, 1 %,  ! -1
     ILEA_64$Q_LENGTH = 8, 0, 64, 0 %,
     ILEA_64$PQ_BUFADDR = 16, 0, 64, 1 %,
     ILEB_64$W_MBO = 0, 0, 16, 0 %,
     ILEB_64$W_CODE = 2, 0, 16, 0 %,
-    ILEB_64$L_MBMO = 4, 0, 32, 0 %,
+    ILEB_64$L_MBMO = 4, 0, 32, 1 %,
     ILEB_64$Q_LENGTH = 8, 0, 64, 0 %,
     ILEB_64$PQ_BUFADDR = 16, 0, 64, 1 %,
     ILEB_64$PQ_RETLEN_ADDR = 24, 0, 64, 1 %;
@@ -1258,15 +1258,15 @@ MACRO
 LITERAL
     CHF$S_MCH = 200;
 MACRO
-    CHF$L_SIGARGLST = 4, 0, 32, 0 %,  ! a handler's first argument
-    CHF$L_MCHARGLST = 8, 0, 32, 0 %,  ! its second
-    CHF$L_SIG_ARGS = 0, 0, 32, 0 %,  ! the signal array's count
-    CHF$L_SIG_NAME = 4, 0, 32, 0 %,  ! the condition
-    CHF$L_SIG_ARG1 = 8, 0, 32, 0 %,
-    CHF64$L_SIG_ARGS = 0, 0, 32, 0 %,  ! the 64-bit one's count
-    CHF64$L_SIGNAL64 = 4, 0, 32, 0 %,  ! SS$_SIGNAL64
-    CHF64$Q_SIG_NAME = 8, 0, 64, 0 %,  ! the condition
-    CHF64$Q_SIG_ARG1 = 16, 0, 64, 0 %,
+    CHF$L_SIGARGLST = 4, 0, 32, 1 %,  ! a handler's first argument
+    CHF$L_MCHARGLST = 8, 0, 32, 1 %,  ! its second
+    CHF$L_SIG_ARGS = 0, 0, 32, 1 %,  ! the signal array's count
+    CHF$L_SIG_NAME = 4, 0, 32, 1 %,  ! the condition
+    CHF$L_SIG_ARG1 = 8, 0, 32, 1 %,
+    CHF64$L_SIG_ARGS = 0, 0, 32, 1 %,  ! the 64-bit one's count
+    CHF64$L_SIGNAL64 = 4, 0, 32, 1 %,  ! SS$_SIGNAL64
+    CHF64$Q_SIG_NAME = 8, 0, 64, 1 %,  ! the condition
+    CHF64$Q_SIG_ARG1 = 16, 0, 64, 1 %,
     CHF$IS_MCH_ARGS = 0, 0, 32, 1 %,  ! the quadwords after the first, 24
     CHF$IS_MCH_FLAGS = 4, 0, 32, 1 %,
     CHF$PH_MCH_FRAME = 8, 0, 64, 1 %,  ! the establisher's FP
@@ -1872,7 +1872,7 @@ MACRO
     LKI$L_SYSID = 8, 0, 32, 0 %,  ! 0: one node
     LKI$B_RQMODE = 12, 0, 8, 0 %,
     LKI$B_GRMODE = 13, 0, 8, 0 %,
-    LKI$B_QUEUE = 14, 0, 8, 0 %,
+    LKI$B_QUEUE = 14, 0, 8, 1 %,
     LKI$L_REMLKID = 16, 0, 32, 0 %,  ! 0
     LKI$L_REMSYSID = 20, 0, 32, 0 %;  ! 0
 
@@ -1948,3 +1948,994 @@ LITERAL
     HLP$M_SYSTEM = 8,  ! the system table
     HLP$M_LIBLIST = 16,  ! list the libraries
     HLP$M_HELP = 32;  ! help on HELP before the topics
+
+! $TPADEF
+LITERAL
+    TPA$K_COUNT0 = 8,  ! the block's longwords after the count
+    TPA$V_BLANKS = 0,  ! blanks and tabs are tokens
+    TPA$V_ABBREV = 1,  ! keywords may be shortened as far as unique
+    TPA$V_ABBRFM = 2,  ! keywords may be shortened to the first match
+    TPA$V_AMBIG = 16,  ! a keyword at this state was ambiguous
+    TPA$M_BLANKS = 1,
+    TPA$M_ABBREV = 2,
+    TPA$M_ABBRFM = 4,
+    TPA$M_AMBIG = 65536,
+    TPA$K_LENGTH0 = 36,
+    TPA$C_LENGTH0 = 36,
+    TPA$_KEYWORD = 256,  ! the first keyword's type
+    TPA$_EXIT = -1,  ! a target: the parse is done
+    TPA$_FAIL = -2,  ! a target: the parse failed
+    TPA$_DECIMAL_64 = 484,
+    TPA$_OCTAL_64 = 485,
+    TPA$_HEX_64 = 486,
+    TPA$_NODE_ACS = 487,
+    TPA$_NODE_PRIMARY = 488,
+    TPA$_NODE = 489,
+    TPA$_FILESPEC = 490,
+    TPA$_UIC = 491,
+    TPA$_IDENT = 492,
+    TPA$_ANY = 493,
+    TPA$_ALPHA = 494,
+    TPA$_DIGIT = 495,
+    TPA$_STRING = 496,
+    TPA$_SYMBOL = 497,
+    TPA$_BLANK = 498,
+    TPA$_DECIMAL = 499,
+    TPA$_OCTAL = 500,
+    TPA$_HEX = 501,
+    TPA$_LAMBDA = 502,
+    TPA$_EOS = 503,
+    TPA$_SUBEXPR = 504,
+    TPA$M_CODEFLAG = 256,  ! the type is a keyword's or a token type
+    TPA$M_EXTRAFLAG = 512,  ! a byte of more flags follows the type
+    TPA$M_LASTFLAG = 1024,  ! the state's last transition
+    TPA$M_EXTFLAG = 2048,  ! a subexpression's state follows
+    TPA$M_TRANFLAG = 4096,  ! a target state follows
+    TPA$M_MASKFLAG = 8192,  ! a mask follows
+    TPA$M_ADDRFLAG = 16384,  ! an address to store the mask in follows
+    TPA$M_ACTFLAG = 32768,  ! an action routine follows
+    TPA$M_PARMFLAG = 65536;  ! the action routine's parameter follows
+MACRO
+    TPA$L_COUNT = 0, 0, 32, 0 %,
+    TPA$L_OPTIONS = 4, 0, 32, 0 %,
+    TPA$B_MCOUNT = 7, 0, 8, 0 %,  ! the fewest characters of a shortened keyword
+    TPA$L_STRINGCNT = 8, 0, 32, 0 %,
+    TPA$L_STRINGPTR = 12, 0, 32, 0 %,
+    TPA$L_TOKENCNT = 16, 0, 32, 0 %,
+    TPA$L_TOKENPTR = 20, 0, 32, 0 %,
+    TPA$L_CHAR = 24, 0, 32, 0 %,  ! a one-character token
+    TPA$B_CHAR = 24, 0, 8, 0 %,
+    TPA$L_NUMBER = 28, 0, 32, 0 %,  ! a number token's value
+    TPA$L_PARAM = 32, 0, 32, 0 %;  ! the transition's parameter
+
+! The system services (UM 8.3)
+KEYWORDMACRO
+    $CREPRC(PIDADR = 0, IMAGE = 0, INPUT = 0, OUTPUT = 0, ERROR = 0, PRVADR = 0, QUOTA = 0,
+            PRCNAM = 0, BASPRI = 2, UIC = 0, MBXUNT = 0, STSFLG = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$CREPRC : BLISS;
+        SYS$CREPRC(PIDADR, IMAGE, INPUT, OUTPUT, ERROR, PRVADR, QUOTA, PRCNAM, BASPRI, UIC,
+            MBXUNT, STSFLG)
+        END %,
+    $DELPRC(PIDADR = 0, PRCNAM = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$DELPRC : BLISS;
+        SYS$DELPRC(PIDADR, PRCNAM)
+        END %,
+    $EXIT(CODE = 1) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$EXIT : BLISS;
+        SYS$EXIT(CODE)
+        END %,
+    $DCLEXH(DESBLK) =
+        %IF %NULL(DESBLK) %THEN %ERROR('$DCLEXH needs DESBLK') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DCLEXH : BLISS;
+        SYS$DCLEXH(DESBLK)
+        END %,
+    $CANEXH(DESBLK = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$CANEXH : BLISS;
+        SYS$CANEXH(DESBLK)
+        END %,
+    $FORCEX(PIDADR = 0, PRCNAM = 0, CODE = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$FORCEX : BLISS;
+        SYS$FORCEX(PIDADR, PRCNAM, CODE)
+        END %,
+    $HIBER =
+        BEGIN
+        EXTERNAL ROUTINE SYS$HIBER : BLISS;
+        SYS$HIBER()
+        END %,
+    $WAKE(PIDADR = 0, PRCNAM = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$WAKE : BLISS;
+        SYS$WAKE(PIDADR, PRCNAM)
+        END %,
+    $SUSPND(PIDADR = 0, PRCNAM = 0, FLAGS = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$SUSPND : BLISS;
+        SYS$SUSPND(PIDADR, PRCNAM, FLAGS)
+        END %,
+    $RESUME(PIDADR = 0, PRCNAM = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$RESUME : BLISS;
+        SYS$RESUME(PIDADR, PRCNAM)
+        END %,
+    $SETPRI(PIDADR = 0, PRCNAM = 0, PRI, PRVPRI = 0) =
+        %IF %NULL(PRI) %THEN %ERROR('$SETPRI needs PRI') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$SETPRI : BLISS;
+        SYS$SETPRI(PIDADR, PRCNAM, PRI, PRVPRI)
+        END %,
+    $SETPRN(PRCNAM = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$SETPRN : BLISS;
+        SYS$SETPRN(PRCNAM)
+        END %,
+    $GETJPI(EFN = 0, PIDADR = 0, PRCNAM = 0, ITMLST, IOSB = 0, ASTADR = 0, ASTPRM = 0) =
+        %IF %NULL(ITMLST) %THEN %ERROR('$GETJPI needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETJPI : BLISS;
+        SYS$GETJPI(EFN, PIDADR, PRCNAM, ITMLST, IOSB, ASTADR, ASTPRM)
+        END %,
+    $GETJPIW(EFN = 0, PIDADR = 0, PRCNAM = 0, ITMLST, IOSB = 0, ASTADR = 0, ASTPRM = 0) =
+        %IF %NULL(ITMLST) %THEN %ERROR('$GETJPIW needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETJPIW : BLISS;
+        SYS$GETJPIW(EFN, PIDADR, PRCNAM, ITMLST, IOSB, ASTADR, ASTPRM)
+        END %,
+    $GETSYI(EFN = 0, CSIDADR = 0, NODENAME = 0, ITMLST, IOSB = 0, ASTADR = 0, ASTPRM = 0) =
+        %IF %NULL(ITMLST) %THEN %ERROR('$GETSYI needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETSYI : BLISS;
+        SYS$GETSYI(EFN, CSIDADR, NODENAME, ITMLST, IOSB, ASTADR, ASTPRM)
+        END %,
+    $GETSYIW(EFN = 0, CSIDADR = 0, NODENAME = 0, ITMLST, IOSB = 0, ASTADR = 0, ASTPRM = 0) =
+        %IF %NULL(ITMLST) %THEN %ERROR('$GETSYIW needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETSYIW : BLISS;
+        SYS$GETSYIW(EFN, CSIDADR, NODENAME, ITMLST, IOSB, ASTADR, ASTPRM)
+        END %,
+    $PUTMSG(MSGVEC) =
+        %IF %NULL(MSGVEC) %THEN %ERROR('$PUTMSG needs MSGVEC') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$PUTMSG : BLISS;
+        SYS$PUTMSG(MSGVEC)
+        END %,
+    $UNWIND(DEPADR = 0, NEWPC = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$UNWIND : BLISS;
+        SYS$UNWIND(DEPADR, NEWPC)
+        END %,
+    $GETMSG(MSGID, MSGLEN = 0, BUFADR, FLAGS = 0, OUTADR = 0) =
+        %IF %NULL(MSGID) %THEN %ERROR('$GETMSG needs MSGID') %FI
+        %IF %NULL(BUFADR) %THEN %ERROR('$GETMSG needs BUFADR') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETMSG : BLISS;
+        SYS$GETMSG(MSGID, MSGLEN, BUFADR, FLAGS, OUTADR)
+        END %,
+    $ASCEFC(EFN, NAME, PROT = 0, PERM = 0) =
+        %IF %NULL(EFN) %THEN %ERROR('$ASCEFC needs EFN') %FI
+        %IF %NULL(NAME) %THEN %ERROR('$ASCEFC needs NAME') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$ASCEFC : BLISS;
+        SYS$ASCEFC(EFN, NAME, PROT, PERM)
+        END %,
+    $DACEFC(EFN) =
+        %IF %NULL(EFN) %THEN %ERROR('$DACEFC needs EFN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DACEFC : BLISS;
+        SYS$DACEFC(EFN)
+        END %,
+    $SETEF(EFN) =
+        %IF %NULL(EFN) %THEN %ERROR('$SETEF needs EFN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$SETEF : BLISS;
+        SYS$SETEF(EFN)
+        END %,
+    $CLREF(EFN) =
+        %IF %NULL(EFN) %THEN %ERROR('$CLREF needs EFN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CLREF : BLISS;
+        SYS$CLREF(EFN)
+        END %,
+    $READEF(EFN, STATE) =
+        %IF %NULL(EFN) %THEN %ERROR('$READEF needs EFN') %FI
+        %IF %NULL(STATE) %THEN %ERROR('$READEF needs STATE') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$READEF : BLISS;
+        SYS$READEF(EFN, STATE)
+        END %,
+    $WAITFR(EFN) =
+        %IF %NULL(EFN) %THEN %ERROR('$WAITFR needs EFN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$WAITFR : BLISS;
+        SYS$WAITFR(EFN)
+        END %,
+    $WFLOR(EFN, MASK) =
+        %IF %NULL(EFN) %THEN %ERROR('$WFLOR needs EFN') %FI
+        %IF %NULL(MASK) %THEN %ERROR('$WFLOR needs MASK') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$WFLOR : BLISS;
+        SYS$WFLOR(EFN, MASK)
+        END %,
+    $WFLAND(EFN, MASK) =
+        %IF %NULL(EFN) %THEN %ERROR('$WFLAND needs EFN') %FI
+        %IF %NULL(MASK) %THEN %ERROR('$WFLAND needs MASK') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$WFLAND : BLISS;
+        SYS$WFLAND(EFN, MASK)
+        END %,
+    $CRETVA(INADR, RETADR = 0, ACMODE = 0) =
+        %IF %NULL(INADR) %THEN %ERROR('$CRETVA needs INADR') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CRETVA : BLISS;
+        SYS$CRETVA(INADR, RETADR, ACMODE)
+        END %,
+    $DELTVA(INADR, RETADR = 0, ACMODE = 0) =
+        %IF %NULL(INADR) %THEN %ERROR('$DELTVA needs INADR') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DELTVA : BLISS;
+        SYS$DELTVA(INADR, RETADR, ACMODE)
+        END %,
+    $CRMPSC(INADR = 0, RETADR = 0, ACMODE = 0, FLAGS = 0, GSDNAM = 0, IDENT = 0, RELPAG = 0,
+            CHAN = 0, PAGCNT = 0, VBN = 0, PROT = 0, PFC = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$CRMPSC : BLISS;
+        SYS$CRMPSC(INADR, RETADR, ACMODE, FLAGS, GSDNAM, IDENT, RELPAG, CHAN, PAGCNT, VBN, PROT,
+            PFC)
+        END %,
+    $MGBLSC(INADR, RETADR = 0, ACMODE = 0, FLAGS = 0, GSDNAM, IDENT = 0, RELPAG = 0) =
+        %IF %NULL(INADR) %THEN %ERROR('$MGBLSC needs INADR') %FI
+        %IF %NULL(GSDNAM) %THEN %ERROR('$MGBLSC needs GSDNAM') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$MGBLSC : BLISS;
+        SYS$MGBLSC(INADR, RETADR, ACMODE, FLAGS, GSDNAM, IDENT, RELPAG)
+        END %,
+    $DGBLSC(FLAGS = 0, GSDNAM, IDENT = 0) =
+        %IF %NULL(GSDNAM) %THEN %ERROR('$DGBLSC needs GSDNAM') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DGBLSC : BLISS;
+        SYS$DGBLSC(FLAGS, GSDNAM, IDENT)
+        END %,
+    $EXPREG(PAGCNT, RETADR = 0, ACMODE = 0, REGION = 0) =
+        %IF %NULL(PAGCNT) %THEN %ERROR('$EXPREG needs PAGCNT') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$EXPREG : BLISS;
+        SYS$EXPREG(PAGCNT, RETADR, ACMODE, REGION)
+        END %,
+    $SETPRV(ENBFLG = 0, PRVADR = 0, PRMFLG = 0, PRVPRV = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$SETPRV : BLISS;
+        SYS$SETPRV(ENBFLG, PRVADR, PRMFLG, PRVPRV)
+        END %,
+    $CMKRNL(ROUTIN, ARGLST = 0) =
+        %IF %NULL(ROUTIN) %THEN %ERROR('$CMKRNL needs ROUTIN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CMKRNL : BLISS;
+        SYS$CMKRNL(ROUTIN, ARGLST)
+        END %,
+    $CMEXEC(ROUTIN, ARGLST = 0) =
+        %IF %NULL(ROUTIN) %THEN %ERROR('$CMEXEC needs ROUTIN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CMEXEC : BLISS;
+        SYS$CMEXEC(ROUTIN, ARGLST)
+        END %,
+    $ASSIGN(DEVNAM, CHAN, ACMODE = 0, MBXNAM = 0) =
+        %IF %NULL(DEVNAM) %THEN %ERROR('$ASSIGN needs DEVNAM') %FI
+        %IF %NULL(CHAN) %THEN %ERROR('$ASSIGN needs CHAN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$ASSIGN : BLISS;
+        SYS$ASSIGN(DEVNAM, CHAN, ACMODE, MBXNAM)
+        END %,
+    $CREMBX(PRMFLG = 0, CHAN, MAXMSG = 0, BUFQUO = 0, PROMSK = 0, ACMODE = 0, LOGNAM = 0,
+            FLAGS = 0) =
+        %IF %NULL(CHAN) %THEN %ERROR('$CREMBX needs CHAN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CREMBX : BLISS;
+        SYS$CREMBX(PRMFLG, CHAN, MAXMSG, BUFQUO, PROMSK, ACMODE, LOGNAM, FLAGS)
+        END %,
+    $DELMBX(CHAN) =
+        %IF %NULL(CHAN) %THEN %ERROR('$DELMBX needs CHAN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DELMBX : BLISS;
+        SYS$DELMBX(CHAN)
+        END %,
+    $DASSGN(CHAN) =
+        %IF %NULL(CHAN) %THEN %ERROR('$DASSGN needs CHAN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DASSGN : BLISS;
+        SYS$DASSGN(CHAN)
+        END %,
+    $CANCEL(CHAN) =
+        %IF %NULL(CHAN) %THEN %ERROR('$CANCEL needs CHAN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CANCEL : BLISS;
+        SYS$CANCEL(CHAN)
+        END %,
+    $QIOW(EFN = 0, CHAN, FUNC, IOSB = 0, ASTADR = 0, ASTPRM = 0, P1 = 0, P2 = 0, P3 = 0,
+            P4 = 0, P5 = 0, P6 = 0) =
+        %IF %NULL(CHAN) %THEN %ERROR('$QIOW needs CHAN') %FI
+        %IF %NULL(FUNC) %THEN %ERROR('$QIOW needs FUNC') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$QIOW : BLISS;
+        SYS$QIOW(EFN, CHAN, FUNC, IOSB, ASTADR, ASTPRM, P1, P2, P3, P4, P5, P6)
+        END %,
+    $QIO(EFN = 0, CHAN, FUNC, IOSB = 0, ASTADR = 0, ASTPRM = 0, P1 = 0, P2 = 0, P3 = 0,
+            P4 = 0, P5 = 0, P6 = 0) =
+        %IF %NULL(CHAN) %THEN %ERROR('$QIO needs CHAN') %FI
+        %IF %NULL(FUNC) %THEN %ERROR('$QIO needs FUNC') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$QIO : BLISS;
+        SYS$QIO(EFN, CHAN, FUNC, IOSB, ASTADR, ASTPRM, P1, P2, P3, P4, P5, P6)
+        END %,
+    $ENQ(EFN = 0, LKMODE, LKSB, FLAGS = 0, RESNAM = 0, PARID = 0, ASTADR = 0, ASTPRM = 0,
+            BLKAST = 0, ACMODE = 0, RSDM_ID = 0) =
+        %IF %NULL(LKMODE) %THEN %ERROR('$ENQ needs LKMODE') %FI
+        %IF %NULL(LKSB) %THEN %ERROR('$ENQ needs LKSB') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$ENQ : BLISS;
+        SYS$ENQ(EFN, LKMODE, LKSB, FLAGS, RESNAM, PARID, ASTADR, ASTPRM, BLKAST, ACMODE, RSDM_ID)
+        END %,
+    $ENQW(EFN = 0, LKMODE, LKSB, FLAGS = 0, RESNAM = 0, PARID = 0, ASTADR = 0, ASTPRM = 0,
+            BLKAST = 0, ACMODE = 0, RSDM_ID = 0) =
+        %IF %NULL(LKMODE) %THEN %ERROR('$ENQW needs LKMODE') %FI
+        %IF %NULL(LKSB) %THEN %ERROR('$ENQW needs LKSB') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$ENQW : BLISS;
+        SYS$ENQW(EFN, LKMODE, LKSB, FLAGS, RESNAM, PARID, ASTADR, ASTPRM, BLKAST, ACMODE,
+            RSDM_ID)
+        END %,
+    $DEQ(LKID = 0, VALBLK = 0, ACMODE = 0, FLAGS = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$DEQ : BLISS;
+        SYS$DEQ(LKID, VALBLK, ACMODE, FLAGS)
+        END %,
+    $GETLKI(EFN = 0, LKIDADR, ITMLST, IOSB = 0, ASTADR = 0, ASTPRM = 0, NULLARG = 0) =
+        %IF %NULL(LKIDADR) %THEN %ERROR('$GETLKI needs LKIDADR') %FI
+        %IF %NULL(ITMLST) %THEN %ERROR('$GETLKI needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETLKI : BLISS;
+        SYS$GETLKI(EFN, LKIDADR, ITMLST, IOSB, ASTADR, ASTPRM, NULLARG)
+        END %,
+    $GETLKIW(EFN = 0, LKIDADR, ITMLST, IOSB = 0, ASTADR = 0, ASTPRM = 0, NULLARG = 0) =
+        %IF %NULL(LKIDADR) %THEN %ERROR('$GETLKIW needs LKIDADR') %FI
+        %IF %NULL(ITMLST) %THEN %ERROR('$GETLKIW needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETLKIW : BLISS;
+        SYS$GETLKIW(EFN, LKIDADR, ITMLST, IOSB, ASTADR, ASTPRM, NULLARG)
+        END %,
+    $DCLAST(ASTADR, ASTPRM = 0, ACMODE = 0) =
+        %IF %NULL(ASTADR) %THEN %ERROR('$DCLAST needs ASTADR') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DCLAST : BLISS;
+        SYS$DCLAST(ASTADR, ASTPRM, ACMODE)
+        END %,
+    $SETAST(ENBFLG) =
+        %IF %NULL(ENBFLG) %THEN %ERROR('$SETAST needs ENBFLG') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$SETAST : BLISS;
+        SYS$SETAST(ENBFLG)
+        END %,
+    $SETRWM(WATFLG = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$SETRWM : BLISS;
+        SYS$SETRWM(WATFLG)
+        END %,
+    $ASCTIM(TIMLEN = 0, TIMBUF, TIMADR = 0, CVTFLG = 0) =
+        %IF %NULL(TIMBUF) %THEN %ERROR('$ASCTIM needs TIMBUF') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$ASCTIM : BLISS;
+        SYS$ASCTIM(TIMLEN, TIMBUF, TIMADR, CVTFLG)
+        END %,
+    $GETTIM(TIMADR) =
+        %IF %NULL(TIMADR) %THEN %ERROR('$GETTIM needs TIMADR') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETTIM : BLISS;
+        SYS$GETTIM(TIMADR)
+        END %,
+    $NUMTIM(TIMBUF, TIMADR = 0) =
+        %IF %NULL(TIMBUF) %THEN %ERROR('$NUMTIM needs TIMBUF') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$NUMTIM : BLISS;
+        SYS$NUMTIM(TIMBUF, TIMADR)
+        END %,
+    $BINTIM(TIMBUF, TIMADR) =
+        %IF %NULL(TIMBUF) %THEN %ERROR('$BINTIM needs TIMBUF') %FI
+        %IF %NULL(TIMADR) %THEN %ERROR('$BINTIM needs TIMADR') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$BINTIM : BLISS;
+        SYS$BINTIM(TIMBUF, TIMADR)
+        END %,
+    $SETIMR(EFN = 0, DAYTIM, ASTADR = 0, REQIDT = 0) =
+        %IF %NULL(DAYTIM) %THEN %ERROR('$SETIMR needs DAYTIM') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$SETIMR : BLISS;
+        SYS$SETIMR(EFN, DAYTIM, ASTADR, REQIDT)
+        END %,
+    $CANTIM(REQIDT = 0, ACMODE = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$CANTIM : BLISS;
+        SYS$CANTIM(REQIDT, ACMODE)
+        END %,
+    $SCHDWK(PIDADR = 0, PRCNAM = 0, DAYTIM, REPTIM = 0) =
+        %IF %NULL(DAYTIM) %THEN %ERROR('$SCHDWK needs DAYTIM') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$SCHDWK : BLISS;
+        SYS$SCHDWK(PIDADR, PRCNAM, DAYTIM, REPTIM)
+        END %,
+    $CANWAK(PIDADR = 0, PRCNAM = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$CANWAK : BLISS;
+        SYS$CANWAK(PIDADR, PRCNAM)
+        END %,
+    $CRELNT(ATTR = 0, RESNAM = 0, RESLEN = 0, QUOTA = 0, PROMSK = 0, TABNAM = 0, PARTAB,
+            ACMODE = 0) =
+        %IF %NULL(PARTAB) %THEN %ERROR('$CRELNT needs PARTAB') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CRELNT : BLISS;
+        SYS$CRELNT(ATTR, RESNAM, RESLEN, QUOTA, PROMSK, TABNAM, PARTAB, ACMODE)
+        END %,
+    $CRELNM(ATTR = 0, TABNAM, LOGNAM, ACMODE = 0, ITMLST) =
+        %IF %NULL(TABNAM) %THEN %ERROR('$CRELNM needs TABNAM') %FI
+        %IF %NULL(LOGNAM) %THEN %ERROR('$CRELNM needs LOGNAM') %FI
+        %IF %NULL(ITMLST) %THEN %ERROR('$CRELNM needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CRELNM : BLISS;
+        SYS$CRELNM(ATTR, TABNAM, LOGNAM, ACMODE, ITMLST)
+        END %,
+    $DELLNM(TABNAM, LOGNAM = 0, ACMODE = 0) =
+        %IF %NULL(TABNAM) %THEN %ERROR('$DELLNM needs TABNAM') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DELLNM : BLISS;
+        SYS$DELLNM(TABNAM, LOGNAM, ACMODE)
+        END %,
+    $TRNLNM(ATTR = 0, TABNAM, LOGNAM, ACMODE = 0, ITMLST) =
+        %IF %NULL(TABNAM) %THEN %ERROR('$TRNLNM needs TABNAM') %FI
+        %IF %NULL(LOGNAM) %THEN %ERROR('$TRNLNM needs LOGNAM') %FI
+        %IF %NULL(ITMLST) %THEN %ERROR('$TRNLNM needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$TRNLNM : BLISS;
+        SYS$TRNLNM(ATTR, TABNAM, LOGNAM, ACMODE, ITMLST)
+        END %,
+    $SETDDIR(NEWDIR = 0, OLDLEN = 0, OLDDIR = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$SETDDIR : BLISS;
+        SYS$SETDDIR(NEWDIR, OLDLEN, OLDDIR)
+        END %,
+    $IMGACT(IMAGE, CMDLIN = 0) =
+        %IF %NULL(IMAGE) %THEN %ERROR('$IMGACT needs IMAGE') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$IMGACT : BLISS;
+        SYS$IMGACT(IMAGE, CMDLIN)
+        END %,
+    $INIT_VOL(DEVNAM, VOLNAM, ITMLST = 0) =
+        %IF %NULL(DEVNAM) %THEN %ERROR('$INIT_VOL needs DEVNAM') %FI
+        %IF %NULL(VOLNAM) %THEN %ERROR('$INIT_VOL needs VOLNAM') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$INIT_VOL : BLISS;
+        SYS$INIT_VOL(DEVNAM, VOLNAM, ITMLST)
+        END %,
+    $GETDVI(EFN = 0, CHAN = 0, DEVNAM = 0, ITMLST, IOSB = 0, ASTADR = 0, ASTPRM = 0,
+            NULLARG = 0) =
+        %IF %NULL(ITMLST) %THEN %ERROR('$GETDVI needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETDVI : BLISS;
+        SYS$GETDVI(EFN, CHAN, DEVNAM, ITMLST, IOSB, ASTADR, ASTPRM, NULLARG)
+        END %,
+    $GETDVIW(EFN = 0, CHAN = 0, DEVNAM = 0, ITMLST, IOSB = 0, ASTADR = 0, ASTPRM = 0,
+            NULLARG = 0) =
+        %IF %NULL(ITMLST) %THEN %ERROR('$GETDVIW needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GETDVIW : BLISS;
+        SYS$GETDVIW(EFN, CHAN, DEVNAM, ITMLST, IOSB, ASTADR, ASTPRM, NULLARG)
+        END %,
+    $DEVICE_SCAN(RETURN_DEVNAM, RETLEN = 0, SEARCH_DEVNAM = 0, ITMLST = 0, CONTXT = 0) =
+        %IF %NULL(RETURN_DEVNAM) %THEN %ERROR('$DEVICE_SCAN needs RETURN_DEVNAM') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DEVICE_SCAN : BLISS;
+        SYS$DEVICE_SCAN(RETURN_DEVNAM, RETLEN, SEARCH_DEVNAM, ITMLST, CONTXT)
+        END %,
+    $BRKTHRU(EFN = 0, MSGBUF, SENDTO = 0, SNDTYP = 1, IOSB = 0, CARCON = 32, FLAGS = 0,
+            REQID = 0, TIMOUT = 0, ASTADR = 0, ASTPRM = 0) =
+        %IF %NULL(MSGBUF) %THEN %ERROR('$BRKTHRU needs MSGBUF') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$BRKTHRU : BLISS;
+        SYS$BRKTHRU(EFN, MSGBUF, SENDTO, SNDTYP, IOSB, CARCON, FLAGS, REQID, TIMOUT, ASTADR,
+            ASTPRM)
+        END %,
+    $BRKTHRUW(EFN = 0, MSGBUF, SENDTO = 0, SNDTYP = 1, IOSB = 0, CARCON = 32, FLAGS = 0,
+            REQID = 0, TIMOUT = 0, ASTADR = 0, ASTPRM = 0) =
+        %IF %NULL(MSGBUF) %THEN %ERROR('$BRKTHRUW needs MSGBUF') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$BRKTHRUW : BLISS;
+        SYS$BRKTHRUW(EFN, MSGBUF, SENDTO, SNDTYP, IOSB, CARCON, FLAGS, REQID, TIMOUT, ASTADR,
+            ASTPRM)
+        END %,
+    $SNDOPR(MSGBUF, CHAN = 0) =
+        %IF %NULL(MSGBUF) %THEN %ERROR('$SNDOPR needs MSGBUF') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$SNDOPR : BLISS;
+        SYS$SNDOPR(MSGBUF, CHAN)
+        END %,
+    $MOUNT(ITMLST) =
+        %IF %NULL(ITMLST) %THEN %ERROR('$MOUNT needs ITMLST') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$MOUNT : BLISS;
+        SYS$MOUNT(ITMLST)
+        END %,
+    $DISMOU(DEVNAM, FLAGS = 0) =
+        %IF %NULL(DEVNAM) %THEN %ERROR('$DISMOU needs DEVNAM') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$DISMOU : BLISS;
+        SYS$DISMOU(DEVNAM, FLAGS)
+        END %,
+    $CREATE_DIR(DEVDIRSPEC) =
+        %IF %NULL(DEVDIRSPEC) %THEN %ERROR('$CREATE_DIR needs DEVDIRSPEC') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$CREATE_DIR : BLISS;
+        SYS$CREATE_DIR(DEVDIRSPEC)
+        END %,
+    $HASH_PASSWORD(PWDDSC, ALG, SALT, USRDSC, HASH) =
+        %IF %NULL(PWDDSC) %THEN %ERROR('$HASH_PASSWORD needs PWDDSC') %FI
+        %IF %NULL(ALG) %THEN %ERROR('$HASH_PASSWORD needs ALG') %FI
+        %IF %NULL(SALT) %THEN %ERROR('$HASH_PASSWORD needs SALT') %FI
+        %IF %NULL(USRDSC) %THEN %ERROR('$HASH_PASSWORD needs USRDSC') %FI
+        %IF %NULL(HASH) %THEN %ERROR('$HASH_PASSWORD needs HASH') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$HASH_PASSWORD : BLISS;
+        SYS$HASH_PASSWORD(PWDDSC, ALG, SALT, USRDSC, HASH)
+        END %,
+    $GET_ENTROPY(BUFFER, BUFLEN) =
+        %IF %NULL(BUFFER) %THEN %ERROR('$GET_ENTROPY needs BUFFER') %FI
+        %IF %NULL(BUFLEN) %THEN %ERROR('$GET_ENTROPY needs BUFLEN') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$GET_ENTROPY : BLISS;
+        SYS$GET_ENTROPY(BUFFER, BUFLEN)
+        END %,
+    $ASCTOID(NAME, ID = 0, ATTRIB = 0) =
+        %IF %NULL(NAME) %THEN %ERROR('$ASCTOID needs NAME') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$ASCTOID : BLISS;
+        SYS$ASCTOID(NAME, ID, ATTRIB)
+        END %,
+    $IDTOASC(ID, NAMLEN = 0, NAMBUF = 0, RESID = 0, ATTRIB = 0, CONTXT = 0) =
+        %IF %NULL(ID) %THEN %ERROR('$IDTOASC needs ID') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$IDTOASC : BLISS;
+        SYS$IDTOASC(ID, NAMLEN, NAMBUF, RESID, ATTRIB, CONTXT)
+        END %,
+    $FIND_HELD(HOLDER, ID = 0, ATTRIB = 0, CONTXT = 0) =
+        %IF %NULL(HOLDER) %THEN %ERROR('$FIND_HELD needs HOLDER') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$FIND_HELD : BLISS;
+        SYS$FIND_HELD(HOLDER, ID, ATTRIB, CONTXT)
+        END %,
+    $FIND_HOLDER(ID, HOLDER = 0, ATTRIB = 0, CONTXT = 0) =
+        %IF %NULL(ID) %THEN %ERROR('$FIND_HOLDER needs ID') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$FIND_HOLDER : BLISS;
+        SYS$FIND_HOLDER(ID, HOLDER, ATTRIB, CONTXT)
+        END %,
+    $FINISH_RDB(CONTXT) =
+        %IF %NULL(CONTXT) %THEN %ERROR('$FINISH_RDB needs CONTXT') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$FINISH_RDB : BLISS;
+        SYS$FINISH_RDB(CONTXT)
+        END %,
+    $ADD_IDENT(NAME, ID = 0, ATTRIB = 0, RESID = 0) =
+        %IF %NULL(NAME) %THEN %ERROR('$ADD_IDENT needs NAME') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$ADD_IDENT : BLISS;
+        SYS$ADD_IDENT(NAME, ID, ATTRIB, RESID)
+        END %,
+    $REM_IDENT(ID) =
+        %IF %NULL(ID) %THEN %ERROR('$REM_IDENT needs ID') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$REM_IDENT : BLISS;
+        SYS$REM_IDENT(ID)
+        END %,
+    $ADD_HOLDER(ID, HOLDER, ATTRIB = 0) =
+        %IF %NULL(ID) %THEN %ERROR('$ADD_HOLDER needs ID') %FI
+        %IF %NULL(HOLDER) %THEN %ERROR('$ADD_HOLDER needs HOLDER') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$ADD_HOLDER : BLISS;
+        SYS$ADD_HOLDER(ID, HOLDER, ATTRIB)
+        END %,
+    $REM_HOLDER(ID, HOLDER) =
+        %IF %NULL(ID) %THEN %ERROR('$REM_HOLDER needs ID') %FI
+        %IF %NULL(HOLDER) %THEN %ERROR('$REM_HOLDER needs HOLDER') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$REM_HOLDER : BLISS;
+        SYS$REM_HOLDER(ID, HOLDER)
+        END %,
+    $MOD_IDENT(ID, SET_ATTRIB = 0, CLR_ATTRIB = 0, NEW_NAME = 0, NEW_VALUE = 0) =
+        %IF %NULL(ID) %THEN %ERROR('$MOD_IDENT needs ID') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$MOD_IDENT : BLISS;
+        SYS$MOD_IDENT(ID, SET_ATTRIB, CLR_ATTRIB, NEW_NAME, NEW_VALUE)
+        END %,
+    $MOD_HOLDER(ID, HOLDER, SET_ATTRIB = 0, CLR_ATTRIB = 0) =
+        %IF %NULL(ID) %THEN %ERROR('$MOD_HOLDER needs ID') %FI
+        %IF %NULL(HOLDER) %THEN %ERROR('$MOD_HOLDER needs HOLDER') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$MOD_HOLDER : BLISS;
+        SYS$MOD_HOLDER(ID, HOLDER, SET_ATTRIB, CLR_ATTRIB)
+        END %,
+    $PARSE_ACL(ACLSTR, ACLENT, ERRPOS = 0, ACCNAM = 0, ROUTIN = 0) =
+        %IF %NULL(ACLSTR) %THEN %ERROR('$PARSE_ACL needs ACLSTR') %FI
+        %IF %NULL(ACLENT) %THEN %ERROR('$PARSE_ACL needs ACLENT') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$PARSE_ACL : BLISS;
+        SYS$PARSE_ACL(ACLSTR, ACLENT, ERRPOS, ACCNAM, ROUTIN)
+        END %,
+    $FORMAT_ACL(ACLENT, ACLLEN = 0, ACLSTR, WIDTH = 0, TRMDSC = 0, INDENT = 0, ACCNAM = 0,
+            ROUTIN = 0) =
+        %IF %NULL(ACLENT) %THEN %ERROR('$FORMAT_ACL needs ACLENT') %FI
+        %IF %NULL(ACLSTR) %THEN %ERROR('$FORMAT_ACL needs ACLSTR') %FI
+        BEGIN
+        EXTERNAL ROUTINE SYS$FORMAT_ACL : BLISS;
+        SYS$FORMAT_ACL(ACLENT, ACLLEN, ACLSTR, WIDTH, TRMDSC, INDENT, ACCNAM, ROUTIN)
+        END %,
+    $GET_SECURITY(CLSNAM = 0, OBJNAM = 0, OBJHAN = 0, FLAGS = 0, ITMLST = 0, CONTXT = 0,
+            ACMODE = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$GET_SECURITY : BLISS;
+        SYS$GET_SECURITY(CLSNAM, OBJNAM, OBJHAN, FLAGS, ITMLST, CONTXT, ACMODE)
+        END %,
+    $SET_SECURITY(CLSNAM = 0, OBJNAM = 0, OBJHAN = 0, FLAGS = 0, ITMLST = 0, CONTXT = 0,
+            ACMODE = 0) =
+        BEGIN
+        EXTERNAL ROUTINE SYS$SET_SECURITY : BLISS;
+        SYS$SET_SECURITY(CLSNAM, OBJNAM, OBJHAN, FLAGS, ITMLST, CONTXT, ACMODE)
+        END %;
+
+! The RMS control blocks and services (UM 8.4) and STARLET's helper
+! macros, written for vaxpunk from VMS's documented interfaces; vdefs
+! copies this file in after the definitions.
+!
+! $FAB, $RAB, $NAM and the XABs make a block in OWN or GLOBAL data:
+!     INFAB : $FAB(FNM = 'MYFILE.SRC', FAC = GET)
+! with the keywords of the MACRO-32 macros, options alone or in angle
+! brackets (ROP = <LOC, RAH>), and FNM and DNM for the file names as
+! quoted strings. $name_INIT(name = address, ...) fills a block in at run
+! time, and $name_DECL is the block's attribute with nothing in it.
+
+MACRO
+    ! An option list as the mask of its PREFIX bits: GET or <GET, PUT>.
+    $$RMS_MASK(PREFIX, LIST) =
+        %IF %NULL(LIST) %THEN 0 %ELSE (0 OR $$RMS_BIT(PREFIX, %REMOVE(LIST))) %FI %,
+    $$RMS_BIT(PREFIX)[ITEM] = %NAME(PREFIX, ITEM) %,
+    ! FAB's SHR: GET, PUT, DEL and UPD are FAB$M_SHRx, MSE and NIL themselves.
+    $$RMS_SHR(LIST) =
+        %IF %NULL(LIST) %THEN 0 %ELSE (0 OR $$RMS_SHR_BIT(%REMOVE(LIST))) %FI %,
+    $$RMS_SHR_BIT[ITEM] =
+        %IF %IDENTICAL(ITEM, MSE) OR %IDENTICAL(ITEM, NIL)
+        %THEN %NAME('FAB$M_', ITEM)
+        %ELSE %NAME('FAB$M_SHR', ITEM)
+        %FI %,
+    ! A file name: the address and size a quoted string gives, else those
+    ! given.
+    $$RMS_TEXT(TEXT, ADDRESS) =
+        %IF %NULL(TEXT) %THEN ADDRESS %ELSE UPLIT(%STRING(TEXT)) %FI %,
+    $$RMS_SIZE(TEXT, SIZE) =
+        %IF %NULL(TEXT) %THEN SIZE %ELSE %CHARCOUNT(%STRING(TEXT)) %FI %,
+    ! A key's segments, POS = <0, 10>: their positions, words from
+    ! XAB$W_POS0, and sizes, bytes from XAB$B_SIZ0; and how many.
+    $$RMS_POS[P] = [$BYTEOFFSET(XAB$W_POS0) + 2 * %COUNT, 0, 16, 0] = P %,
+    $$RMS_SIZ[S] = [$BYTEOFFSET(XAB$B_SIZ0) + %COUNT, 0, 8, 0] = S %,
+    $$RMS_COUNT[] = %LENGTH %,
+    $$RMS_SEGMENTS(POS, SIZ) =
+        %IF NOT %NULL(POS) %THEN , $$RMS_POS(%REMOVE(POS)) %FI
+        %IF NOT %NULL(SIZ) %THEN , $$RMS_SIZ(%REMOVE(SIZ)) %FI %;
+
+! The FAB.
+KEYWORDMACRO
+    $FAB(FNM, DNM, FNA = 0, FNS = 0, DNA = 0, DNS = 0, NAM = 0, FAC, XAB = 0, ORG = SEQ,
+            RFM = VAR, RAT, MRS = 0, FOP, SHR, ALQ = 0, DEQ = 0, BKS = 0, FSZ = 0,
+            MRN = 0, CTX = 0, RTV = 0, GBC = 0) =
+        BLOCK[FAB$C_BLN, BYTE]
+        PRESET(
+            [FAB$B_BID] = FAB$C_BID,
+            [FAB$B_BLN] = FAB$C_BLN,
+            [FAB$L_FOP] = $$RMS_MASK('FAB$M_', FOP),
+            [FAB$L_ALQ] = ALQ,
+            [FAB$W_DEQ] = DEQ,
+            [FAB$B_FAC] = $$RMS_MASK('FAB$M_', FAC),
+            [FAB$B_SHR] = $$RMS_SHR(SHR),
+            [FAB$L_CTX] = CTX,
+            [FAB$B_RTV] = RTV,
+            [FAB$B_ORG] = %NAME('FAB$C_', ORG),
+            [FAB$B_RAT] = $$RMS_MASK('FAB$M_', RAT),
+            [FAB$B_RFM] = %NAME('FAB$C_', RFM),
+            [FAB$L_XAB] = XAB,
+            [FAB$L_NAM] = NAM,
+            [FAB$L_FNA] = $$RMS_TEXT(FNM, FNA),
+            [FAB$L_DNA] = $$RMS_TEXT(DNM, DNA),
+            [FAB$B_FNS] = $$RMS_SIZE(FNM, FNS),
+            [FAB$B_DNS] = $$RMS_SIZE(DNM, DNS),
+            [FAB$W_MRS] = MRS,
+            [FAB$L_MRN] = MRN,
+            [FAB$B_BKS] = BKS,
+            [FAB$B_FSZ] = FSZ,
+            [FAB$W_GBC] = GBC) %,
+    $FAB_INIT(FAB, FNM, DNM, FNA = 0, FNS = 0, DNA = 0, DNS = 0, NAM = 0, FAC, XAB = 0,
+            ORG = SEQ, RFM = VAR, RAT, MRS = 0, FOP, SHR, ALQ = 0, DEQ = 0, BKS = 0,
+            FSZ = 0, MRN = 0, CTX = 0, RTV = 0, GBC = 0) =
+        BEGIN
+        BIND $$RMS_BLOCK = FAB : BLOCK[, BYTE];
+        CH$FILL(0, FAB$C_BLN, $$RMS_BLOCK);
+        $$RMS_BLOCK[FAB$B_BID] = FAB$C_BID;
+        $$RMS_BLOCK[FAB$B_BLN] = FAB$C_BLN;
+        $$RMS_BLOCK[FAB$L_FOP] = $$RMS_MASK('FAB$M_', FOP);
+        $$RMS_BLOCK[FAB$L_ALQ] = ALQ;
+        $$RMS_BLOCK[FAB$W_DEQ] = DEQ;
+        $$RMS_BLOCK[FAB$B_FAC] = $$RMS_MASK('FAB$M_', FAC);
+        $$RMS_BLOCK[FAB$B_SHR] = $$RMS_SHR(SHR);
+        $$RMS_BLOCK[FAB$L_CTX] = CTX;
+        $$RMS_BLOCK[FAB$B_RTV] = RTV;
+        $$RMS_BLOCK[FAB$B_ORG] = %NAME('FAB$C_', ORG);
+        $$RMS_BLOCK[FAB$B_RAT] = $$RMS_MASK('FAB$M_', RAT);
+        $$RMS_BLOCK[FAB$B_RFM] = %NAME('FAB$C_', RFM);
+        $$RMS_BLOCK[FAB$L_XAB] = XAB;
+        $$RMS_BLOCK[FAB$L_NAM] = NAM;
+        $$RMS_BLOCK[FAB$L_FNA] = $$RMS_TEXT(FNM, FNA);
+        $$RMS_BLOCK[FAB$L_DNA] = $$RMS_TEXT(DNM, DNA);
+        $$RMS_BLOCK[FAB$B_FNS] = $$RMS_SIZE(FNM, FNS);
+        $$RMS_BLOCK[FAB$B_DNS] = $$RMS_SIZE(DNM, DNS);
+        $$RMS_BLOCK[FAB$W_MRS] = MRS;
+        $$RMS_BLOCK[FAB$L_MRN] = MRN;
+        $$RMS_BLOCK[FAB$B_BKS] = BKS;
+        $$RMS_BLOCK[FAB$B_FSZ] = FSZ;
+        $$RMS_BLOCK[FAB$W_GBC] = GBC
+        END %;
+MACRO
+    $FAB_DECL = BLOCK[FAB$C_BLN, BYTE] %;
+
+! The RAB.
+KEYWORDMACRO
+    $RAB(FAB = 0, UBF = 0, USZ = 0, RBF = 0, RSZ = 0, RAC = SEQ, ROP, KBF = 0, KSZ = 0,
+            KRF = 0, RHB = 0, PBF, PSZ, BKT = 0, XAB = 0, MBF = 0, MBC = 0,
+            CTX = 0, TMO = 0) =
+        BLOCK[RAB$C_BLN, BYTE]
+        PRESET(
+            [RAB$B_BID] = RAB$C_BID,
+            [RAB$B_BLN] = RAB$C_BLN,
+            [RAB$L_ROP] = $$RMS_MASK('RAB$M_', ROP),
+            [RAB$L_CTX] = CTX,
+            [RAB$B_RAC] = %NAME('RAB$C_', RAC),
+            [RAB$B_TMO] = TMO,
+            [RAB$W_USZ] = USZ,
+            [RAB$W_RSZ] = RSZ,
+            [RAB$L_UBF] = UBF,
+            [RAB$L_RBF] = RBF,
+            [RAB$L_RHB] = RHB,
+            [RAB$L_KBF] = $$RAB_EITHER(PBF, KBF),
+            [RAB$B_KSZ] = $$RAB_EITHER(PSZ, KSZ),
+            [RAB$B_KRF] = KRF,
+            [RAB$B_MBF] = MBF,
+            [RAB$B_MBC] = MBC,
+            [RAB$L_BKT] = BKT,
+            [RAB$L_FAB] = FAB,
+            [RAB$L_XAB] = XAB) %,
+    $RAB_INIT(RAB, FAB = 0, UBF = 0, USZ = 0, RBF = 0, RSZ = 0, RAC = SEQ, ROP, KBF = 0,
+            KSZ = 0, KRF = 0, RHB = 0, PBF, PSZ, BKT = 0, XAB = 0, MBF = 0,
+            MBC = 0, CTX = 0, TMO = 0) =
+        BEGIN
+        BIND $$RMS_BLOCK = RAB : BLOCK[, BYTE];
+        CH$FILL(0, RAB$C_BLN, $$RMS_BLOCK);
+        $$RMS_BLOCK[RAB$B_BID] = RAB$C_BID;
+        $$RMS_BLOCK[RAB$B_BLN] = RAB$C_BLN;
+        $$RMS_BLOCK[RAB$L_ROP] = $$RMS_MASK('RAB$M_', ROP);
+        $$RMS_BLOCK[RAB$L_CTX] = CTX;
+        $$RMS_BLOCK[RAB$B_RAC] = %NAME('RAB$C_', RAC);
+        $$RMS_BLOCK[RAB$B_TMO] = TMO;
+        $$RMS_BLOCK[RAB$W_USZ] = USZ;
+        $$RMS_BLOCK[RAB$W_RSZ] = RSZ;
+        $$RMS_BLOCK[RAB$L_UBF] = UBF;
+        $$RMS_BLOCK[RAB$L_RBF] = RBF;
+        $$RMS_BLOCK[RAB$L_RHB] = RHB;
+        $$RMS_BLOCK[RAB$L_KBF] = $$RAB_EITHER(PBF, KBF);
+        $$RMS_BLOCK[RAB$B_KSZ] = $$RAB_EITHER(PSZ, KSZ);
+        $$RMS_BLOCK[RAB$B_KRF] = KRF;
+        $$RMS_BLOCK[RAB$B_MBF] = MBF;
+        $$RMS_BLOCK[RAB$B_MBC] = MBC;
+        $$RMS_BLOCK[RAB$L_BKT] = BKT;
+        $$RMS_BLOCK[RAB$L_FAB] = FAB;
+        $$RMS_BLOCK[RAB$L_XAB] = XAB
+        END %;
+MACRO
+    $RAB_DECL = BLOCK[RAB$C_BLN, BYTE] %,
+    ! The key and the prompt share a field: the prompt's, if given, else
+    ! the key's.
+    $$RAB_EITHER(PROMPT, KEY) = %IF %NULL(PROMPT) %THEN KEY %ELSE PROMPT %FI %;
+
+! The NAM block.
+KEYWORDMACRO
+    $NAM(ESA = 0, ESS = 0, RSA = 0, RSS = 0) =
+        BLOCK[NAM$C_BLN, BYTE]
+        PRESET(
+            [NAM$B_BID] = NAM$C_BID,
+            [NAM$B_BLN] = NAM$C_BLN,
+            [NAM$L_ESA] = ESA,
+            [NAM$B_ESS] = ESS,
+            [NAM$L_RSA] = RSA,
+            [NAM$B_RSS] = RSS) %,
+    $NAM_INIT(NAM, ESA = 0, ESS = 0, RSA = 0, RSS = 0) =
+        BEGIN
+        BIND $$RMS_BLOCK = NAM : BLOCK[, BYTE];
+        CH$FILL(0, NAM$C_BLN, $$RMS_BLOCK);
+        $$RMS_BLOCK[NAM$B_BID] = NAM$C_BID;
+        $$RMS_BLOCK[NAM$B_BLN] = NAM$C_BLN;
+        $$RMS_BLOCK[NAM$L_ESA] = ESA;
+        $$RMS_BLOCK[NAM$B_ESS] = ESS;
+        $$RMS_BLOCK[NAM$L_RSA] = RSA;
+        $$RMS_BLOCK[NAM$B_RSS] = RSS
+        END %;
+MACRO
+    $NAM_DECL = BLOCK[NAM$C_BLN, BYTE] %;
+
+! The XABs. A key's POS and SIZ are a segment's or a list of them, and
+! its key of reference is KREF, as REF is a reserved word.
+KEYWORDMACRO
+    $XABKEY(KREF = 0, POS = 0, SIZ = 0, DTP = STG, FLG, PROLOG = 0, IAN = 0, LAN = 0,
+            DAN = 0, IFL = 0, DFL = 0, NUL = 0, KNM = 0, NXT = 0) =
+        BLOCK[XAB$C_KEYLEN, BYTE]
+        PRESET(
+            [XAB$B_COD] = XAB$C_KEY,
+            [XAB$B_BLN] = XAB$C_KEYLEN,
+            [XAB$L_NXT] = NXT,
+            [XAB$B_IAN] = IAN,
+            [XAB$B_LAN] = LAN,
+            [XAB$B_DAN] = DAN,
+            [XAB$B_FLG] = $$RMS_MASK('XAB$M_', FLG),
+            [XAB$B_DTP] = %NAME('XAB$C_', DTP),
+            [XAB$B_NSG] = $$RMS_COUNT(%REMOVE(POS)),
+            [XAB$B_NUL] = NUL,
+            [XAB$B_REF] = KREF,
+            [XAB$W_IFL] = IFL,
+            [XAB$W_DFL] = DFL,
+            [XAB$L_KNM] = KNM,
+            [XAB$B_PROLOG] = PROLOG
+            $$RMS_SEGMENTS(POS, SIZ)) %,
+    $XABALL(AID = 0, ALN = ANY, AOP, ALQ = 0, BKZ = 0, DEQ = 0, LOC = 0, VOL = 0,
+            NXT = 0) =
+        BLOCK[XAB$C_ALLLEN, BYTE]
+        PRESET(
+            [XAB$B_COD] = XAB$C_ALL,
+            [XAB$B_BLN] = XAB$C_ALLLEN,
+            [XAB$L_NXT] = NXT,
+            [XAB$B_AOP] = $$RMS_MASK('XAB$M_', AOP),
+            [XAB$B_ALN] = %NAME('XAB$C_', ALN),
+            [XAB$W_VOL] = VOL,
+            [XAB$L_LOC] = LOC,
+            [XAB$L_ALQ] = ALQ,
+            [XAB$W_DEQ] = DEQ,
+            [XAB$B_BKZ] = BKZ,
+            [XAB$B_AID] = AID) %,
+    $XABSUM(NXT = 0) = $$RMS_XAB('SUM', NXT) %,
+    $XABFHC(NXT = 0) = $$RMS_XAB('FHC', NXT) %,
+    $XABDAT(NXT = 0) = $$RMS_XAB('DAT', NXT) %,
+    $XABRDT(NXT = 0) = $$RMS_XAB('RDT', NXT) %,
+    $XABPRO(PRO = 0, UIC = 0, NXT = 0) =
+        BLOCK[XAB$C_PROLEN, BYTE]
+        PRESET(
+            [XAB$B_COD] = XAB$C_PRO,
+            [XAB$B_BLN] = XAB$C_PROLEN,
+            [XAB$L_NXT] = NXT,
+            [XAB$W_PRO] = PRO,
+            [XAB$L_UIC] = UIC) %,
+    $XABSUM_INIT(XAB, NXT = 0) = $$RMS_XAB_INIT('SUM', XAB, NXT) %,
+    $XABFHC_INIT(XAB, NXT = 0) = $$RMS_XAB_INIT('FHC', XAB, NXT) %,
+    $XABDAT_INIT(XAB, NXT = 0) = $$RMS_XAB_INIT('DAT', XAB, NXT) %,
+    $XABRDT_INIT(XAB, NXT = 0) = $$RMS_XAB_INIT('RDT', XAB, NXT) %,
+    $XABPRO_INIT(XAB, PRO = 0, UIC = 0, NXT = 0) =
+        BEGIN
+        BIND $$RMS_BLOCK = XAB : BLOCK[, BYTE];
+        $$RMS_XAB_INIT('PRO', $$RMS_BLOCK, NXT);
+        $$RMS_BLOCK[XAB$W_PRO] = PRO;
+        $$RMS_BLOCK[XAB$L_UIC] = UIC
+        END %;
+MACRO
+    ! An XAB of type TYPE, a quoted string, with only its header given.
+    $$RMS_XAB(TYPE, NXT) =
+        BLOCK[%NAME('XAB$C_', TYPE, 'LEN'), BYTE]
+        PRESET(
+            [XAB$B_COD] = %NAME('XAB$C_', TYPE),
+            [XAB$B_BLN] = %NAME('XAB$C_', TYPE, 'LEN'),
+            [XAB$L_NXT] = NXT) %,
+    $$RMS_XAB_INIT(TYPE, XAB, NXT) =
+        BEGIN
+        BIND $$RMS_HEAD = XAB : BLOCK[, BYTE];
+        CH$FILL(0, %NAME('XAB$C_', TYPE, 'LEN'), $$RMS_HEAD);
+        $$RMS_HEAD[XAB$B_COD] = %NAME('XAB$C_', TYPE);
+        $$RMS_HEAD[XAB$B_BLN] = %NAME('XAB$C_', TYPE, 'LEN');
+        $$RMS_HEAD[XAB$L_NXT] = NXT
+        END %,
+    $XABKEY_DECL = BLOCK[XAB$C_KEYLEN, BYTE] %,
+    $XABALL_DECL = BLOCK[XAB$C_ALLLEN, BYTE] %,
+    $XABSUM_DECL = BLOCK[XAB$C_SUMLEN, BYTE] %,
+    $XABFHC_DECL = BLOCK[XAB$C_FHCLEN, BYTE] %,
+    $XABDAT_DECL = BLOCK[XAB$C_DATLEN, BYTE] %,
+    $XABRDT_DECL = BLOCK[XAB$C_RDTLEN, BYTE] %,
+    $XABPRO_DECL = BLOCK[XAB$C_PROLEN, BYTE] %;
+
+! The RMS services, each given its block, and the error and success AST
+! routines, as $OPEN(FAB = INFAB).
+KEYWORDMACRO
+    $OPEN(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(OPEN, FAB, ERR, SUC) %,
+    $CREATE(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(CREATE, FAB, ERR, SUC) %,
+    $CLOSE(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(CLOSE, FAB, ERR, SUC) %,
+    $ERASE(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(ERASE, FAB, ERR, SUC) %,
+    $PARSE(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(PARSE, FAB, ERR, SUC) %,
+    $SEARCH(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(SEARCH, FAB, ERR, SUC) %,
+    $DISPLAY(FAB, ERR = 0, SUC = 0) = $$RMS_CALL(DISPLAY, FAB, ERR, SUC) %,
+    $CONNECT(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(CONNECT, RAB, ERR, SUC) %,
+    $DISCONNECT(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(DISCONNECT, RAB, ERR, SUC) %,
+    $GET(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(GET, RAB, ERR, SUC) %,
+    $PUT(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(PUT, RAB, ERR, SUC) %,
+    $FIND(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(FIND, RAB, ERR, SUC) %,
+    $UPDATE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(UPDATE, RAB, ERR, SUC) %,
+    $DELETE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(DELETE, RAB, ERR, SUC) %,
+    $TRUNCATE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(TRUNCATE, RAB, ERR, SUC) %,
+    $REWIND(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(REWIND, RAB, ERR, SUC) %,
+    $FLUSH(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(FLUSH, RAB, ERR, SUC) %,
+    $READ(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(READ, RAB, ERR, SUC) %,
+    $WRITE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(WRITE, RAB, ERR, SUC) %,
+    $SPACE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(SPACE, RAB, ERR, SUC) %,
+    $FREE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(FREE, RAB, ERR, SUC) %,
+    $RELEASE(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(RELEASE, RAB, ERR, SUC) %,
+    $WAIT(RAB, ERR = 0, SUC = 0) = $$RMS_CALL(WAIT, RAB, ERR, SUC) %;
+MACRO
+    $$RMS_CALL(NAME, BLOCK, ERR, SUC) =
+        %IF %NULL(BLOCK) %THEN %ERROR(%STRING('$', NAME, ' needs its block')) %FI
+        BEGIN
+        EXTERNAL ROUTINE %NAME('SYS$', NAME) : BLISS;
+        %NAME('SYS$', NAME)(BLOCK, ERR, SUC)
+        END %;
+
+! A field macro's parts, and a field's mask. A bit's number, a $V_ name,
+! is a field one bit wide.
+MACRO
+    $BYTEOFFSET(OFFSET, POSITION, SIZE, SIGN) = OFFSET %,
+    $BITPOSITION(OFFSET, POSITION, SIZE, SIGN) =
+        %IF %NULL(POSITION) %THEN OFFSET %ELSE POSITION %FI %,
+    $FIELDWIDTH(OFFSET, POSITION, SIZE, SIGN) =
+        %IF %NULL(POSITION) %THEN 1 %ELSE SIZE %FI %,
+    $EXTENSION(OFFSET, POSITION, SIZE, SIGN) = SIGN %,
+    $FIELDMASK(OFFSET, POSITION, SIZE, SIGN) =
+        %IF %NULL(POSITION)
+        %THEN (1 ^ (OFFSET))
+        %ELSE (1 ^ ((POSITION) + (SIZE)) - 1 ^ (POSITION))
+        %FI %;
+
+! A BLOCK of bytes, by its older name, and a string's descriptor:
+! $DESCRIPTOR('SYS$OUTPUT').
+MACRO
+    $BBLOCK[] = BLOCK[%REMAINING, BYTE] %,
+    $DESCRIPTOR[] = %ASCID %STRING(%REMAINING) %;
+
+! Literals in a row, for a LITERAL declaration: $EQULST(XX$_, GBL, 0, 1,
+! (A), (B), (C, 10)) is XX$_A = 0, XX$_B = 1, XX$_C = 10, each name
+! without a value numbered START + n * STEP from the first's n of 0.
+MACRO
+    $EQULST(PREFIX, SCOPE, START, STEP)[ITEM] =
+        $$EQU(PREFIX, (START) + (STEP) * %COUNT, %REMOVE(ITEM)) %,
+    $$EQU(PREFIX, NUMBER, NAME, VALUE) =
+        %NAME(PREFIX, NAME) = %IF %NULL(VALUE) %THEN NUMBER %ELSE VALUE %FI %;
+
+! A facility's own codes for the shared messages: $SHR_MSGDEF(COPY, 103,
+! GLOBAL, (BEGIN, INFO)) is a LITERAL, GLOBAL if the scope says so,
+! COPY$_BEGIN = SHR$_BEGIN + 103 * 65536 + STS$K_INFO. A severity may be
+! a number.
+MACRO
+    $SHR_MSGDEF(FACILITY, CODE, SCOPE) =
+        %IF %IDENTICAL(SCOPE, GLOBAL) %THEN GLOBAL %FI
+        LITERAL $$SHR_MSG(FACILITY, CODE, %REMAINING); %,
+    $$SHR_MSG(FACILITY, CODE)[ITEM] = $$SHR_CODE(FACILITY, CODE, %REMOVE(ITEM)) %,
+    $$SHR_CODE(FACILITY, CODE, MESSAGE, SEVERITY) =
+        %NAME(FACILITY, '$_', MESSAGE) = %NAME('SHR$_', MESSAGE) + (CODE) * 65536 +
+            %IF %DECLARED(%NAME('STS$K_', SEVERITY))
+            %THEN %NAME('STS$K_', SEVERITY) %ELSE SEVERITY %FI %;

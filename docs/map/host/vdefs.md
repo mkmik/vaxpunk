@@ -27,38 +27,38 @@ status = "done"
 [[feature]]
 id = "service-macros"
 title = "System service macros: $QIOW(CHAN = ..., FUNC = ...) and the rest, keyword macros calling SYS$name, with each service's EXTERNAL ROUTINE"
-status = "todo"
-note = "UM 8.3; DEC's STARLET.R64 has 549 keyword macros and 499 EXTERNAL ROUTINEs, vaxpunk's only LITERALs and field macros, so BLISS code calls SYS$QIOW by position. The argument lists are starlet.mlb's $name_S macros, which services.txt already reads"
+status = "done"
+note = "UM 8.3: a keyword macro for each of starlet.mlb's 92 $name_S macros, its formals and defaults, declaring the service in a block of its own with the BLISS linkage, as DEC's STARLET does, so that a caller's SWITCHES LINKAGE doesn't change how it is called (the RMS services and LIB's calls too); a required keyword left out is an error (the language test's service_macros)"
 
 [[feature]]
 id = "rms-macros"
 title = "RMS control block macros: $FAB, $RAB, $NAM and the XABs, with their _INIT and _DECL forms"
-status = "todo"
-note = "UM 8.4: static FABs and RABs in OWN data, initialized at run time, or declared only"
+status = "done"
+note = "UM 8.4: crates/vdefs/src/starlet.bli, written for vaxpunk: $FAB, $RAB, $NAM and the XABs with their _INIT and _DECL forms, the keywords of the MACRO-32 macros plus FNM and DNM, and the RMS services with ERR and SUC. $XABKEY's key of reference is KREF, as REF is reserved (the language test's rms_and_helper_macros). The RAB's key and prompt share a field, set from PBF and PSZ if given, else KBF and KSZ, as DEC's STARLET has it (tests/bliss/rabkey, oracle RABKEY)"
 
 [[feature]]
 id = "helper-macros"
 title = "STARLET's helper macros: $BBLOCK, $DESCRIPTOR, $BITPOSITION, $FIELDWIDTH, $FIELDMASK, $EQULST, $SHR_MSGDEF"
-status = "todo"
-note = "V4.3 code uses each; $BBLOCK is BLOCK_BYTE under its old name"
+status = "done"
+note = "starlet.bli: $BBLOCK, $DESCRIPTOR (a %ASCID), $BYTEOFFSET, $BITPOSITION, $FIELDWIDTH, $EXTENSION and $FIELDMASK, which also take a $V_ bit number, $EQULST and $SHR_MSGDEF. vaxpunk's STARLET has no SHR$_ codes yet for $SHR_MSGDEF to add to"
 
 [[feature]]
 id = "vax-builtin-macros"
 title = "Macros for the VAX built-ins: FFS, FFC, MOVC3, MOVC5, CMPC3, LOCC, SKPC, SPANC, EMUL, EDIV, ASHQ, INSQUE, REMQUE, INSQHI, MTPR, MFPR, CALLG and the rest"
-status = "todo"
-note = "Waits for t8y:/host/vbliss#declaration-edges (a need would be a cycle). DEC's BLISS-32E STARLET.REQ includes BUILTINS.B32 (LIB.L64 for BLISS-64): FFS is a macro, which in BUILTIN FFS ends the list with BARRIER, declares the macro $FFS and starts a new list, and elsewhere calls $FFS, so VAX BLISS-32 code compiles unchanged: 34 built-ins as macros, CALLG and some PAL calls as routines. The compiler dropped the VAX built-ins and the library put them back. FFS alone stops 121 V4.3 modules"
+status = "done"
+note = "crates/vdefs/src/lib.bli, in LIB: 43 built-ins, each a macro that in BUILTIN X marks the block and elsewhere is $X, by CH$ functions, inline BLISS or PAL calls (tests/bliss/vaxbi32, vaxbi64; the language test's vax_builtin_macros). MOVC3 and MOVC5 move backwards when the destination is after the source, so overlapping strings come out as on the VAX, which CH$MOVE doesn't promise; MOVC5's fill byte and MOVTUC's escape byte are read before anything moves, as the VAX reads its operands first. ADDM and SUBM wrap each fullword into the carry or borrow under the caller's OVERFLOW switch too, and INDEX never signals an overflow, as the VAX's doesn't. Each operand is evaluated once and in the order written, as the VAX reads each once, left to right, before it acts (vaxbi64's ORD). As with DEC's LIB, a block inside one that declared X can't declare it again (oracle NESTB): it needn't, X is already declared there. The queue ones return the VAX's values (UM 4.64, 4.83, as DEC's LIB does) and store a removed entry's address in a longword, but nothing when the interlock is busy, on longword queues (PALTEST checks them); none has a comma outside brackets, so each can be another macro's actual parameter (oracle MACA). The V4.3 corpus compiles 50 modules, from 30. Left out: the decimal string ones and CRC; BUGW and BUGL wait for t8y:/platform/pal#bugchk; CALLG, and EMUL and EDIV under BLISS-32, call LIB$CALLG, LIB$EMUL and LIB$EDIV, which t8y:/rtl/librtl hasn't yet"
 
 [[feature]]
 id = "other-requires"
 title = "TPAMAC.REQ for LIB$TPARSE's state tables, CLIMAC.REQ and ARCH_DEFS.REQ"
-status = "todo"
-note = "SYS$LIBRARY on OpenVMS Alpha; $INIT_STATE needs t8y:/host/vbliss#declaration-edges, and LIB$TPARSE isn't in t8y:/rtl/librtl yet"
+status = "done"
+note = "lib/tpamac.req, arch_defs.req and climac.req, written for vaxpunk, and $TPADEF in starlet.mlb. TPAMAC makes VAX-format tables of 32-bit addresses for a LIB$TPARSE that t8y:/rtl/librtl doesn't have yet; ARCH_DEFS says Alpha, and ARM64; CLIMAC's request codes went from STARLET with OpenVMS Alpha, so a program declares them (the language test's other_requires)"
 
 [[feature]]
 id = "field-signs"
 title = "Field signs as DEC's STARLET and LIB have them: CHF$L_SIG_NAME is 4,0,32,1, PCB$L_STS 128,0,32,0"
-status = "todo"
-note = "bliss64.md probe 14, answered from STARLET.R64 and LIB.R64 on the oracle's disk: SDL marks some $L_ fields signed. vdefs writes 0 for every $L_ field, since the macro libraries don't say"
+status = "done"
+note = "bliss64.md probe 14: SDL marks links, addresses, condition values and times signed, and the macro libraries don't say. vdefs's SIGNED table names the 75 fields of vaxpunk's libraries DEC's sign-extend; vaxpunk's 32-bit addresses are below 2 GB, so the sign changes no address"
 +++
 
 On VMS, definitions such as `$PCBDEF` or `SS$_NORMAL` come from one
@@ -73,4 +73,6 @@ library edited without them.
 DEC's STARLET and LIB require files hold more than definitions: a
 keyword macro for every system service, the RMS control block macros,
 helper macros, and macros that stand in for the VAX built-ins BLISS
-on Alpha dropped. vdefs writes the definitions only.
+on Alpha dropped. vdefs writes the service macros from the `$name_S`
+macros and copies in the rest, written for vaxpunk in
+`crates/vdefs/src/*.bli`.

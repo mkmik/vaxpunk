@@ -8,18 +8,30 @@ LIBRARY 'SYS$LIBRARY:STARLET';
 LINKAGE
     JSB_R2_R3 = JSB(REGISTER = 2, REGISTER = 3),
     JSB_R4_R5 = JSB(REGISTER = 4, REGISTER = 5) : NOPRESERVE(4, 5),
-    JSB_R4 = JSB(REGISTER = 4);
+    JSB_R4 = JSB(REGISTER = 4),
+    CALL_R2_R3 = CALL : NOPRESERVE(2, 3);
 
 EXTERNAL ROUTINE
     MSUM : JSB_R2_R3,
     MSCRATCH : JSB_R4_R5,
+    MCLOBBER : CALL_R2_R3,
+    MSARGB,
     MTRIPLE,
     MCALLB,
     MSIG,
     MCATCH;
 
+OWN
+    T : INITIAL(%T'1.5');
+
 LITERAL
     COND = %X'08018003';
+
+GLOBAL ROUTINE BARG1 =
+    BEGIN
+    BUILTIN ACTUALPARAMETER;
+    ACTUALPARAMETER(1)
+    END;
 
 GLOBAL ROUTINE BADD (A, B) =
     .A + .B;
@@ -66,6 +78,12 @@ ROUTINE MAIN =
     PRINT(MSCRATCH(6, 7));
     PRINT(.A + .B + .C);
     PRINT(MSUM(.A, MSUM(.B, .C)));
+    ! And across CALLs that don't keep R2 and R3, with floating arguments too.
+    PRINT(.A + .B + .C + MCLOBBER(1));
+    PRINT(.A + .B + .C + MCLOBBER(%TFLOAT(T)));
+    ! An S argument is its 32 bits in the list, whatever the rest of its
+    ! register holds.
+    PRINT(MSARGB());
     PRINT(MTRIPLE(14));
     PRINT(MCALLB(3, 4));
     PRINT(CAUGHT());

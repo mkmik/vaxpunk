@@ -1,0 +1,10 @@
+
+    PRINT(.B[1, 8, 16, 0]);
+.......................^
+%BLS64-W-TEXT, Word field reference is not Word aligned
+at line number 17 in file SYS$SYSDEVICE:[ORACLE]STRUC10.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module STRUC10 file SYS$SYSDEVICE:[ORACLE]STRUC10.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

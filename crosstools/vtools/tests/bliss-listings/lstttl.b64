@@ -1,0 +1,9 @@
+MODULE LSTTTL (MAIN = M, IDENT = 'X1-0') =
+BEGIN
+%TITLE 'A title for the module'
+%SBTTL 'The first part'
+ROUTINE R = 1;
+%SBTTL 'The second part'
+ROUTINE M = R();
+END
+ELUDOM

@@ -1,0 +1,15 @@
+
+PSECT OWN = DATA (ALIGN(-1));
+.........................^
+%BLS64-W-TEXT, Value of attribute outside permitted range
+at line number 5 in file SYS$SYSDEVICE:[ORACLE]PA1.B64;1
+
+OWN X : ALIGN(0);
+................^
+%BLS64-I-TEXT, Alignment less than default may cause reduced performance
+at line number 6 in file SYS$SYSDEVICE:[ORACLE]PA1.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module PA1 file SYS$SYSDEVICE:[ORACLE]PA1.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

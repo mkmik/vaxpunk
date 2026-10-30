@@ -1,0 +1,21 @@
+! BLISS: /CHECK=ALIGNMENT
+MODULE CHKALN (MAIN = M) =
+BEGIN
+! /CHECK=ALIGNMENT: declarations and field references poorly aligned.
+OWN
+    B : BYTE,
+    W : WORD ALIGN(0),
+    L : LONG ALIGN(0),
+    Q : ALIGN(2),
+    V : VECTOR[4, BYTE] ALIGN(0),
+    Z : ALIGN(2);
+ROUTINE M =
+    BEGIN
+    LOCAL X;
+    X = .Q<4, 32>;
+    X = .Q<0, 32>;
+    X = .Q<8, 16>;
+    1
+    END;
+END
+ELUDOM

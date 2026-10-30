@@ -1,0 +1,8 @@
+! BLISS: /SYNTAX_LEVEL=1
+MODULE SYNLV1 (MAIN = M) =
+BEGIN
+! At syntax level 1, QUAD and ALIAS are names.
+OWN QUAD, ALIAS;
+ROUTINE M = (QUAD = 1; .QUAD);
+END
+ELUDOM

@@ -1,0 +1,19 @@
+MODULE ARGPTR5 (MAIN = M) =
+BEGIN
+! Probe 5: ARGPTR's list.
+REQUIRE 'PRINT';
+BUILTIN ARGPTR;
+ROUTINE R (A, B, C) =
+    BEGIN
+    LOCAL P : REF VECTOR;
+    P = ARGPTR();
+    INCR I FROM 0 TO 3 DO PRINT(.P[.I]);
+    .P[0]
+    END;
+ROUTINE M =
+    BEGIN
+    R(10, -1, 1^40);
+    1
+    END;
+END
+ELUDOM

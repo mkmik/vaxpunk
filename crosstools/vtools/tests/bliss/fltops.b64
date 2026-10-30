@@ -1,0 +1,71 @@
+MODULE FLTOPS (MAIN = M) =
+BEGIN
+! Floating built-ins: arithmetic, comparison and conversion results.
+REQUIRE 'PRINT';
+BUILTIN
+    ADDT, SUBT, MULT, DIVT, CMPT, CVTTQ, CVTQT, CVTRTQ, CVTLT, CVTTL, CVTIT, CVTTI,
+    ADDS, MULS, CMPS, CVTST, CVTTS, CVTLS, CVTSL,
+    ADDG, SUBG, MULG, DIVG, CMPG, CVTGQ, CVTQG, CVTRGQ, CVTGL, CVTLG,
+    ADDF, MULF, DIVF, CMPF, CVTFL, CVTLF, CVTRFL,
+    ADDD, MULD, CMPD, CVTDL, CVTLD,
+    CVTFD, CVTDF, CVTFG, CVTGF, CVTDG, CVTGD, CVTGT, CVTTG;
+OWN
+    A, B, C, Q;
+ROUTINE M =
+    BEGIN
+    A = %T'1.5'; B = %T'2.25';
+    ADDT(A, B, C); PRINT(.C);
+    SUBT(A, B, C); PRINT(.C);
+    MULT(A, B, C); PRINT(.C);
+    DIVT(A, B, C); PRINT(.C);
+    PRINT(CMPT(A, B)); PRINT(CMPT(B, A)); PRINT(CMPT(A, A));
+    A = %T'-2.5';
+    CVTTQ(A, Q); PRINT(.Q);
+    CVTRTQ(A, Q); PRINT(.Q);
+    CVTTL(A, Q); PRINT(.Q);
+    CVTTI(A, Q); PRINT(.Q);
+    Q = -7; CVTQT(Q, C); PRINT(.C);
+    CVTLT(Q, C); PRINT(.C);
+    CVTIT(Q, C); PRINT(.C);
+    A = %S'1.5'; B = %S'0.25';
+    ADDS(A, B, C); PRINT(.C);
+    MULS(A, B, C); PRINT(.C);
+    PRINT(CMPS(A, B));
+    CVTST(A, C); PRINT(.C);
+    A = %T'0.1'; CVTTS(A, C); PRINT(.C);
+    Q = 3; CVTLS(Q, C); PRINT(.C);
+    A = %S'2.5'; CVTSL(A, Q); PRINT(.Q);
+    A = %G'1.5'; B = %G'2.25';
+    ADDG(A, B, C); PRINT(.C);
+    SUBG(A, B, C); PRINT(.C);
+    MULG(A, B, C); PRINT(.C);
+    DIVG(A, B, C); PRINT(.C);
+    PRINT(CMPG(A, B));
+    A = %G'-2.5';
+    CVTGQ(A, Q); PRINT(.Q);
+    CVTRGQ(A, Q); PRINT(.Q);
+    CVTGL(A, Q); PRINT(.Q);
+    Q = 9; CVTQG(Q, C); PRINT(.C);
+    CVTLG(Q, C); PRINT(.C);
+    A = %E'1.5'; B = %E'0.25';
+    ADDF(A, B, C); PRINT(.C);
+    MULF(A, B, C); PRINT(.C);
+    DIVF(A, B, C); PRINT(.C);
+    PRINT(CMPF(A, B));
+    A = %E'-3.5'; CVTFL(A, Q); PRINT(.Q);
+    CVTRFL(A, Q); PRINT(.Q);
+    Q = 6; CVTLF(Q, C); PRINT(.C);
+    A = %D'1.5'; B = %D'0.25';
+    ADDD(A, B, C); PRINT(.C);
+    MULD(A, B, C); PRINT(.C);
+    PRINT(CMPD(A, B));
+    CVTDL(A, Q); PRINT(.Q);
+    Q = 5; CVTLD(Q, C); PRINT(.C);
+    A = %E'0.1'; CVTFD(A, C); PRINT(.C); CVTFG(A, C); PRINT(.C);
+    A = %D'0.1'; CVTDF(A, C); PRINT(.C); CVTDG(A, C); PRINT(.C);
+    A = %G'0.1'; CVTGF(A, C); PRINT(.C); CVTGD(A, C); PRINT(.C); CVTGT(A, C); PRINT(.C);
+    A = %T'0.1'; CVTTG(A, C); PRINT(.C);
+    1
+    END;
+END
+ELUDOM

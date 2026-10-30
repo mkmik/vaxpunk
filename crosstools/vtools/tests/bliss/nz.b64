@@ -1,0 +1,21 @@
+MODULE NZ (MAIN = M) =
+BEGIN
+! Negative zero literals: IEEE S and T have one, VAX F, D and G don't.
+REQUIRE 'PRINT';
+OWN
+    T : INITIAL(%T'-0.0'),
+    S : LONG INITIAL(%S'-0.0'),
+    G : INITIAL(%G'-0.0'),
+    D : INITIAL(%D'-0.0'),
+    F : LONG INITIAL(%E'-0.0');
+ROUTINE M =
+    BEGIN
+    PRINT(.T);
+    PRINT(.S);
+    PRINT(.G);
+    PRINT(.D);
+    PRINT(.F);
+    1
+    END;
+END
+ELUDOM

@@ -57,6 +57,7 @@ fn pal() {
         ["mov x0, x19", "mov x7, #15", "svc #0"]
     );
     assert_eq!(lines("EVAX_MFPR_PCBB", ""), ["mov x7, #18", "svc #0"]);
+    assert_eq!(lines("EVAX_MFPR_WHAMI", ""), ["mov x7, #63", "svc #0"]);
 }
 
 /// Alpha's built-ins with no ARM64 meaning here are errors that name them.

@@ -1,0 +1,30 @@
+MODULE RABKEY (MAIN = M) =
+BEGIN
+! A RAB's key and prompt share their fields: KBF and KSZ, or PBF and
+! PSZ, whichever the macro is given, in $RAB and in $RAB_INIT. The
+! output is BLISSA64's with DEC's STARLET (oracle RABKEY); the listing,
+! with DEC's macros expanded, isn't kept.
+REQUIRE 'PRINT';
+LIBRARY 'SYS$LIBRARY:STARLET';
+OWN
+    KEY : VECTOR[4, BYTE],
+    PROMPT : VECTOR[2, BYTE],
+    S : $RAB(KBF = KEY, KSZ = 4),
+    T : $RAB(PBF = PROMPT, PSZ = 2),
+    R : $RAB_DECL;
+ROUTINE M =
+    BEGIN
+    PRINT(.S[RAB$L_KBF] EQL KEY);
+    PRINT(.S[RAB$B_KSZ]);
+    PRINT(.T[RAB$L_PBF] EQL PROMPT);
+    PRINT(.T[RAB$B_PSZ]);
+    $RAB_INIT(RAB = R, KBF = KEY, KSZ = 4);
+    PRINT(.R[RAB$L_KBF] EQL KEY);
+    PRINT(.R[RAB$B_KSZ]);
+    $RAB_INIT(RAB = R, PBF = PROMPT, PSZ = 2);
+    PRINT(.R[RAB$L_PBF] EQL PROMPT);
+    PRINT(.R[RAB$B_PSZ]);
+    1
+    END;
+END
+ELUDOM

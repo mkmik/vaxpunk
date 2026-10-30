@@ -71,6 +71,10 @@ struct Stream {
 }
 
 /// An expansion the listing shows: `[NAME]=` and the lexemes it gave.
+/// An iterative macro's iteration, for TRACE: the separator before it
+/// (the opening grouper before the first), its actuals and its text.
+type Iteration = (Option<Tok>, Vec<Vec<Lexeme>>, Vec<Lexeme>);
+
 struct Expansion {
     id: usize,
     name: String,
@@ -175,15 +179,23 @@ impl Parser<'_> {
         self.lx.push_file(name, &text, true)
     }
 
-    /// Reads library `name`'s source next, unlisted.
-    pub(crate) fn library_file(&mut self, name: &str) -> R<()> {
+    /// Reads library `name`'s source next, unlisted. It ends with Eof,
+    /// which `end_library` takes away once its declarations are read.
+    /// Its size in bytes.
+    pub(crate) fn library_file(&mut self, name: &str) -> R<usize> {
         let text = (self.load)(name).map_err(|e| self.error(e))?;
-        self.lx.push_file(name, &text, true)?;
+        self.lx.push_file(name, &text, false)?;
+        self.lx.files.last_mut().unwrap().require = true;
         let f = self.lx.files.last_mut().unwrap();
         f.listed = f.lines.len() as u32;
         // BLISSA64 numbers the library as one line.
         self.lx.listed += 1;
-        Ok(())
+        Ok(text.len())
+    }
+
+    /// Ends the library whose Eof the parser has read: its stream goes.
+    pub(crate) fn end_library(&mut self) {
+        self.pop_stream();
     }
 
     /// The next lexeme from the streams, unexpanded, and the stream it came
@@ -193,17 +205,49 @@ impl Parser<'_> {
             let i = self.lx.streams.len() - 1;
             let s = &mut self.lx.streams[i];
             if s.pos < s.toks.len() {
-                let l = s.toks[s.pos].clone();
+                let mut l = s.toks[s.pos].clone();
                 if l.tok != Tok::Eof {
                     s.pos += 1;
                 }
                 if let Some(f) = s.file {
                     self.list(f, if l.tok == Tok::Eof { u32::MAX } else { l.line });
+                    if let Tok::Num(n) = l.tok {
+                        // A decimal literal: the source has its digits, at
+                        // the column's character, a byte of DEC MCS.
+                        let line = &self.lx.files[f as usize].lines[l.line as usize - 1];
+                        let digits: String = line
+                            .chars()
+                            .skip(l.col as usize)
+                            .take_while(char::is_ascii_digit)
+                            .collect();
+                        let n = self.literal_value(n, digits.parse::<u64>().is_err(), &l);
+                        l.tok = Tok::Num(n);
+                    }
                 }
                 return Ok((l, i));
             }
             self.pop_stream();
         }
+    }
+
+    /// A numeric literal's value, with BLISSA64's informationals (oracle
+    /// MSGS, QLIT): one past 64 bits overflows; under NOQUAD_LITERALS one
+    /// with bit 31 set that fits a longword is sign-extended from it, and
+    /// one past 32 bits overflows, keeping its value.
+    fn literal_value(&mut self, n: i64, overflow: bool, at: &Lexeme) -> i64 {
+        let quad = self.switch_on("QUAD_LITERALS") || self.m.dialect.a32;
+        let wide = overflow || !quad && !(0..=0xFFFF_FFFF).contains(&n);
+        if wide {
+            self.diag('I', at, "Numeric literal overflow".into());
+        }
+        if !quad && n & 0x8000_0000 != 0 {
+            let msg = "Numeric literal with bit 31 set will be sign extended";
+            self.diag('I', at, msg.into());
+            if !wide {
+                return n as i32 as i64;
+            }
+        }
+        n
     }
 
     fn pop_stream(&mut self) {
@@ -223,12 +267,16 @@ impl Parser<'_> {
 
     /// Lists the lines of `file` up to `upto`.
     fn list(&mut self, file: u16, upto: u32) {
+        self.note_loaded();
         let flag = self.lx.reading.last().copied().unwrap_or(' ');
+        let listed = self.switch_on("LIST_SOURCE")
+            && (!self.lx.files[file as usize].require || self.switch_on("LIST_REQUIRE"));
         let f = &mut self.lx.files[file as usize];
         while f.listed < upto.min(f.lines.len() as u32) {
             f.listed += 1;
             self.lx.listed += 1;
             self.lx.entries.push(Entry::Line {
+                listed,
                 flag,
                 require: f.require,
                 depth: self.depth,
@@ -242,12 +290,84 @@ impl Parser<'_> {
 
     /// Adds an expansion's line to the listing.
     fn show(&mut self, e: &Expansion) {
+        if !self.switch_on("LIST_SOURCE")
+            || !self.switch_on("LIST_EXPAND") && !self.switch_on("LIST_TRACE")
+        {
+            return;
+        }
         let text: Vec<String> = e.text.iter().map(|t| self.shown(t)).collect();
         self.lx.entries.push(Entry::Expansion {
             level: e.level,
-            name: e.name.clone(),
+            label: format!("[{}]", e.name),
             text: (!e.null).then_some(text),
         });
+    }
+
+    /// TRACE's account of a macro call, as it binds the actuals: for an
+    /// iterative macro, `iterations` gives each iteration's actuals and
+    /// the separators around them (UM 2.2.4.3).
+    fn trace(
+        &mut self,
+        name: &str,
+        level: usize,
+        bindings: &[Vec<Lexeme>],
+        iterations: &[Iteration],
+        right: Option<Tok>,
+    ) {
+        if !self.switch_on("LIST_SOURCE") || !self.switch_on("LIST_TRACE") {
+            return;
+        }
+        let text = |p: &Self, ls: &[Lexeme]| -> Option<Vec<String>> {
+            (!ls.is_empty()).then(|| ls.iter().map(|l| p.shown(&l.tok)).collect())
+        };
+        let step = |p: &mut Self, text: String| p.lx.entries.push(Entry::Trace { level, text });
+        step(self, format!("[{name}]: Parameter binding"));
+        for (i, b) in bindings.iter().enumerate() {
+            let text = text(self, b);
+            self.lx.entries.push(Entry::Expansion {
+                level,
+                label: format!("[{name}]({})", i + 1),
+                text,
+            });
+        }
+        step(self, format!("[{name}]: Expansion"));
+        for (k, (sep, args, body)) in iterations.iter().enumerate() {
+            let sep_line = |p: &mut Self| {
+                if let Some(s) = sep {
+                    let s = p.shown(s);
+                    step(p, format!("[{name}]: Separator   {s}"));
+                }
+            };
+            if k > 0 {
+                sep_line(self);
+            }
+            step(
+                self,
+                format!("[{name}][{k}]: Parameter binding / Expansion"),
+            );
+            for (i, a) in args.iter().enumerate() {
+                let text = text(self, a);
+                self.lx.entries.push(Entry::Expansion {
+                    level,
+                    label: format!("[{name}][{k}]({})", i + 1),
+                    text,
+                });
+            }
+            if k == 0 {
+                sep_line(self);
+            }
+            let mut shown: Vec<String> = sep.iter().map(|s| self.shown(s)).collect();
+            shown.extend(body.iter().map(|l| self.shown(&l.tok)));
+            self.lx.entries.push(Entry::Expansion {
+                level,
+                label: format!("[{name}][{k}]"),
+                text: Some(shown),
+            });
+        }
+        if let Some(r) = right {
+            let r = self.shown(&r);
+            step(self, format!("[{name}]: Separator   {r}"));
+        }
     }
 
     /// A lexeme as an expansion shows it: a literal's name as its value.
@@ -378,7 +498,13 @@ impl Parser<'_> {
             let r = self.actual_list(&format!("macro {}", m.name), at);
             self.lx.reading.pop();
             self.lx.collecting -= 1;
-            r?
+            // Empty actuals at the end don't count: M(A, ) has one, as
+            // BLISSA64 counts them, so M(A, %REMAINING) recurses to an end.
+            let mut r = r?;
+            while r.last().is_some_and(Vec::is_empty) {
+                r.pop();
+            }
+            r
         };
         let place = |l: &Lexeme| Lexeme {
             col: NOPOS,
@@ -421,6 +547,7 @@ impl Parser<'_> {
                         Vec::new()
                     };
                     args.resize(n, Vec::new());
+                    self.trace(&m.name, level, &args, &[], None);
                     let count = if m.kind == MacroKind::Conditional && n > 0 {
                         depth
                     } else {
@@ -441,10 +568,17 @@ impl Parser<'_> {
                 let k = n - m.fixed;
                 let mut rest = actuals[m.fixed..].to_vec();
                 let mut count = 0;
+                let mut iterations = Vec::new();
                 while !rest.is_empty() {
                     let mut args = actuals[..m.fixed].to_vec();
                     args.extend(rest.drain(..k.min(rest.len())));
                     args.resize(n, Vec::new());
+                    let before = if count == 0 {
+                        left.clone()
+                    } else {
+                        Some(sep.clone())
+                    };
+                    iterations.push((before, args[m.fixed..].to_vec(), copy(&args)));
                     let mut s = stream(
                         copy(&args),
                         Some(Ctx {
@@ -473,6 +607,13 @@ impl Parser<'_> {
                         )
                     })
                 };
+                self.trace(
+                    &m.name,
+                    level,
+                    &actuals[..m.fixed],
+                    &iterations,
+                    right.clone(),
+                );
                 if let Some(s) = grouper(left) {
                     streams.insert(0, s);
                 }
@@ -523,8 +664,12 @@ impl Parser<'_> {
             Tok::Punct('(') => ')',
             Tok::Punct('[') => ']',
             Tok::Punct('<') => '>',
+            // At what came in its place, which is read again after the
+            // error (oracle DIAG2).
             _ => {
-                return Err(self.error_at(at, format!("Missing actual parameter list for {of}")));
+                let e = self.error_at(&open, format!("Missing actual parameter list for {of}"));
+                self.push(vec![open]);
+                return Err(e);
             }
         };
         let nest = self.lx.nest;
@@ -609,9 +754,14 @@ impl Parser<'_> {
                     body.push(match &next.tok {
                         Tok::Name(n) => match formals.iter().position(|f| f == n) {
                             Some(i) => Item::Formal(i),
+                            // A COMPILETIME name is bound to its value now,
+                            // not when the macro expands (oracle CTR).
                             None => match self.lookup(n) {
                                 Some(id) => Item::Lex(Lexeme {
-                                    tok: Tok::Bound(n.clone(), id),
+                                    tok: match self.m.syms[id].kind {
+                                        Kind::Compiletime(v) => Tok::Num(v),
+                                        _ => Tok::Bound(n.clone(), id),
+                                    },
                                     ..next
                                 }),
                                 None => Item::Lex(next),
@@ -803,9 +953,71 @@ impl Parser<'_> {
                 Lexical::Done
             }
             "%FI" => Lexical::Done,
+            "%E" | "%D" | "%G" | "%S" | "%T" => {
+                // A float literal's bits (crate::float). Under BLISS-32 one
+                // of 8 bytes is two fullwords, for a PLIT or an INITIAL
+                // (LRM 4.2.2): the low longword, a comma, the high.
+                let (l, _) = self.scan()?;
+                let Tok::Str(s) = l.tok.clone() else {
+                    return Err(
+                        self.error_at(at, format!("Missing quoted string following {name}"))
+                    );
+                };
+                self.transport(&name, &l, true);
+                let fmt = crate::float::Format::of(&name).unwrap();
+                let text = String::from_utf8_lossy(&s).into_owned();
+                let Some((bits, fit)) = crate::float::literal(fmt, &text) else {
+                    return Err(self.error_at(at, format!("Illegal character in {name} literal")));
+                };
+                let what = match fit {
+                    crate::float::Fit::Exact => None,
+                    crate::float::Fit::Underflow => Some("Underflow"),
+                    crate::float::Fit::Overflow => Some("Overflow"),
+                };
+                if let Some(w) = what {
+                    let msg = format!("{w} occurred in floating point literal {name}'{text}'");
+                    self.diag('W', &l, msg);
+                }
+                if self.m.dialect.a32 && fmt.bytes() == 8 {
+                    self.push(vec![
+                        lexeme(Tok::Num(i64::from(bits as u32 as i32))),
+                        lexeme(Tok::Punct(',')),
+                        lexeme(Tok::Num(i64::from((bits >> 32) as u32 as i32))),
+                    ]);
+                    Lexical::Done
+                } else {
+                    Lexical::Tok(lexeme(Tok::Num(bits as i64)), false)
+                }
+            }
+            "%H" => {
+                // H floating is the VAX's only (RN 2.10.1).
+                let (l, _) = self.scan()?;
+                let msg = "Language feature not present in BLISS-64E:  %H".to_string();
+                self.diag('W', &l, msg);
+                Lexical::Tok(lexeme(Tok::Num(0)), false)
+            }
+            "%RAD50_11" | "%P" => {
+                // BLISS-32's string encodings, which BLISSA64 has too
+                // (LRM B.2.1; 4.3, VAX packed decimal).
+                let (l, _) = self.scan()?;
+                self.transport(&name, &l, name == "%P");
+                let Tok::Str(s) = l.tok else {
+                    return Err(
+                        self.error_at(at, format!("Missing quoted string following {name}"))
+                    );
+                };
+                let bytes = if name == "%P" { packed(&s) } else { rad50(&s) };
+                let Some(bytes) = bytes else {
+                    return Err(self.error_at(at, format!("Illegal character in {name} literal")));
+                };
+                Lexical::Tok(lexeme(Tok::Str(bytes)), false)
+            }
             "%B" | "%O" | "%X" | "%DECIMAL" | "%C" | "%ASCII" | "%ASCIZ" | "%ASCIC" => {
                 let (l, _) = self.scan()?;
-                let Tok::Str(s) = l.tok else {
+                if name == "%ASCIC" {
+                    self.transport(&name, &l, true);
+                }
+                let Tok::Str(s) = l.tok.clone() else {
                     return Err(
                         self.error_at(at, format!("Missing quoted string following {name}"))
                     );
@@ -833,6 +1045,8 @@ impl Parser<'_> {
                         let n = lex::number(digits.trim(), radix).ok_or_else(|| {
                             self.error_at(at, format!("Illegal character in {name} literal"))
                         })?;
+                        let wide = u64::from_str_radix(digits.trim(), radix).is_err();
+                        let n = self.literal_value(n, wide, &l);
                         Tok::Num(if neg { n.wrapping_neg() } else { n })
                     }
                 };
@@ -862,9 +1076,8 @@ impl Parser<'_> {
                             }
                             toks.push(lexeme(Tok::Str(vec![*c])));
                         }
-                        if toks.is_empty() {
-                            toks.push(lexeme(Tok::Str(Vec::new())));
-                        }
+                        // Nothing for nothing: DEC's $XABPRO() explodes an
+                        // empty protection and counts the actuals.
                         self.push(toks);
                         Lexical::Done
                     }
@@ -875,6 +1088,7 @@ impl Parser<'_> {
                     "%QUOTENAME" => {
                         Lexical::Tok(lexeme(Tok::Name(String::from_utf8_lossy(&s).into())), true)
                     }
+                    "%PRINT" if !self.switch_on("LIST_SOURCE") => Lexical::Done,
                     "%PRINT" => {
                         self.lx
                             .entries
@@ -1105,13 +1319,29 @@ impl Parser<'_> {
             }
             "%BLISS" => {
                 let ps = self.params(&name, at)?;
+                // PROTOTYPES: EXTERNAL and FORWARD ROUTINE take formals (RN
+                // 2.19.8).
                 let ours: &[&str] = if self.m.dialect.a32 {
-                    &["BLISS32", "BLISS32E"]
+                    &["BLISS32", "BLISS32E", "PROTOTYPES"]
                 } else {
-                    &["BLISS64E"]
+                    &["BLISS64E", "PROTOTYPES"]
                 };
                 flag(matches!(&ps[..], [p] if matches!(&p[..],
                     [Lexeme { tok: Tok::Name(n), .. }] if ours.contains(&n.as_str()))))
+            }
+            "%HOST" | "%TARGET" => {
+                // An architecture and an operating system (RN 2.12): vbliss
+                // compiles for vaxpunk, ARM64 and VMS, and reads as if it
+                // ran there, so a source compiles the same on any host.
+                // Unknown keywords are 0, not an error.
+                let ps = self.params(&name, at)?;
+                flag(
+                    !ps.is_empty()
+                        && ps.iter().all(|p| {
+                            matches!(&p[..],
+                    [Lexeme { tok: Tok::Name(n), .. }] if n == "ARM64" || n == "VMS")
+                        }),
+                )
             }
             "%SWITCHES" => {
                 let mut all = true;
@@ -1127,12 +1357,32 @@ impl Parser<'_> {
                             "Illegal parameter in call to lexical function %SWITCHES",
                         ));
                     };
-                    all &= self.switch_on(s);
+                    // COUNT and NOCOUNT are both on to BLISSA64 whatever
+                    // /NOCOUNT or the module says (oracle SW3, SWC, SWD).
+                    all &= matches!(&s[..], "COUNT" | "NOCOUNT") || self.switch_on(s);
                 }
                 flag(all)
             }
             "%VARIANT" => num(self.lx.variant),
-            "%MODULE" => Lexical::Tok(lexeme(Tok::Name(self.m.name.clone())), false),
+            // The compiler's state as strings (RN 2.12): the module's name
+            // and ident, and the routine being compiled.
+            "%MODULE" => Lexical::Tok(lexeme(Tok::Str(self.m.name.clone().into_bytes())), false),
+            "%IDENT" => Lexical::Tok(
+                lexeme(Tok::Str(
+                    self.m.ident.clone().unwrap_or_default().into_bytes(),
+                )),
+                false,
+            ),
+            "%ROUTINE" => Lexical::Tok(
+                lexeme(Tok::Str(
+                    self.routine_names
+                        .last()
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_bytes(),
+                )),
+                false,
+            ),
             "%ALLOCATION" => {
                 let ps = self.params(&name, at)?;
                 let id = match &ps[..] {
@@ -1212,11 +1462,17 @@ impl Parser<'_> {
             }
             "%TITLE" | "%SBTTL" => {
                 let (l, _) = self.scan()?;
-                if !matches!(l.tok, Tok::Str(_)) {
+                let Tok::Str(s) = l.tok else {
                     return Err(
                         self.error_at(at, format!("Missing quoted string following {name}"))
                     );
-                }
+                };
+                let s = String::from_utf8_lossy(&s).into_owned();
+                self.lx.entries.push(if name == "%TITLE" {
+                    Entry::Title(s)
+                } else {
+                    Entry::Subtitle(s)
+                });
                 Lexical::Done
             }
             _ => Lexical::Not,
@@ -1230,9 +1486,9 @@ impl Parser<'_> {
             [l] => match &l.tok {
                 Tok::Str(s) => s.clone(),
                 Tok::Num(n) => n.to_string().into_bytes(),
-                Tok::Name(n) | Tok::Bound(n, _) if !RESERVED.contains(&n.as_str()) => {
-                    n.clone().into_bytes()
-                }
+                // Reserved words too, which the LRM leaves out and BLISSA64
+                // takes: DEC's $SHR_MSGDEF does %STRING(GLOBAL).
+                Tok::Name(n) | Tok::Bound(n, _) => n.clone().into_bytes(),
                 _ => {
                     return Err(self.error_at(
                         l,
@@ -1256,6 +1512,50 @@ impl Parser<'_> {
 }
 
 /// Whether `p` is enclosed in a matched pair of brackets.
+/// RAD50_11 (LRM B.2.1): three characters a word, space, A-Z, $, ., an
+/// unused code, 0-9 as 0-39, the text padded with spaces.
+fn rad50(s: &[u8]) -> Option<Vec<u8>> {
+    let code = |c: u8| match c {
+        b' ' => Some(0),
+        b'A'..=b'Z' => Some(u16::from(c - b'A') + 1),
+        b'a'..=b'z' => Some(u16::from(c - b'a') + 1),
+        b'$' => Some(27),
+        b'.' => Some(28),
+        b'0'..=b'9' => Some(u16::from(c - b'0') + 30),
+        _ => None,
+    };
+    let mut out = Vec::new();
+    for chunk in s.chunks(3) {
+        let mut w = 0u16;
+        for i in 0..3 {
+            w = w * 40 + code(*chunk.get(i).unwrap_or(&b' '))?;
+        }
+        out.extend(w.to_le_bytes());
+    }
+    Some(out)
+}
+
+/// VAX packed decimal (LRM 4.3): an optional sign, digits two a byte,
+/// the first in the high half, and the sign in the last byte's low half,
+/// 12 for plus and 13 for minus; an even count starts with a zero.
+fn packed(s: &[u8]) -> Option<Vec<u8>> {
+    let (minus, digits) = match s.first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut nibbles: Vec<u8> = Vec::new();
+    if digits.len() % 2 == 0 {
+        nibbles.push(0);
+    }
+    nibbles.extend(digits.iter().map(|d| d - b'0'));
+    nibbles.push(if minus { 13 } else { 12 });
+    Some(nibbles.chunks(2).map(|p| p[0] << 4 | p[1]).collect())
+}
+
 fn enclosed(p: &[Lexeme]) -> bool {
     let close = match p.first().map(|l| &l.tok) {
         Some(Tok::Punct('(')) => ')',

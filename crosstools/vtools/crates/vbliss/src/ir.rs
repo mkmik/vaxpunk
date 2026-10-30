@@ -42,6 +42,11 @@ pub enum Op {
     Ror,
     /// The high 64 bits of the unsigned 128-bit product.
     Umulh,
+    /// 1 if a + b, a - b or a * b overflows 64 bits, else 0: for the
+    /// OVERFLOW switch.
+    Addv,
+    Subv,
+    Mulv,
     /// Comparisons, 1 if true, else 0; `u` unsigned.
     Ceq,
     Cne,
@@ -78,11 +83,16 @@ pub enum Ins {
     Insert(u32, V, V, V, V),
     /// `dst = arg n`: the routine's argument n, from 0.
     Arg(u32, u32),
+    /// `dst = stackaddr n`: the address of an INTERRUPT routine's formal
+    /// n, on the stack at entry: the PAL's parameters, padded to 16 bytes,
+    /// then its frame's PC and PSL, which REI restores.
+    StackAddr(u32, u32),
     /// `dst = call target(args)`, by the calling standard.
     Call(Option<u32>, V, Vec<V>),
     /// `dst = jsb target(arg rN, ...) -> rN %t, ... nopreserve rN...`: a
-    /// call by a JSB linkage, or by a CALL linkage with registers in it
-    /// (`dst = call target(args; arg rN, ...) ...`): arguments in VAX
+    /// call by a JSB linkage, or by a CALL linkage with registers,
+    /// NOCOUNT or NOPRESERVE in it (`dst = call target(args; arg rN, ...)
+    /// ...`): arguments in VAX
     /// registers, standard ones for CALL, R0 the result, and registers
     /// read into temporaries after it; R0, R1, the output registers and
     /// those named after `nopreserve` aren't kept.
@@ -113,12 +123,84 @@ pub enum Ins {
     /// `dst = pal func(args)`: a PAL call (DESIGN-0001), the function
     /// code (x7) and up to six arguments (x0-x5); the result is x0.
     Pal(u32, V, Vec<V>),
+    /// `dst = palr1`: x1 as the PAL call just before left it, the entry a
+    /// queue call removed.
+    PalR1(u32),
     /// `dst = retaddr`: the routine's return address, in its frame.
     RetAddr(u32),
     /// `dst = rpcc`: the cycle counter, CNTVCT_EL0.
     Rpcc(u32),
     /// `bpt`: a breakpoint, `brk`.
     Bpt,
+    /// `comment "text"`: CODECOMMENT's text, a comment in the code.
+    Comment(String),
+    /// `fadd<f> a, b, dst` and the like: the floating point built-ins
+    /// (RN 2.10.1), on operands in memory at a and b, the result stored at
+    /// dst, all addresses.
+    FArith(FOp, Fl, V, V, V),
+    /// `dst = fcmp<f> a, b`: -1, 0 or 1.
+    FCmp(u32, Fl, V, V),
+    /// `cvt[r] <from> <to> a, dst`: a conversion, from memory at a to
+    /// memory at dst; `r` rounds to the nearest, ties away, else an
+    /// integer is truncated.
+    FCvt(Fl, Fl, bool, V, V),
+    /// `dst = fcall target(args) -> results nopreserve rN...`: a call by the calling
+    /// standard with floating arguments or results (RN 2.10.4,
+    /// DESIGN-0004): an argument `t:v` is the bits of a value of that
+    /// format, S and T in v0-v7 with their class in x9, VAX ones general;
+    /// a result `t:%n` is temporary n, the bits from v0 and v1 or x0 and
+    /// x1, which the call's caller stores where it goes.
+    FCall(Box<FCall>),
+}
+
+/// A call with floating arguments or results (`Ins::FCall`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FCall {
+    pub dst: u32,
+    pub target: V,
+    /// Each argument: a value, or a floating value's bits and format.
+    pub args: Vec<(V, Option<Fl>)>,
+    /// Each result: its format and the temporary that gets its bits.
+    pub results: Vec<(Fl, u32)>,
+    /// The VAX registers the callee may change, kept around the call.
+    pub nopreserve: Vec<u8>,
+}
+
+/// A floating point built-in's arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+/// What the floating point built-ins work on: VAX F, D and G floating,
+/// IEEE S and T, and longword and quadword integers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fl {
+    F,
+    D,
+    G,
+    S,
+    T,
+    L,
+    Q,
+}
+
+impl Fl {
+    /// The letter the built-ins' names have for it.
+    pub fn letter(self) -> char {
+        match self {
+            Fl::F => 'f',
+            Fl::D => 'd',
+            Fl::G => 'g',
+            Fl::S => 's',
+            Fl::T => 't',
+            Fl::L => 'l',
+            Fl::Q => 'q',
+        }
+    }
 }
 
 /// A call by a linkage with registers (`Ins::Link`).
@@ -127,6 +209,8 @@ pub struct LinkCall {
     pub dst: Option<u32>,
     pub target: V,
     pub jsb: bool,
+    /// Whether a CALL passes the argument count, as COUNT linkages do.
+    pub count: bool,
     /// The standard arguments, for CALL.
     pub args: Vec<V>,
     pub ins: Vec<(V, u8)>,
@@ -160,6 +244,9 @@ pub struct Func {
     /// Whether its argument list (argcount, argn, argptr) has longwords,
     /// for BLISS-32 and LONG_DEFAULT, rather than quadwords.
     pub long_args: bool,
+    /// An INTERRUPT routine: it pops the PAL's parameters, this many, and
+    /// returns with REI.
+    pub rei: Option<u32>,
     /// Block 0 is the entry.
     pub blocks: Vec<Block>,
 }
@@ -205,6 +292,9 @@ impl Op {
             Ash => "ash",
             Ror => "ror",
             Umulh => "umulh",
+            Addv => "addv",
+            Subv => "subv",
+            Mulv => "mulv",
             Ceq => "ceq",
             Cne => "cne",
             Clt => "clt",
@@ -237,6 +327,7 @@ impl fmt::Display for Ins {
             Ins::Ext(d, v, p, s, e) => write!(f, "%{d} =l ext{} {v}, {p}, {s}", su(*e)),
             Ins::Insert(d, b, v, p, s) => write!(f, "%{d} =l ins {b}, {v}, {p}, {s}"),
             Ins::Arg(d, n) => write!(f, "%{d} =l arg {n}"),
+            Ins::StackAddr(d, n) => write!(f, "%{d} =l stackaddr {n}"),
             Ins::Call(d, t, args) => {
                 if let Some(d) = d {
                     write!(f, "%{d} =l ")?;
@@ -254,7 +345,12 @@ impl fmt::Display for Ins {
                 if let Some(d) = c.dst {
                     write!(f, "%{d} =l ")?;
                 }
-                write!(f, "{} {}(", if c.jsb { "jsb" } else { "call" }, c.target)?;
+                let call = match (c.jsb, c.count) {
+                    (true, _) => "jsb",
+                    (false, true) => "call",
+                    (false, false) => "call nocount",
+                };
+                write!(f, "{call} {}(", c.target)?;
                 for (i, a) in c.args.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
@@ -304,8 +400,55 @@ impl fmt::Display for Ins {
                 f.write_str(")")
             }
             Ins::RetAddr(d) => write!(f, "%{d} =l retaddr"),
+            Ins::PalR1(d) => write!(f, "%{d} =l palr1"),
             Ins::Rpcc(d) => write!(f, "%{d} =l rpcc"),
             Ins::Bpt => f.write_str("bpt"),
+            Ins::Comment(s) => write!(f, "comment {s:?}"),
+            Ins::FArith(op, t, a, b, d) => {
+                let op = match op {
+                    FOp::Add => "add",
+                    FOp::Sub => "sub",
+                    FOp::Mul => "mul",
+                    FOp::Div => "div",
+                };
+                write!(f, "f{op}{} {a}, {b}, {d}", t.letter())
+            }
+            Ins::FCmp(d, t, a, b) => write!(f, "%{d} =l fcmp{} {a}, {b}", t.letter()),
+            Ins::FCall(c) => {
+                write!(f, "%{} =l fcall {}(", c.dst, c.target)?;
+                for (i, (v, fl)) in c.args.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    if let Some(fl) = fl {
+                        write!(f, "{}:", fl.letter())?;
+                    }
+                    write!(f, "{v}")?;
+                }
+                f.write_str(")")?;
+                for (i, (fl, t)) in c.results.iter().enumerate() {
+                    write!(
+                        f,
+                        "{} {}:%{t}",
+                        if i == 0 { " ->" } else { "," },
+                        fl.letter()
+                    )?;
+                }
+                if !c.nopreserve.is_empty() {
+                    f.write_str(" nopreserve")?;
+                    for r in &c.nopreserve {
+                        write!(f, " r{r}")?;
+                    }
+                }
+                Ok(())
+            }
+            Ins::FCvt(from, to, r, a, d) => write!(
+                f,
+                "cvt{} {} {} {a}, {d}",
+                if *r { "r" } else { "" },
+                from.letter(),
+                to.letter()
+            ),
         }
     }
 }
@@ -330,7 +473,10 @@ impl fmt::Display for Func {
             match &b.term {
                 Term::Jmp(t) => writeln!(f, "    jmp @{t}")?,
                 Term::Jlbs(v, t, e) => writeln!(f, "    jlbs {v}, @{t}, @{e}")?,
-                Term::Ret(v) => writeln!(f, "    ret {v}")?,
+                Term::Ret(v) => match self.rei {
+                    Some(n) => writeln!(f, "    rei {n}")?,
+                    None => writeln!(f, "    ret {v}")?,
+                },
             }
         }
         writeln!(f, "}}")

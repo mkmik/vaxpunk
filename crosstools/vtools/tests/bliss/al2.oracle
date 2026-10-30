@@ -1,0 +1,10 @@
+
+    D : ALIGN(7);
+........^
+%BLS64-W-TEXT, ALIGN request negative or exceeds that of PSECT (or stack)
+at line number 8 in file SYS$SYSDEVICE:[ORACLE]AL2.B64;1
+BLISS status %X106F1260
+%LINK-W-WRNERS, compilation warnings
+	in module AL2 file SYS$SYSDEVICE:[ORACLE]AL2.OBJ;1
+LINK status %X10648268
+RUN status %X00010001

@@ -1,0 +1,26 @@
+MODULE LANG2 (MAIN = M, LANGUAGE(COMMON)) =
+BEGIN
+! LANGUAGE(COMMON): the dialectal constructs of LRM appendix C.
+LINKAGE L = JSB;
+PSECT OWN = MYOWN;
+BUILTIN TESTBITSS, ACTUALCOUNT;
+OWN
+    B : BYTE,
+    W : WORD SIGNED,
+    A : ALIGN(3),
+    S : VECTOR[2] INITIAL(%E'1.0', 2);
+GLOBAL ABCDEFG1, ABCDEFG2;
+EXTERNAL ROUTINE ER : L NOVALUE;
+LITERAL K = 3 : SIGNED(4);
+ROUTINE M =
+    BEGIN
+    LOCAL Y;
+    Y = .A<4, 8>;
+    Y = A<4, 8>;
+    Y = .A<60, 8>;
+    Y = 'AB';
+    Y = UPLIT(%ASCIC 'X', %ASCII 'Y');
+    1
+    END;
+END
+ELUDOM

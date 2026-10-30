@@ -1,0 +1,3 @@
+! BLISS: /LIBRARY
+LITERAL A1 = 1;
+MACRO MA = 2 %;

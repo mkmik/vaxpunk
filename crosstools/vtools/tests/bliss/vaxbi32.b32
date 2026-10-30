@@ -1,0 +1,64 @@
+MODULE VAXBI32 (MAIN = M) =
+BEGIN
+! The VAX built-ins BLISS on Alpha dropped, as vaxpunk's LIB has them
+! back for BLISS-32 (t8y:/host/vdefs#vax-builtin-macros): no oracle, as
+! BLISSA64 has DEC's LIB; the output is what UM chapter 4 says.
+REQUIRE 'PRINT32';
+LIBRARY 'SYS$LIBRARY:LIB';
+BUILTIN
+    FFS, FFC, LOCC, SKPC, MOVC3, MOVC5, CMPC3, CMPC5, MATCHC, SCANC, SPANC,
+    ADDM, SUBM, CMPM, INDEX, MOVTUC;
+OWN
+    W : VECTOR[2] INITIAL(%X'00F00000', 0),
+    POS,
+    STR : VECTOR[16, BYTE] INITIAL(BYTE('HELLO, WORLD    ')),
+    DST : VECTOR[16, BYTE],
+    TBL : VECTOR[256, BYTE],
+    A : VECTOR[2] INITIAL(-1, 1),
+    B : VECTOR[2] INITIAL(1, 2),
+    C : VECTOR[2],
+    OVL : VECTOR[8, BYTE] INITIAL(BYTE('ABCDEF  '));
+ROUTINE M =
+    BEGIN
+    PRINT(FFS(%REF(0), %REF(32), W, POS));
+    PRINT(.POS);
+    PRINT(FFC(%REF(20), %REF(8), W, POS));
+    PRINT(.POS);
+    PRINT(FFS(%REF(0), %REF(20), W, POS));
+    PRINT(.POS);
+    PRINT(LOCC(%REF(%C','), %REF(16), STR));
+    PRINT(LOCC(%REF(%C'X'), %REF(16), STR));
+    PRINT(SKPC(%REF(%C'H'), %REF(16), STR));
+    MOVC3(%REF(5), STR, DST);
+    PRINT(.DST[4]);
+    MOVC5(%REF(2), STR, %REF(%C'*'), %REF(4), DST);
+    PRINT(.DST[3]);
+    PRINT(CMPC3(%REF(5), STR, DST));
+    PRINT(MATCHC(%REF(5), UPLIT('WORLD'), %REF(16), STR));
+    TBL[%C'O'] = 1;
+    PRINT(SCANC(%REF(16), STR, TBL, %REF(1)) - STR);
+    ADDM(2, A, B, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    SUBM(2, B, A, C);
+    PRINT(.C[0]);
+    PRINT(.C[1]);
+    PRINT(CMPM(2, A, B));
+    ! Overlapping strings move as if the source were read first: ABCDEF
+    ! to the next byte is AABCDE, and AAB to two bytes on, then *, AAAAB*.
+    MOVC3(%REF(5), OVL, OVL[1]);
+    PRINT(.OVL[5]);
+    MOVC5(%REF(3), OVL, %REF(%C'*'), %REF(4), OVL[2]);
+    PRINT(.OVL[4]);
+    PRINT(.OVL[5]);
+    ! MOVC5's fill byte is read before the move, though the move writes it.
+    MOVC5(%REF(2), UPLIT('XY'), OVL, %REF(4), OVL);
+    PRINT(.OVL[3]);
+    ! So is MOVTUC's escape byte: L stops it at HE.
+    INCR I FROM 0 TO 255 DO TBL[.I] = .I;
+    OVL[0] = %C'L';
+    PRINT(MOVTUC(%REF(5), STR, OVL, TBL, %REF(5), OVL) EQL STR + 2);
+    1
+    END;
+END
+ELUDOM

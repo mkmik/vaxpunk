@@ -1,0 +1,29 @@
+MODULE RO (MAIN = M) =
+BEGIN
+! A register built-in, or a field of one, as a linkage's output actual.
+REQUIRE 'PRINT';
+LINKAGE
+    L = JSB (; REGISTER = 2);
+ROUTINE R (; OUT) : L NOVALUE =
+    OUT = 42;
+ROUTINE G =
+    BEGIN
+    BUILTIN R0;
+    R(; R0);
+    .R0
+    END;
+ROUTINE H =
+    BEGIN
+    BUILTIN R1;
+    R1 = -1;
+    R(; R1<0, 8>);
+    .R1
+    END;
+ROUTINE M =
+    BEGIN
+    PRINT(G());
+    PRINT(H());
+    1
+    END;
+END
+ELUDOM

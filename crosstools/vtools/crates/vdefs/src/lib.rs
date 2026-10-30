@@ -10,6 +10,10 @@
 //! letters, as `SS$_NORMAL`) becomes a LITERAL. A letter the rule doesn't
 //! know is an error that names the symbol, to be fixed in the library.
 //!
+//! After the definitions come the system services' keyword macros, one for
+//! each `$name_S` macro (UM 8.3), and in STARLET the RMS and helper macros
+//! of `starlet.bli`, in LIB the VAX built-ins' macros of `lib.bli`.
+//!
 //! DEC's STARLET.R64 has the same field macros, with `$A_`, `$IS_` and
 //! `$IH_` fields signed, but makes `$V_` names field macros too, since its
 //! sources know which field a bit is in; the macro libraries give only the
@@ -44,6 +48,88 @@ fn kind(letters: &str, dialect: Dialect) -> Option<Option<(u32, bool)>> {
         _ => return None,
     })
 }
+
+/// The fields VMS's SDL declares signed whose names don't say so: links,
+/// addresses, condition values and times, which DEC's STARLET and LIB
+/// sign-extend (bliss64.md probe 14). The macro libraries give only the
+/// letter, `$L_`, so the sign comes from here.
+const SIGNED: &[&str] = &[
+    "ACB$L_AST",
+    "ACB$L_ASTQBL",
+    "ACB$L_ASTQFL",
+    "ACB$L_KAST",
+    "CEB$L_CEBBL",
+    "CEB$L_CEBFL",
+    "CEB$L_WQBL",
+    "CEB$L_WQFL",
+    "CHF$L_MCHARGLST",
+    "CHF$L_SIGARGLST",
+    "CHF$L_SIG_ARG1",
+    "CHF$L_SIG_ARGS",
+    "CHF$L_SIG_NAME",
+    "CHF64$L_SIGNAL64",
+    "CHF64$L_SIG_ARGS",
+    "CHF64$Q_SIG_ARG1",
+    "CHF64$Q_SIG_NAME",
+    "DDB$L_DDT",
+    "DDB$L_LINK",
+    "DDB$L_UCB",
+    "DSC64$L_MBMO",
+    "FAB$B_RTV",
+    "FAB$L_DNA",
+    "FAB$L_FNA",
+    "FAB$L_MRN",
+    "FAB$L_NAM",
+    "FAB$L_XAB",
+    "GSD$L_GSDBL",
+    "GSD$L_GSDFL",
+    "ILEA_64$L_MBMO",
+    "ILEB_64$L_MBMO",
+    "IRP$L_IOQBL",
+    "IRP$L_IOQFL",
+    "IRP$L_KAST",
+    "IRP$L_MEDIA",
+    "IRP$L_UCB",
+    "LKI$B_QUEUE",
+    "LNMB$L_BLINK",
+    "LNMB$L_FLINK",
+    "LNMTH$L_NAME",
+    "LNMTH$L_PARENT",
+    "NAM$L_DEV",
+    "NAM$L_DIR",
+    "NAM$L_ESA",
+    "NAM$L_NAME",
+    "NAM$L_RSA",
+    "NAM$L_TYPE",
+    "NAM$L_VER",
+    "PCB$L_EFC2P",
+    "PCB$L_EFC3P",
+    "PCB$L_SQBL",
+    "PCB$L_SQFL",
+    "RAB$B_MBF",
+    "RAB$L_FAB",
+    "RAB$L_KBF",
+    "RAB$L_PBF",
+    "RAB$L_RBF",
+    "RAB$L_RHB",
+    "RAB$L_UBF",
+    "RAB$L_XAB",
+    "TQE$L_AST",
+    "TQE$L_TQBL",
+    "TQE$L_TQFL",
+    "UCB$L_DDB",
+    "UCB$L_DDT",
+    "UCB$L_IOQBL",
+    "UCB$L_IOQFL",
+    "UCB$L_LINK",
+    "UCB$L_VCB",
+    "XAB$L_KNM",
+    "XAB$L_NXT",
+    "XAB$Q_BDT",
+    "XAB$Q_CDT",
+    "XAB$Q_EDT",
+    "XAB$Q_RDT",
+];
 
 /// A definition macro: its name, and its symbols with their values in
 /// order, with the comment on each line.
@@ -180,7 +266,10 @@ pub fn generate(source: &str, text: &str, dialect: Dialect) -> Result<String, St
                 }
                 Some(None) => literals.push((format!("    {name} = {v}"), comment)),
                 Some(Some((size, signed))) => fields.push((
-                    format!("    {name} = {v}, 0, {size}, {} %", u8::from(signed)),
+                    format!(
+                        "    {name} = {v}, 0, {size}, {} %",
+                        u8::from(signed || SIGNED.contains(&name.as_str()))
+                    ),
                     comment,
                 )),
             }
@@ -198,7 +287,109 @@ pub fn generate(source: &str, text: &str, dialect: Dialect) -> Result<String, St
             }
         }
     }
+    out.push_str(&service_macros(text));
+    // What can't be had from the macro library: written for BLISS.
+    match source {
+        "starlet.mlb" => out.push_str(include_str!("starlet.bli")),
+        "lib.mlb" => out.push_str(include_str!("lib.bli")),
+        _ => {}
+    }
     Ok(out)
+}
+
+/// The system service keyword macros, one for each `$name_S` macro in
+/// `text`, as UM 8.3 has them in STARLET: `$QIOW(CHAN = .C, FUNC = F)`
+/// calls SYS$QIOW with the keywords' values in the service's order, the
+/// MACRO-32 macro's defaults for those left out, and an error for a
+/// required one left out. Each declares its service in a block of its own,
+/// so a module that declares it too, or defines it, can.
+fn service_macros(text: &str) -> String {
+    let mut out = String::new();
+    let (mut name, mut formals): (Option<String>, Vec<(String, Option<String>)>) =
+        (None, Vec::new());
+    for line in text.lines() {
+        let code = line.split(';').next().unwrap_or("");
+        let words: Vec<&str> = code.split_whitespace().collect();
+        match words.as_slice() {
+            [w, n, ..] if w.eq_ignore_ascii_case(".MACRO") && n.ends_with("_S") => {
+                name = Some(n.trim_end_matches("_S").to_string());
+                let args = code.find(n).map_or("", |i| &code[i + n.len()..]);
+                formals = args
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|a| !a.is_empty())
+                    .map(|a| match a.split_once('=') {
+                        Some((f, d)) => (
+                            f.trim().to_string(),
+                            Some(d.trim().trim_start_matches('#').to_string()),
+                        ),
+                        None => (a.to_string(), None),
+                    })
+                    .collect();
+            }
+            [w, _, target] if w.eq_ignore_ascii_case("CALLS") && !target.contains('\'') => {
+                let Some(name) = name.take() else {
+                    continue;
+                };
+                let routine = target.trim_start_matches("G^");
+                let list: Vec<String> = formals
+                    .iter()
+                    .map(|(f, d)| match d {
+                        Some(d) => format!("{f} = {d}"),
+                        None => f.clone(),
+                    })
+                    .collect();
+                let head = wrap(&name, &list);
+                out.push_str(&format!("    {head} =\n"));
+                for (f, _) in formals.iter().filter(|(_, d)| d.is_none()) {
+                    out.push_str(&format!(
+                        "        %IF %NULL({f}) %THEN %ERROR('{name} needs {f}') %FI\n"
+                    ));
+                }
+                let args: Vec<String> = formals.iter().map(|(f, _)| f.clone()).collect();
+                let call = wrap(routine, &args);
+                let call = if args.is_empty() {
+                    format!("{call}()")
+                } else {
+                    call
+                };
+                // BLISS, as DEC's STARLET says: not the caller's SWITCHES
+                // LINKAGE.
+                out.push_str(&format!(
+                    "        BEGIN\n        EXTERNAL ROUTINE {routine} : BLISS;\n        {call}\n        END %,\n"
+                ));
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        return out;
+    }
+    out.truncate(out.len() - 2);
+    format!("\n! The system services (UM 8.3)\nKEYWORDMACRO\n{out};\n")
+}
+
+/// `name(items)`, the items a line of them at a time, the lines after the
+/// first indented by 8; just `name` if there are none.
+fn wrap(name: &str, items: &[String]) -> String {
+    let mut out = name.to_string();
+    let mut width = 8 + out.len();
+    for (i, f) in items.iter().enumerate() {
+        let sep = if i == 0 { "(" } else { ", " };
+        if width + sep.len() + f.len() > 96 {
+            out.push_str(",\n            ");
+            width = 12;
+        } else {
+            out.push_str(sep);
+            width += sep.len();
+        }
+        out.push_str(f);
+        width += f.len();
+    }
+    if !items.is_empty() {
+        out.push(')');
+    }
+    out
 }
 
 /// The run-time library routines the lint knows, which no macro defines:
@@ -273,6 +464,24 @@ X$V_FLAG = 3
             generate("x.mlb", text, Dialect::Bliss32)
                 .unwrap()
                 .contains("X$Q_B = 8, 0, 0, 0 %;")
+        );
+        let services = "
+        .MACRO  $WAITFR_S EFN
+        PUSHL   EFN
+        CALLS   #1, G^SYS$WAITFR
+        .ENDM   $WAITFR_S
+        .MACRO  $HIBER_S
+        CALLS   #0, G^SYS$HIBER
+        .ENDM   $HIBER_S
+";
+        assert!(
+            generate("s.mlb", services, Dialect::Bliss64).unwrap().ends_with(
+                "\n! The system services (UM 8.3)\nKEYWORDMACRO\n    $WAITFR(EFN) =\n        \
+                 %IF %NULL(EFN) %THEN %ERROR('$WAITFR needs EFN') %FI\n        BEGIN\n        \
+                 EXTERNAL ROUTINE SYS$WAITFR : BLISS;\n        SYS$WAITFR(EFN)\n        END %,\n    \
+                 $HIBER =\n        BEGIN\n        EXTERNAL ROUTINE SYS$HIBER : BLISS;\n        SYS$HIBER()\n        \
+                 END %;\n"
+            )
         );
         let bad = ".MACRO $YDEF\nY$Z_FOO = 1\n.ENDM\n";
         assert!(

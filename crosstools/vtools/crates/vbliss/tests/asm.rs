@@ -7,7 +7,11 @@ const SOURCE: &str = "
 MODULE PALS =
 BEGIN
 BUILTIN
-    PAL_MTPR_IPL, PAL_MFPR_IPL, PAL_PROBER, PAL_CHMK, CALL_PAL, PAL_BPT, RPCC, PAL_HALT, RETURNADDRESS;
+    PAL_MTPR_IPL, PAL_MFPR_IPL, PAL_PROBER, PAL_CHMK, CALL_PAL, PAL_BPT, RPCC, PAL_HALT, RETURNADDRESS,
+    PAL_INSQTIQ, PAL_REMQHILR, PAL_MTPR_MCES, PAL_MFPR_WHAMI;
+
+OWN
+    ENTRY;
 
 GLOBAL ROUTINE RAISE (IPL) =
     PAL_MTPR_IPL(.IPL);
@@ -26,6 +30,10 @@ GLOBAL ROUTINE OTHERS : NOVALUE =
     CALL_PAL(%X'3E');
     CALL_PAL(%X'46', 1, 2, 3, 4);
     PAL_CHMK(7);
+    PAL_INSQTIQ(.ENTRY, .ENTRY + 16);
+    PAL_REMQHILR(.ENTRY; ENTRY);
+    PAL_MTPR_MCES(8);
+    PAL_MFPR_WHAMI();
     PAL_BPT();
     RPCC();
     RETURNADDRESS();
@@ -56,6 +64,11 @@ fn pal_calls() {
         "=l pal 62()",
         "=l pal 70(1, 2, 3, 4)",
         "=l pal 458883()",
+        "=l pal 138(%",
+        "=l pal 166(%",
+        "=l palr1",
+        "=l pal 17(8)",
+        "=l pal 63()",
         "bpt",
         "=l rpcc",
         "=l retaddr",
@@ -67,6 +80,7 @@ fn pal_calls() {
     assert!(ir.contains("=l or %"), "{ir}");
     let asm = out.asm.unwrap();
     assert!(asm.contains("svc     #0"));
+    assert!(asm.contains(", x1\n"), "REMQHILR's R1");
     assert!(asm.contains("mrs") && asm.contains("CNTVCT_EL0"));
     assert!(asm.contains("[x29, #8]"), "the return address");
     vasm::assemble_with(&asm, &vasm::Options::default(), "test", None).expect("vasm assembles it");
@@ -74,9 +88,8 @@ fn pal_calls() {
 
 #[test]
 fn missing_pal_calls_are_errors() {
-    let out = translate(
-        "MODULE M = BEGIN BUILTIN PAL_INSQHIL; ROUTINE R = PAL_INSQHIL(0, 0); END ELUDOM",
-    );
+    let out =
+        translate("MODULE M = BEGIN BUILTIN PAL_BUGCHK; ROUTINE R = PAL_BUGCHK(0); END ELUDOM");
     let e = out.error().expect("an error");
     assert!(e.msg.contains("DESIGN-0001"), "{}", e.msg);
 }

@@ -84,7 +84,7 @@ note = "ADR-0023 follow-up; PRD-0005 non-goal"
 id = "floating-point"
 title = "Floating point arguments in v0-v7, their classes in x9; d8-d15 kept by the unwinder"
 status = "todo"
-note = "PRD-0007's feasibility: no floating point in vasm and vmacro yet"
+note = "vasm has scalar floating point, and vbliss's %xFLOAT calls pass S and T in v0-v7 with their classes in x9; vmacro, the unwinder's d8-d15 and the callee's side are still to do"
 
 [[feature]]
 id = "address-space-64"

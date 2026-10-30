@@ -1,0 +1,92 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTNOEXP.B64;1
+
+    0	      1 ! BLISS: /SOURCE_LIST=(NOEXPAND_MACROS,REQUIRE)
+    0	      2 MODULE LSTNOEXP (MAIN = M) =
+    0	      3 BEGIN
+    1	      4 ! The listing with /SOURCE_LIST=(NOEXPAND_MACROS,REQUIRE).
+    1	      5 REQUIRE 'PRINT';
+ R  1	      6 ! PRINT: prints a value as a signed decimal and as 16 hex digits, on a line
+ R  1	      7 ! of its own, through LIB$PUT_OUTPUT. The behaviour tests print with it,
+ R  1	      8 ! here under vrun and on OpenVMS for the oracle.
+ R  1	      9 
+ R  1	     10 EXTERNAL ROUTINE
+ R  1	     11     LIB$PUT_OUTPUT;
+ R  1	     12 
+ R  1	     13 ROUTINE PRINT (V) : NOVALUE =
+ R  1	     14     BEGIN
+ R  2	     15     LOCAL
+ R  2	     16         BUF : VECTOR[48, BYTE],
+ R  2	     17         DESC : VECTOR[2, LONG],
+ R  2	     18         X,
+ R  2	     19         I;
+ R  2	     20     I = 48;
+ R  2	     21     X = .V;
+ R  2	     22     INCR K FROM 1 TO 16 DO
+ R  2	     23         BEGIN
+ R  3	     24         LOCAL D;
+ R  3	     25         D = .X AND 15;
+ R  3	     26         I = .I - 1;
+ R  3	     27         BUF[.I] = (IF .D LSS 10 THEN %C'0' + .D ELSE %C'A' + .D - 10);
+ R  3	     28         X = .X ^ -4 AND %X'0FFFFFFFFFFFFFFF'
+ R  3	     29         END;
+ R  2	     30     I = .I - 1;
+ R  2	     31     BUF[.I] = %C' ';
+ R  2	     32     ! Digits from the remainders, negative for a negative value, so that
+ R  2	     33     ! the most negative one prints too.
+ R  2	     34     X = .V;
+ R  2	     35     DO
+ R  2	     36         BEGIN
+ R  3	     37         LOCAL D;
+ R  3	     38         D = .X - (.X / 10) * 10;
+ R  3	     39         IF .D LSS 0 THEN D = -.D;
+ R  3	     40         I = .I - 1;
+ R  3	     41         BUF[.I] = %C'0' + .D;
+ R  3	     42         X = .X / 10
+ R  3	     43         END
+ R  3	     44     UNTIL .X EQL 0;
+ R  2	     45     IF .V LSS 0
+ R  2	     46     THEN
+ R  2	     47         BEGIN
+ R  3	     48         I = .I - 1;
+ R  3	     49         BUF[.I] = %C'-'
+ R  3	     50         END;
+ R  2	     51     DESC[0] = 48 - .I + %X'010E0000';
+ R  2	     52     DESC[1] = BUF[.I];
+ R  2	     53     LIB$PUT_OUTPUT(DESC)
+ R  2	     54     END;
+    1	     55 LIBRARY 'LA';
+    1	     57 MACRO
+    1	     58     TWICE(X) = X + X %,
+
+LSTNOEXP                        Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTNOEXP.B64;1
+
+    1	     59     SUM[A] = + A %;
+    1	     60 ROUTINE M =
+    1	     61     BEGIN
+    2	     62     LOCAL Y;
+    2	     63     Y = TWICE(3) SUM(1, 2);
+    2	     64     PRINT(.Y);
+    2	     65     1
+    2	     66     END;
+    1	     67 END
+    1	     68 ELUDOM
+
+
+;				Library Statistics
+;
+;					     -------- Symbols --------	    Pages
+;	File				     Total    Loaded   Percent      Mapped
+;
+;  SYS$SYSDEVICE:[ORACLE]LA.L64;1	         2         0         0         5
+
+
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 3
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTNOEXP.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE/SOURCE_LIST=(NOEXPAND_MACROS,REQUIRE) LSTNOEXP.B64

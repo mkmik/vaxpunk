@@ -30,8 +30,12 @@ pub struct Lexeme {
 }
 
 /// Splits `source`, file number `file`, into lexemes, ending with `Eof`.
+/// The source is DEC MCS as `crate::read_source` reads it, a character
+/// a byte, so a quoted string's bytes are the file's.
 pub fn lex(source: &str, file: u16) -> Result<Vec<Lexeme>, (u32, String)> {
-    let s = source.as_bytes();
+    let bytes = crate::latin1(source);
+    let s = &bytes[..];
+    let text = |a: usize, b: usize| String::from_utf8_lossy(&s[a..b]).into_owned();
     let (mut i, mut line, mut bol, mut out) = (0, 1u32, 0, Vec::new());
     while i < s.len() {
         let c = s[i];
@@ -81,9 +85,9 @@ pub fn lex(source: &str, file: u16) -> Result<Vec<Lexeme>, (u32, String)> {
                 while i < s.len() && s[i].is_ascii_alphanumeric() {
                     i += 1;
                 }
-                let text = &source[start..i];
+                let text = text(start, i);
                 push(Tok::Num(
-                    number(text, 10).ok_or((line, format!("bad number {text}")))?,
+                    number(&text, 10).ok_or((line, format!("bad number {text}")))?,
                 ));
             }
             b'%' if !s
@@ -100,7 +104,7 @@ pub fn lex(source: &str, file: u16) -> Result<Vec<Lexeme>, (u32, String)> {
                 {
                     i += 1;
                 }
-                push(Tok::Name(source[start..i].to_ascii_uppercase()));
+                push(Tok::Name(text(start, i).to_ascii_uppercase()));
             }
             b'+' | b'-' | b'*' | b'/' | b'.' | b'=' | b',' | b';' | b':' | b'(' | b')' | b'['
             | b']' | b'<' | b'>' | b'^' => {

@@ -200,6 +200,11 @@ pub fn operands(c: &mut Cursor, block: u32) -> Result<Vec<Operand>> {
 
 fn simple(c: &mut Cursor, block: u32) -> Result<Op> {
     let hash = c.eat('#');
+    // #0.0, the floating point zero FCMP compares with.
+    if hash && c.rest().starts_with("0.0") {
+        c.at += 3;
+        return Ok(Op::Imm(expr::parse(&mut Cursor::new("0"), block)?));
+    }
     if c.peek() == Some(':') {
         let m = modifier(c)?;
         return Ok(Op::Mod(m, expr::parse(c, block)?));
@@ -469,6 +474,27 @@ impl<S: Scope> Args<'_, S> {
             return err(self.col(i), format!("expected {want}"));
         }
         Ok(r)
+    }
+
+    /// A floating point register, S or D.
+    fn fp(&self, i: usize) -> Result<Reg> {
+        let r = self.reg(i)?;
+        if !matches!(r.kind, Kind::S | Kind::D) {
+            return err(self.col(i), "expected an S or D register");
+        }
+        Ok(r)
+    }
+
+    /// The type field of floating point registers that must be alike: 0
+    /// for single (S), 1 for double (D).
+    fn same_fp(&self, regs: &[(usize, Reg)]) -> Result<u32> {
+        let k = regs[0].1.kind;
+        for &(i, r) in regs {
+            if r.kind != k {
+                return err(self.col(i), "register sizes don't match");
+            }
+        }
+        Ok((k == Kind::D) as u32)
     }
 
     fn same_size(&self, regs: &[(usize, Reg)]) -> Result<u32> {
@@ -768,6 +794,125 @@ pub fn encode<S: Scope>(mn: &str, ops: &[Operand], cx: &Cx<S>) -> Result<Encoded
             let sf = a.same_size(&[(0, rd), (1, rn), (2, rm)])?;
             let lsb = field(a.imm(3)?, 5 + sf, a.col(3), "bit position")?;
             fixed(0x1380_0000 | sf << 31 | sf << 22 | rm.n << 16 | lsb << 10 | rn.n << 5 | rd.n)
+        }
+        "FADD" | "FSUB" | "FMUL" | "FDIV" | "FMAX" | "FMIN" | "FMAXNM" | "FMINNM" | "FNMUL" => {
+            a.count(3..=3)?;
+            let (rd, rn, rm) = (a.fp(0)?, a.fp(1)?, a.fp(2)?);
+            let ty = a.same_fp(&[(0, rd), (1, rn), (2, rm)])?;
+            let opcode = match mn {
+                "FMUL" => 0,
+                "FDIV" => 1,
+                "FADD" => 2,
+                "FSUB" => 3,
+                "FMAX" => 4,
+                "FMIN" => 5,
+                "FMAXNM" => 6,
+                "FMINNM" => 7,
+                _ => 8,
+            };
+            fixed(0x1e20_0800 | ty << 22 | rm.n << 16 | opcode << 12 | rn.n << 5 | rd.n)
+        }
+        "FABS" | "FNEG" | "FSQRT" | "FRINTN" | "FRINTP" | "FRINTM" | "FRINTZ" | "FRINTA"
+        | "FRINTX" | "FRINTI" => {
+            a.count(2..=2)?;
+            let (rd, rn) = (a.fp(0)?, a.fp(1)?);
+            let ty = a.same_fp(&[(0, rd), (1, rn)])?;
+            let opcode = match mn {
+                "FABS" => 1,
+                "FNEG" => 2,
+                "FSQRT" => 3,
+                "FRINTN" => 8,
+                "FRINTP" => 9,
+                "FRINTM" => 10,
+                "FRINTZ" => 11,
+                "FRINTA" => 12,
+                "FRINTX" => 14,
+                _ => 15,
+            };
+            fixed(0x1e20_4000 | ty << 22 | opcode << 15 | rn.n << 5 | rd.n)
+        }
+        "FCVT" => {
+            // Between single and double.
+            a.count(2..=2)?;
+            let (rd, rn) = (a.fp(0)?, a.fp(1)?);
+            let (ty, opcode) = match (rd.kind, rn.kind) {
+                (Kind::S, Kind::D) => (1, 4),
+                (Kind::D, Kind::S) => (0, 5),
+                _ => return err(a.col(0), "FCVT converts between S and D registers"),
+            };
+            fixed(0x1e20_4000 | ty << 22 | opcode << 15 | rn.n << 5 | rd.n)
+        }
+        "FCMP" | "FCMPE" => {
+            a.count(2..=2)?;
+            let rn = a.fp(0)?;
+            let e = (mn == "FCMPE") as u32;
+            if a.is_reg(1) {
+                let rm = a.fp(1)?;
+                let ty = a.same_fp(&[(0, rn), (1, rm)])?;
+                return fixed(0x1e20_2000 | ty << 22 | rm.n << 16 | rn.n << 5 | e << 4);
+            }
+            // FCMP Sn, #0.0: written #0 or #0.0.
+            let ty = a.same_fp(&[(0, rn)])?;
+            if a.imm(1)? != 0 {
+                return err(a.col(1), "FCMP compares with a register or #0.0");
+            }
+            fixed(0x1e20_2008 | ty << 22 | rn.n << 5 | e << 4)
+        }
+        "SCVTF" | "UCVTF" => {
+            // Integer to floating point.
+            a.count(2..=2)?;
+            let (rd, rn) = (a.fp(0)?, a.gp(1, false)?);
+            let ty = a.same_fp(&[(0, rd)])?;
+            let opcode = if mn == "SCVTF" { 2 } else { 3 };
+            fixed(0x1e20_0000 | rn.sf() << 31 | ty << 22 | opcode << 16 | rn.n << 5 | rd.n)
+        }
+        "FCVTZS" | "FCVTZU" | "FCVTNS" | "FCVTNU" | "FCVTAS" | "FCVTAU" | "FCVTPS" | "FCVTPU"
+        | "FCVTMS" | "FCVTMU" => {
+            // Floating point to integer, rounding toward zero, to nearest
+            // with ties even, away, plus or minus infinity.
+            a.count(2..=2)?;
+            let (rd, rn) = (a.gp(0, false)?, a.fp(1)?);
+            let ty = a.same_fp(&[(1, rn)])?;
+            let (rmode, base) = match &mn[..5] {
+                "FCVTZ" => (3, 0),
+                "FCVTN" => (0, 0),
+                "FCVTA" => (0, 4),
+                "FCVTP" => (1, 0),
+                _ => (2, 0),
+            };
+            let opcode = base | mn.ends_with('U') as u32;
+            fixed(
+                0x1e20_0000
+                    | rd.sf() << 31
+                    | ty << 22
+                    | rmode << 19
+                    | opcode << 16
+                    | rn.n << 5
+                    | rd.n,
+            )
+        }
+        "FMOV" => {
+            a.count(2..=2)?;
+            let (rd, rn) = (a.reg(0)?, a.reg(1)?);
+            match (rd.is_gp(), rn.is_gp()) {
+                (false, false) => {
+                    let (rd, rn) = (a.fp(0)?, a.fp(1)?);
+                    let ty = a.same_fp(&[(0, rd), (1, rn)])?;
+                    fixed(0x1e20_4000 | ty << 22 | rn.n << 5 | rd.n)
+                }
+                (true, false) | (false, true) => {
+                    // The bits, unchanged, between a register file and the
+                    // other: Wd and Sn, Xd and Dn.
+                    let (g, f, opcode) = if rd.is_gp() { (rd, rn, 6) } else { (rn, rd, 7) };
+                    let ty = match (g.kind, f.kind) {
+                        (Kind::W, Kind::S) => 0,
+                        (Kind::X, Kind::D) => 1,
+                        _ => return err(a.col(0), "FMOV moves between Wn and Sn, or Xn and Dn"),
+                    };
+                    fixed(0x1e20_0000 | g.sf() << 31 | ty << 22 | opcode << 16 | rn.n << 5 | rd.n)
+                }
+                _ => err(a.col(0), "FMOV moves floating point registers"),
+            }
         }
         "UDIV" | "SDIV" | "LSLV" | "LSRV" | "ASRV" | "RORV" => {
             a.count(3..=3)?;

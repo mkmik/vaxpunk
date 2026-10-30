@@ -1168,16 +1168,19 @@ const TPU: Phase = Phase {
 /// CDEMO, a BLISS-64 program that calls a C library through the library's
 /// BLISS-64 adapter (crosstools/vtools/examples/c), prints what it prints
 /// under vrun, crosstools/vtools/tests/examples/c/cdemo.stdout (checked
-/// after the session); and CRTLTEST, a C program, finds the C run-time
-/// library's routines right.
+/// after the session); CRTLTEST, a C program, finds the C run-time
+/// library's routines right; and PALTEST, a BLISS-64 one, puts the PAL's
+/// queue, FEN, MCES and processor number calls to work through vbliss's
+/// PAL_ built-ins.
 const C: Phase = Phase {
     name: "c",
     secs: 30,
     steps: &[
         ("$ TYPE TPUEVE.TXT", 1, "RUN CDEMO\r"),
         ("C calls 7", 1, "RUN CRTLTEST\r"),
+        ("CRTLTEST: ok", 1, "RUN PALTEST\r"),
     ],
-    lines: &["C calls 7", "CRTLTEST: ok"],
+    lines: &["C calls 7", "CRTLTEST: ok", "PALTEST: ok"],
 };
 
 /// LBRTEST, in DKB0:[LBR], puts the LBR$ routines to work on a help
@@ -1189,7 +1192,7 @@ const LBR: Phase = Phase {
     secs: 30,
     steps: &[
         (
-            "CRTLTEST: ok",
+            "PALTEST: ok",
             1,
             "CREATE/DIRECTORY DKB0:[LBR]\rDEFINE LBRTEST DKB0:[LBR]\rRUN LBRTEST\r",
         ),
@@ -1983,10 +1986,31 @@ fn session(log: impl Fn() -> String, mut type_: impl FnMut(&str)) -> Result<(), 
                 step += 1;
                 continue;
             }
+            // STARTUP's processes print when they get there, which can be
+            // in the middle of a command's lines: without theirs too. So
+            // can DCL's prompt, after a RUN whose process prints on OPA0:
+            // too: without the prompts that start a line.
+            let unprompted = |s: &str| -> String {
+                s.lines()
+                    .map(|l| l.strip_prefix("$ ").unwrap_or(l))
+                    .flat_map(|l| [l, "\n"])
+                    .collect()
+            };
+            let quiet = unprompted(
+                &plain
+                    .lines()
+                    .filter(|l| !STARTUP.lines.iter().any(|s| l.contains(s)))
+                    .flat_map(|l| [l, "\n"])
+                    .collect::<String>(),
+            );
             let missing: Vec<_> = phase
                 .lines
                 .iter()
-                .filter(|l| !text.contains(*l) && !plain.contains(*l))
+                .filter(|l| {
+                    !text.contains(*l)
+                        && !plain.contains(*l)
+                        && !quiet.contains(unprompted(l).trim_end_matches('\n'))
+                })
                 .collect();
             if step == phase.steps.len() && missing.is_empty() {
                 println!("{}: {:?}", phase.name, start.elapsed());

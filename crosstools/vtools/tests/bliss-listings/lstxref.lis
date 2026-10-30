@@ -1,0 +1,21 @@
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 1
+                                                                DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTXREF.B64;1
+
+    0	      1 ! BLISS: /CROSS_REFERENCE
+    0	      2 MODULE LSTXREF (MAIN = M) =
+    0	      3 BEGIN
+    1	      4 OWN X;
+    1	      5 ROUTINE M = (X = 1; .X);
+    1	      6 END
+    1	      7 ELUDOM
+
+%BLS64-I-TEXT, CROSS_REFERENCE not implemented in BLISS-64E
+
+
+
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  BLISS-64E V1.11-007-48G4L         Page 2
+                                Source Listing                  DD-MMM-YYYY HH:MM:SS  SYS$SYSDEVICE:[ORACLE]LSTXREF.B64;1
+
+COMMAND LINE:
+
+BLISS/A64/LIST/SOURCE_LIST=(EXPAND_MACROS,REQUIRE)/NOMACHINE_CODE/CROSS_REFERENCE LSTXREF.B64
