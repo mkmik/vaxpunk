@@ -640,6 +640,8 @@ MACRO
 ! $PLGDEF
 LITERAL
     PLG$C_VER_REL = 1,  ! a relative file's
+    PLG$C_VER_1 = 1,  ! an indexed file's whose keys are all strings, before prologue 3
+    PLG$C_VER_2 = 2,  ! and one with other keys too
     PLG$C_VER_3 = 3;  ! an indexed file's
 MACRO
     PLG$B_AVBN = 102, 0, 8, 0 %,  ! first area descriptor's VBN
@@ -732,10 +734,13 @@ LITERAL
     BKT$K_ENDOVHD = 4;  ! an index bucket's end: VBN free space word, 0, check character
 MACRO
     BKT$B_CHECKCHAR = 0, 0, 8, 0 %,  ! as the bucket's last byte
-    BKT$B_INDEXNO = 1, 0, 8, 0 %,  ! key of reference
+    BKT$B_INDEXNO = 1, 0, 8, 0 %,  ! key of reference; prologues 1 and 2: BKT$B_AREANO
+    BKT$B_AREANO = 1, 0, 8, 0 %,  ! prologues 1 and 2: the area it came from
     BKT$W_ADRSAMPLE = 2, 0, 16, 0 %,  ! low word of its VBN
     BKT$W_FREESPACE = 4, 0, 16, 0 %,  ! first free byte
     BKT$W_NXTRECID = 6, 0, 16, 0 %,  ! next record ID
+    BKT$B_NXTRECID = 6, 0, 8, 0 %,  ! prologues 1 and 2: next record ID, a byte,
+    BKT$B_LSTRECID = 7, 0, 8, 0 %,  ! and the last free one
     BKT$L_NXTBKT = 8, 0, 32, 0 %,  ! next bucket of the level
     BKT$B_LEVEL = 12, 0, 8, 0 %,  ! 0 for data and SIDR buckets
     BKT$B_BKTCB = 13, 0, 8, 0 %;  ! BKT$V_
@@ -746,13 +751,19 @@ LITERAL
     IRC$V_PTRSZ = 0,  ! the pointer's size less 2, 2 bits
     IRC$V_DELETED = 2,
     IRC$V_RRV = 3,  ! a record reference vector
-    IRC$V_NOPTRSZ = 4,  ! no pointer: a deleted SIDR pointer
-    IRC$V_FIRST = 7;  ! a SIDR's first pointer
+    IRC$V_NOPTRSZ = 4,  ! no pointer: a deleted SIDR pointer; prologues 1 and 2: a stub, or a SIDR without a count
+    IRC$V_FIRST = 7,  ! a SIDR's first pointer
+    IRC$K_HDRSZ2 = 7,  ! a data record's header, before its size
+    IRC$K_STUBSZ = 2,  ! a stub: control and ID
+    IRC$K_DCNTSZ = 4;  ! a SIDR's count of duplicates
 MACRO
     IRC$B_CONTROL = 0, 0, 8, 0 %,  ! IRC$V_
     IRC$W_ID = 1, 0, 16, 0 %,  ! record ID
     IRC$W_RRV_ID = 3, 0, 16, 0 %,  ! its RFA's ID
-    IRC$L_RRV_VBN = 5, 0, 32, 0 %;  ! and VBN
+    IRC$L_RRV_VBN = 5, 0, 32, 0 %,  ! and VBN
+    IRC$B_ID = 1, 0, 8, 0 %,  ! record ID
+    IRC$B_RRV_ID = 2, 0, 8, 0 %,  ! its RFA's ID
+    IRC$L_RRV_VBN2 = 3, 0, 32, 0 %;  ! and VBN
 
 ! $DLCDEF
 LITERAL
@@ -762,10 +773,10 @@ LITERAL
 ! $IDXDEF
 LITERAL
     W$K_LENGTH = 576,
-    X$K_WALK0 = 1924,  ! the walks
-    X$K_WALK1 = 2500,
-    X$K_WALK2 = 3076,
-    X$K_LENGTH = 3652,
+    X$K_WALK0 = 1928,  ! the walks
+    X$K_WALK1 = 2504,
+    X$K_WALK2 = 3080,
+    X$K_LENGTH = 3656,
     X$C_BOF = 0,  ! before the first record
     X$C_AFTER = 1,  ! after the stream's record
     X$C_AT = 2,  ! at it: a $FIND found it
@@ -836,6 +847,7 @@ MACRO
     X$L_NSLOT = 1912, 0, 32, 0 %,  ! buckets kept between services
     X$L_SLOTS = 1916, 0, 32, 0 %,  ! their slots, S$K_LENGTH each
     X$L_TICK = 1920, 0, 32, 0 %,  ! uses of them so far, for the least recently used
+    X$L_PLG = 1924, 0, 32, 0 %,  ! the prologue's version, 1, 2 or 3
     S$L_VBN = 0, 0, 32, 0 %,  ! the bucket, 0 if the slot is empty
     S$L_SIZE = 4, 0, 32, 0 %,  ! its bytes
     S$L_USE = 8, 0, 32, 0 %,  ! X$L_TICK when it was last used

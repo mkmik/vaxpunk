@@ -801,6 +801,8 @@ PLG$L_MRN = 108                         ; relative: highest record number
 PLG$L_EOF = 112                         ; relative: the VBN after the last bucket
 PLG$W_VER_NO = 116                      ; prologue version
 PLG$C_VER_REL = 1                       ; a relative file's
+PLG$C_VER_1 = 1                         ; an indexed file's whose keys are all strings, before prologue 3
+PLG$C_VER_2 = 2                         ; and one with other keys too
 PLG$C_VER_3 = 3                         ; an indexed file's
 PLG$W_CHECKSUM = 510                    ; the 16-bit sum of the block's first 255 words
         .ENDM   $PLGDEF
@@ -878,10 +880,13 @@ AREA$K_BLN = 64                         ; an area descriptor's size
 
         .MACRO  $BKTDEF
 BKT$B_CHECKCHAR = 0                     ; as the bucket's last byte
-BKT$B_INDEXNO = 1                       ; key of reference
+BKT$B_INDEXNO = 1                       ; key of reference; prologues 1 and 2: BKT$B_AREANO
+BKT$B_AREANO = 1                        ; prologues 1 and 2: the area it came from
 BKT$W_ADRSAMPLE = 2                     ; low word of its VBN
 BKT$W_FREESPACE = 4                     ; first free byte
 BKT$W_NXTRECID = 6                      ; next record ID
+BKT$B_NXTRECID = 6                      ; prologues 1 and 2: next record ID, a byte,
+BKT$B_LSTRECID = 7                      ; and the last free one
 BKT$L_NXTBKT = 8                        ; next bucket of the level
 BKT$B_LEVEL = 12                        ; 0 for data and SIDR buckets
 BKT$B_BKTCB = 13                        ; BKT$V_
@@ -901,8 +906,16 @@ IRC$K_HDRSZ = 9                         ; a data record's header, with a 4-byte 
 IRC$V_PTRSZ = 0                         ; the pointer's size less 2, 2 bits
 IRC$V_DELETED = 2
 IRC$V_RRV = 3                           ; a record reference vector
-IRC$V_NOPTRSZ = 4                       ; no pointer: a deleted SIDR pointer
+IRC$V_NOPTRSZ = 4                       ; no pointer: a deleted SIDR pointer; prologues 1 and 2: a stub, or a SIDR without a count
 IRC$V_FIRST = 7                         ; a SIDR's first pointer
+; Prologues 1 and 2: IDs are a byte, the RRV's pointer 4 bytes, a stub
+; holds a deleted record's ID, and a SIDR may have a count of duplicates.
+IRC$B_ID = 1                            ; record ID
+IRC$B_RRV_ID = 2                        ; its RFA's ID
+IRC$L_RRV_VBN2 = 3                      ; and VBN
+IRC$K_HDRSZ2 = 7                        ; a data record's header, before its size
+IRC$K_STUBSZ = 2                        ; a stub: control and ID
+IRC$K_DCNTSZ = 4                        ; a SIDR's count of duplicates
         .ENDM   $IRCDEF
 
         .MACRO  $DLCDEF
@@ -979,10 +992,11 @@ X$L_CTXSVBN = 1908                      ; the SIDR bucket the stream's record's 
 X$L_NSLOT = 1912                        ; buckets kept between services
 X$L_SLOTS = 1916                        ; their slots, S$K_LENGTH each
 X$L_TICK = 1920                         ; uses of them so far, for the least recently used
-X$K_WALK0 = 1924                        ; the walks
-X$K_WALK1 = 1924+W$K_LENGTH
-X$K_WALK2 = 1924+<2*W$K_LENGTH>
-X$K_LENGTH = 1924+<3*W$K_LENGTH>
+X$L_PLG = 1924                          ; the prologue's version, 1, 2 or 3
+X$K_WALK0 = 1928                        ; the walks
+X$K_WALK1 = 1928+W$K_LENGTH
+X$K_WALK2 = 1928+<2*W$K_LENGTH>
+X$K_LENGTH = 1928+<3*W$K_LENGTH>
 X$C_BOF = 0                             ; before the first record
 X$C_AFTER = 1                           ; after the stream's record
 X$C_AT = 2                              ; at it: a $FIND found it

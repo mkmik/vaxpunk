@@ -36,6 +36,11 @@ const FILES: &[(&str, usize)] = &[
     ("comp.idx", 1),
     ("idxm.idx", 2),
     ("uaf.idx", 4),
+    ("p1.idx", 2),
+    ("p2.idx", 2),
+    ("p2b.idx", 1),
+    ("p2i.idx", 3),
+    ("p2m.idx", 2),
     ("rel.rel", 1),
     ("relf.rel", 1),
 ];

@@ -178,6 +178,9 @@ pub struct Indexed<'a> {
     /// The record size of a FIX file, whose records have no size word
     /// unless compressed.
     pub(crate) fix: Option<usize>,
+    /// The prologue's version: 1 or 2 (the same layout: 2 has keys that
+    /// aren't strings), or 3.
+    pub plg: u16,
     pub keys: Vec<Key>,
     /// Where each key descriptor is: VBN and offset.
     pub key_at: Vec<(u32, usize)>,
@@ -215,8 +218,9 @@ pub(crate) struct Sidr {
 impl<'a> Indexed<'a> {
     pub fn parse(data: &'a [u8], attrs: &RecordAttrs) -> Result<Indexed<'a>> {
         let p = block(data, 1)?;
-        if u16::get(&p[0x74..]) != 3 {
-            return Err(RmsError::Unsupported("indexed file prologue other than 3"));
+        let plg = u16::get(&p[0x74..]);
+        if !(1..=3).contains(&plg) {
+            return Err(RmsError::Unsupported("indexed file prologue other than 1, 2 or 3"));
         }
         let fix = (attrs.rtype & 0xf == rfm::FIX)
             .then_some(if attrs.maxrec > 0 { attrs.maxrec } else { attrs.rsize } as usize);
@@ -229,7 +233,11 @@ impl<'a> Indexed<'a> {
             let b = block(data, vbn)?;
             let mut k = [0u8; KEY_LEN];
             k.copy_from_slice(&b[off..off + KEY_LEN]);
-            let k = KeyDesc(k);
+            let mut k = KeyDesc(k);
+            if plg < 3 {
+                // Nothing is compressed before prologue 3.
+                k.set_flags(k.flags() & !(keyflag::IDX_COMPR | keyflag::KEY_COMPR | keyflag::REC_COMPR));
+            }
             let size: usize = k.segs().map(|s| s.1).sum();
             if !(1..=8).contains(&k.segments()) || size != k.keysz() as usize || size == 0 {
                 return corrupt("key descriptor segments", vbn);
@@ -252,7 +260,7 @@ impl<'a> Indexed<'a> {
             d.copy_from_slice(&b[a % 8 * AREA_LEN..(a % 8 + 1) * AREA_LEN]);
             areas.push(AreaDesc(d));
         }
-        Ok(Indexed { data, fix, keys, key_at, areas, avbn })
+        Ok(Indexed { data, fix, plg, keys, key_at, areas, avbn })
     }
 
     /// The file's size in blocks.
@@ -346,11 +354,22 @@ impl<'a> Indexed<'a> {
         let short = RmsError::Corrupt { what: "record past the bucket's free space", vbn };
         while p < free {
             let ctrl = b[p];
-            let ps = (ctrl & irc::PTRSZ) as usize + 2;
-            let head = b.get(p..p + 5 + ps).filter(|_| p + 5 + ps <= free).ok_or(short.clone())?;
-            let id = u16::get(&head[1..]);
-            let (id2, vbn2) = (u16::get(&head[3..]), uint(&head[5..]) as u32);
-            p += 5 + ps;
+            let (id, id2, vbn2);
+            if self.plg < 3 {
+                // A byte's IDs and a 4-byte VBN; a stub, an ID kept for a
+                // deleted record, is its control byte and its ID.
+                let n = if ctrl & irc::NOPTRSZ != 0 { 2 } else { 7 };
+                let head = b.get(p..p + n).filter(|_| p + n <= free).ok_or(short.clone())?;
+                id = head[1] as u16;
+                (id2, vbn2) = if n == 2 { (0, 0) } else { (head[2] as u16, uint(&head[3..7]) as u32) };
+                p += n;
+            } else {
+                let ps = (ctrl & irc::PTRSZ) as usize + 2;
+                let head = b.get(p..p + 5 + ps).filter(|_| p + 5 + ps <= free).ok_or(short.clone())?;
+                id = u16::get(&head[1..]);
+                (id2, vbn2) = (u16::get(&head[3..]), uint(&head[5..]) as u32);
+                p += 5 + ps;
+            }
             if ctrl & irc::RRV != 0 {
                 out.push(Item::Rrv { ctrl, id, to: (vbn2, id2) });
                 continue;
@@ -380,6 +399,12 @@ impl<'a> Indexed<'a> {
         let mut p = BKT_HDR;
         let short = RmsError::Corrupt { what: "SIDR past the bucket's free space", vbn };
         while p < free {
+            if self.plg < 3 {
+                // A control byte, an ID, and a count of duplicates unless
+                // the control byte says there is none.
+                let c = *b.get(p).ok_or(short.clone())?;
+                p += if c & irc::NOPTRSZ != 0 { 2 } else { 6 };
+            }
             let size = b.get(p..p + 2).filter(|_| p + 2 <= free).ok_or(short.clone())?;
             let size = u16::get(size) as usize;
             let body = b.get(p + 2..p + 2 + size).filter(|_| p + 2 + size <= free).ok_or(short.clone())?;
@@ -391,17 +416,24 @@ impl<'a> Indexed<'a> {
                 (body.get(..ksz).ok_or(short.clone())?.to_vec(), ksz)
             };
             let mut ptrs = Vec::new();
+            // A pointer's ID is a byte before prologue 3.
+            let idsz = if self.plg < 3 { 1 } else { 2 };
             while q < body.len() {
-                let c = body[q];
+                let mut c = body[q];
                 if c & irc::NOPTRSZ != 0 {
                     ptrs.push((c, (0, 0)));
                     q += 1;
                     continue;
                 }
+                if self.plg < 3 && c & 0x20 != 0 {
+                    // RMS-11's mark of a key $UPDATE changed: deleted.
+                    c |= irc::DELETED;
+                }
                 let ps = (c & irc::PTRSZ) as usize + 2;
-                let ptr = body.get(q..q + 3 + ps).ok_or(RmsError::Corrupt { what: "SIDR pointer", vbn })?;
-                ptrs.push((c, (uint(&ptr[3..]) as u32, u16::get(&ptr[1..]))));
-                q += 3 + ps;
+                let ptr = body.get(q..q + 1 + idsz + ps).ok_or(RmsError::Corrupt { what: "SIDR pointer", vbn })?;
+                let id = if idsz == 1 { ptr[1] as u16 } else { u16::get(&ptr[1..]) };
+                ptrs.push((c, (uint(&ptr[1 + idsz..]) as u32, id)));
+                q += 1 + idsz + ps;
             }
             out.push(Sidr { key, ptrs });
         }
@@ -410,6 +442,9 @@ impl<'a> Indexed<'a> {
 
     /// An index bucket's keys and the buckets they lead to.
     pub(crate) fn index_bucket(&self, k: &Key, vbn: u32, b: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<u32>)> {
+        if self.plg < 3 {
+            return Self::index_bucket2(k, vbn, b);
+        }
         let ps = (b[13] >> 3 & 3) as usize + 2;
         let free = u16::get(&b[4..]) as usize;
         if free < BKT_HDR || free > b.len() - 4 {
@@ -436,6 +471,26 @@ impl<'a> Indexed<'a> {
             let Some(q) = q else { return corrupt("index keys run into their pointers", vbn) };
             keys.push(key);
             ptrs.push(uint(&b[q..q + ps]) as u32);
+        }
+        Ok((keys, ptrs))
+    }
+
+    /// A prologue 1 or 2 index bucket: entries of a control byte, a
+    /// pointer, its size in the control byte, and the key, whole.
+    fn index_bucket2(k: &Key, vbn: u32, b: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<u32>)> {
+        let free = Self::freespace(b, vbn)?;
+        let ksz = k.keysz() as usize;
+        let (mut keys, mut ptrs) = (Vec::new(), Vec::new());
+        let mut p = BKT_HDR;
+        while p < free {
+            let ps = (b[p] & irc::PTRSZ) as usize + 2;
+            let e = b
+                .get(p..p + 1 + ps + ksz)
+                .filter(|_| p + 1 + ps + ksz <= free)
+                .ok_or(RmsError::Corrupt { what: "index entry", vbn })?;
+            ptrs.push(uint(&e[1..1 + ps]) as u32);
+            keys.push(e[1 + ps..].to_vec());
+            p += 1 + ps + ksz;
         }
         Ok((keys, ptrs))
     }

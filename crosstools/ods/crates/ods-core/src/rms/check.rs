@@ -213,7 +213,12 @@ impl Checker<'_, '_> {
         if h.adrsample() != vbn as u16 {
             self.r.error(format!("address sample {} is not the bucket's VBN", h.adrsample()), key, vbn);
         }
-        if h.indexno() as usize != n {
+        if self.x.plg < 3 {
+            // Before prologue 3 the byte says the bucket's area.
+            if h.indexno() != area {
+                self.r.error(format!("bucket of area {} in area {area}", h.indexno()), key, vbn);
+            }
+        } else if h.indexno() as usize != n {
             self.r.error(format!("bucket of key {}", h.indexno()), key, vbn);
         }
         if h.level() != level {
@@ -448,7 +453,7 @@ impl Checker<'_, '_> {
         }
         let ps = (b[13] >> 3 & 3) as usize + 2;
         let vfree = u16::get(&b[b.len() - 4..]) as usize;
-        if vfree + 1 + keys.len() * ps + 4 != b.len() {
+        if self.x.plg == 3 && vfree + 1 + keys.len() * ps + 4 != b.len() {
             self.r.error(format!("VBN free space {vfree} doesn't fit {} pointers", keys.len()), key, vbn);
         }
         if keys.windows(2).any(|w| k.compare(&w[0], &w[1]) == Ordering::Greater) {
@@ -469,7 +474,13 @@ impl Checker<'_, '_> {
     /// Checks a primary data bucket's records and RRVs; returns their keys.
     fn data_items(&mut self, k: &Key, vbn: u32, b: &[u8], items: Vec<Item>) -> Vec<Vec<u8>> {
         let key = Some(0);
-        let nxtrecid = u16::get(&b[6..]);
+        // The next ID; 0 when every one up to 65535 was given. Before
+        // prologue 3 it is a byte, and free IDs are given again.
+        let nxtrecid = match u16::get(&b[6..]) {
+            _ if self.x.plg < 3 => u32::MAX,
+            0 => 65536,
+            n => n as u32,
+        };
         let mut ids = BTreeSet::new();
         let mut keys = Vec::new();
         for item in items {
@@ -480,7 +491,7 @@ impl Checker<'_, '_> {
             if !ids.insert(id) {
                 self.r.error(format!("record ID {id} used twice"), key, vbn);
             }
-            if id >= nxtrecid || id == 0 {
+            if id as u32 >= nxtrecid || id == 0 {
                 self.r.error(format!("record ID {id} not below the next ID, {nxtrecid}"), key, vbn);
             }
             match item {
