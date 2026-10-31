@@ -928,9 +928,11 @@ FILL:
         CLRL    BDB$L_VBN(R2)
         MOVB    #255, BDB$B_LO(R2)
         CLRB    BDB$B_HI(R2)
-        ADDL3   #BLOCK-1, IFB$L_EOF(R7), R1     ; the blocks it has to read
-        DIVL2   #BLOCK, R1
-        SUBL2   R4, R1
+        EXTZV   #9, #23, IFB$L_EOF(R7), R1      ; the blocks it has to read,
+        BITW    #BLOCK-1, IFB$L_EOF(R7)         ; unsigned: the end of file
+        BEQL    5$                              ; may pass 2**31
+        INCL    R1
+5$:     SUBL2   R4, R1
         INCL    R1
         BGEQ    10$
         CLRL    R1
@@ -1219,9 +1221,11 @@ BIO$SPACE::
         BGEQ    10$
         CLRL    R2
 10$:    MOVL    #RMS$_NORMAL, R0
-        ADDL3   #BLOCK-1, IFB$L_EOF(R7), R1
-        DIVL2   #BLOCK, R1
-        CMPL    R2, R1
+        EXTZV   #9, #23, IFB$L_EOF(R7), R1      ; its blocks, unsigned
+        BITW    #BLOCK-1, IFB$L_EOF(R7)
+        BEQL    15$
+        INCL    R1
+15$:    CMPL    R2, R1
         BLEQ    20$
         MOVL    R1, R2
         MOVL    #RMS$_EOF, R0
