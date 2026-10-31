@@ -78,6 +78,8 @@ T_TRUNCATE:
 T_BLOCKIO:
         .ASCIC  "BLOCK I/O"
 T_SPACE: .ASCIC  "SPACE"
+T_DUMP:  .ASCIC  "DUMP "
+T_GETS:  .ASCIC  "GETS"
 T_WRITE: .ASCIC  "WRITE"
 T_READ:  .ASCIC  "READ"
 T_SP:    .ASCIC  " "
@@ -119,6 +121,25 @@ SEQS:   SEQFILE VAR.SEQ, VAR, FAB$M_CR, 0, 0
         SEQFILE STMLF.SEQ, STMLF, FAB$M_CR, 0, 0
         SEQFILE STMCR.SEQ, STMCR, FAB$M_CR, 0, 0
         .BYTE   0
+; Sizes most significant byte first.
+MSBS:   SEQFILE VARMSB.SEQ, VAR, FAB$M_CR!FAB$M_MSB, 0, 0
+        SEQFILE VFCMSB.SEQ, VFC, FAB$M_PRN!FAB$M_MSB, 0, 2
+        SEQFILE FIXMSB.SEQ, FIX, FAB$M_MSB, 21, 0
+        SEQFILE STMMSB.SEQ, STMLF, FAB$M_CR!FAB$M_MSB, 0, 0
+        .BYTE   0
+DUMPS:  .ASCIC  "VARMSB.SEQ"
+        .ASCIC  "VFCMSB.SEQ"
+        .BYTE   0
+; FIX records by record number.
+KEYS:   SEQFILE FIXK.SEQ, FIX, 0, 21, 0
+        SEQFILE FIXKB.SEQ, FIX, FAB$M_BLK, 21, 0
+        .BYTE   0
+KREC:   .ASCII  "keyed record number  "     ; its number at the end
+KRECLEN = .-KREC
+MBNAME: .ASCIC  "MB.SEQ"
+MREC:   .ASCII  "multiblock record 000 and some more bytes to fill it out, "
+        .ASCII  "as many as its number says"
+MBRFA:  .BLKW   9                       ; the RFAs of records 1, 77 and 150
 
 ; The records each sequential file gets, .ASCIC; FIX files' are 21
 ; bytes, the others' as they are.
@@ -144,7 +165,7 @@ RELNAME:
         .ASCIC  "REL.REL"
 RELFNAME:
         .ASCIC  "RELF.REL"
-KEYNUM: .LONG   0                       ; a relative record number
+KEYNUM: .LONG   0                       ; a record number
 IDXNAME:
         .ASCIC  "IDX.IDX"
 TAGS:   .ASCII  "ALPHABETA GAMMADELTA"      ; key 1's values
@@ -178,6 +199,25 @@ RELNUMS:                                ; where REL.REL's records go
 20$:    BSBW    RELTEST
         BSBW    IDXTEST
         BSBW    BLKTEST
+        MOVAB   MSBS, R11
+30$:    TSTB    (R11)
+        BEQL    40$
+        BSBW    SEQTEST
+        MOVZBL  (R11), R0
+        ADDL2   R0, R11
+        ADDL2   #7, R11
+        BRB     30$
+40$:    BSBW    DUMPTEST
+        MOVAB   KEYS, R11
+50$:    TSTB    (R11)
+        BEQL    60$
+        BSBW    KEYTEST
+        MOVZBL  (R11), R0
+        ADDL2   R0, R11
+        ADDL2   #7, R11
+        BRB     50$
+60$:    BSBW    VARKEY
+        BSBW    MBTEST
         SAY     DONE
         BSBW    OUT
         MOVL    #RMS$_NORMAL, R0
@@ -188,21 +228,7 @@ RELNUMS:                                ; where REL.REL's records go
 ; puts in the middle with RAB$M_TPT, reading the file again after each.
 SEQTEST:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
-        SAY     SEQ
-        MOVZBL  (R11), R1
-        MOVAB   1(R11), R2
-        BSBW    ADDSTR
-        BSBW    OUT
-        MOVZBL  (R11), R0
-        MOVAB   1(R11)[R0], R10         ; its format
-        MOVAB   1(R11), FAB+FAB$L_FNA
-        MOVB    (R11), FAB+FAB$B_FNS
-        MOVB    #FAB$C_SEQ, FAB+FAB$B_ORG
-        MOVB    (R10), FAB+FAB$B_RFM
-        MOVB    1(R10), FAB+FAB$B_RAT
-        MOVB    2(R10), FAB+FAB$B_FSZ
-        MOVW    4(R10), FAB+FAB$W_MRS
-        MOVB    #FAB$M_PUT!FAB$M_GET!FAB$M_UPD!FAB$M_TRN, FAB+FAB$B_FAC
+        BSBW    SEQFAB
         $CREATE FAB=FAB
         SAY     CREATE
         BSBW    STS
@@ -294,6 +320,395 @@ SEQTEST:
         $OPEN   FAB=FAB
         BSBW    ATTRS
         $CLOSE  FAB=FAB
+        RSB
+
+; SEQFAB: R11 = a sequential file's test. Prints its name and sets the
+; FAB up to make it: R10 = its format, the record format first.
+SEQFAB:
+        .JSB_ENTRY  OUTPUT=<R10>, SCRATCH=<R2>
+        SAY     SEQ
+        MOVZBL  (R11), R1
+        MOVAB   1(R11), R2
+        BSBW    ADDSTR
+        BSBW    OUT
+        MOVZBL  (R11), R0
+        MOVAB   1(R11)[R0], R10         ; its format
+        MOVAB   1(R11), FAB+FAB$L_FNA
+        MOVB    (R11), FAB+FAB$B_FNS
+        MOVB    #FAB$C_SEQ, FAB+FAB$B_ORG
+        MOVB    (R10), FAB+FAB$B_RFM
+        MOVB    1(R10), FAB+FAB$B_RAT
+        MOVB    2(R10), FAB+FAB$B_FSZ
+        MOVW    4(R10), FAB+FAB$W_MRS
+        MOVB    #FAB$M_PUT!FAB$M_GET!FAB$M_UPD!FAB$M_TRN, FAB+FAB$B_FAC
+        RSB
+
+; DUMPTEST: the first bytes of each of DUMPS's files, read by block I/O.
+DUMPTEST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVAB   DUMPS, R6
+        MOVB    #FAB$M_BIO!FAB$M_GET, FAB+FAB$B_FAC
+10$:    MOVZBL  (R6)+, R1
+        BEQL    90$
+        MOVL    R6, R2
+        MOVL    R2, FAB+FAB$L_FNA
+        MOVB    R1, FAB+FAB$B_FNS
+        ADDL2   R1, R6
+        SAY     DUMP
+        BSBW    ADDSTR
+        BSBW    OUT
+        $OPEN   FAB=FAB
+        SAY     OPEN
+        BSBW    STS
+        BLBC    R0, 10$
+        $CONNECT RAB=RAB
+        MOVAB   BLK, RAB+RAB$L_UBF
+        MOVW    #1024, RAB+RAB$W_USZ
+        CLRL    RAB+RAB$L_BKT
+        $READ   RAB=RAB
+        SAY     READ
+        BSBW    STSRFA
+        BLBC    R0, 20$
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        BSBW    ADDDEC
+        SAY     SP
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        CMPL    R1, #64
+        BLEQU   15$
+        MOVL    #64, R1
+15$:    MOVAB   BLK, R2
+        BSBW    ADDREC
+20$:    BSBW    OUT
+        MOVAB   REC, RAB+RAB$L_UBF
+        MOVW    #512, RAB+RAB$W_USZ
+        $CLOSE  FAB=FAB
+        BRB     10$
+90$:    RSB
+
+; KEYTEST: R11 = a FIX file's test. Makes it with 30 records, then gets,
+; finds, updates and puts them by record number, RAB$C_KEY: across a
+; block, past the end, 0, with keys of other sizes, and in order after;
+; then numbers past where any file reaches.
+KEYTEST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        BSBW    SEQFAB
+        $CREATE FAB=FAB
+        SAY     CREATE
+        BSBW    STS
+        BLBS    R0, 5$
+        RSB
+5$:     $CONNECT RAB=RAB
+        MOVL    #1, R9
+10$:    MOVL    R9, R1
+        BSBW    MKKREC
+        MOVAB   KREC, RAB+RAB$L_RBF
+        MOVW    #KRECLEN, RAB+RAB$W_RSZ
+        $PUT    RAB=RAB
+        BSBW    COUNT
+        AOBLEQ  #30, R9, 10$
+        BSBW    COUNTS
+        MOVAB   KEYNUM, RAB+RAB$L_KBF
+        MOVB    #4, RAB+RAB$B_KSZ
+        MOVB    #RAB$C_KEY, RAB+RAB$B_RAC
+        MOVL    #1, R1
+        BSBW    KGET
+        MOVL    #23, R1
+        BSBW    KGET
+        MOVL    #24, R1
+        BSBW    KGET
+        MOVL    #30, R1
+        BSBW    KGET
+        MOVL    #31, R1
+        BSBW    KGET
+        CLRL    R1
+        BSBW    KGET
+        MOVB    #2, RAB+RAB$B_KSZ       ; a key of another size
+        MOVL    #3, R1
+        BSBW    KGET
+        CLRB    RAB+RAB$B_KSZ           ; and of none
+        MOVL    #3, R1
+        BSBW    KGET
+        MOVB    #4, RAB+RAB$B_KSZ
+        MOVL    #5, KEYNUM              ; $FIND, then $GETs in order
+        $FIND   RAB=RAB
+        SAY     FIND
+        BSBW    STSRFA
+        BSBW    OUT
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        BSBW    GET
+        BSBW    GET
+        MOVB    #RAB$C_KEY, RAB+RAB$B_RAC       ; $UPDATE, then the next
+        MOVL    #12, R1
+        BSBW    KGET
+        MOVAB   NEWFIX+1, RAB+RAB$L_RBF
+        MOVW    #21, RAB+RAB$W_RSZ
+        $UPDATE RAB=RAB
+        SAY     UPDATE
+        BSBW    STS
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        BSBW    GET
+        MOVB    #RAB$C_KEY, RAB+RAB$B_RAC
+        MOVL    #12, R1
+        BSBW    KGET
+        MOVL    #31, KEYNUM             ; $PUT by number: past the end,
+        MOVZBL  NEWFIX, R1              ; and on a record
+        MOVAB   NEWFIX+1, R2
+        BSBW    PUT
+        MOVL    #7, KEYNUM
+        MOVZBL  NEWFIX, R1
+        MOVAB   NEWFIX+1, R2
+        BSBW    PUT
+        MOVL    #31, R1
+        BSBW    KGET
+        MOVL    #7, R1
+        BSBW    KGET
+        MOVL    #40, KEYNUM             ; past the end
+        MOVZBL  NEWFIX, R1
+        MOVAB   NEWFIX+1, R2
+        BSBW    PUT
+        BISL2   #RAB$M_TPT, RAB+RAB$L_ROP       ; on a record, cutting the rest
+        MOVL    #10, KEYNUM
+        MOVZBL  NEWFIX, R1
+        MOVAB   NEWFIX+1, R2
+        BSBW    PUT
+        BICL2   #RAB$M_TPT, RAB+RAB$L_ROP
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        BSBW    GET
+        MOVB    #RAB$C_KEY, RAB+RAB$B_RAC
+        MOVL    #10, R1
+        BSBW    KGET
+        MOVL    #^X80000000, R1         ; numbers no file reaches
+        BSBW    KGET
+        MOVL    #^XFFFFFFFF, R1
+        BSBW    KGET
+        MOVL    #^XFFFFFFFF, KEYNUM
+        MOVZBL  NEWFIX, R1
+        MOVAB   NEWFIX+1, R2
+        BSBW    PUT
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        CLRB    RAB+RAB$B_KSZ
+        $CLOSE  FAB=FAB
+        SAY     CLOSE
+        BSBW    STS
+        $OPEN   FAB=FAB
+        BSBW    ATTRS
+        $CLOSE  FAB=FAB
+        RSB
+
+; KGET: R1 = a record number. $GETs it, and prints what GET does.
+KGET:
+        .JSB_ENTRY
+        MOVL    R1, KEYNUM
+        BSBW    GET
+        RSB
+
+; MKKREC: R1 = a number, up to 99. Puts it at the end of KREC. Uses R0
+; and R1.
+MKKREC:
+        .JSB_ENTRY
+        DIVL3   #10, R1, R0
+        ADDB3   #^A/0/, R0, KREC+KRECLEN-2
+        MULL2   #10, R0
+        SUBL2   R0, R1
+        ADDB3   #^A/0/, R1, KREC+KRECLEN-1
+        RSB
+
+; VARKEY: a $GET by record number of VAR.SEQ, which hasn't FIX records.
+VARKEY:
+        .JSB_ENTRY  SCRATCH=<R2>
+        SAY     SEQ
+        MOVZBL  SEQS, R1
+        MOVAB   SEQS+1, R2
+        BSBW    ADDSTR
+        BSBW    OUT
+        MOVAB   SEQS+1, FAB+FAB$L_FNA
+        MOVB    SEQS, FAB+FAB$B_FNS
+        MOVB    #FAB$M_GET, FAB+FAB$B_FAC
+        $OPEN   FAB=FAB
+        $CONNECT RAB=RAB
+        MOVB    #RAB$C_KEY, RAB+RAB$B_RAC
+        MOVB    #4, RAB+RAB$B_KSZ
+        MOVL    #1, R1
+        BSBW    KGET
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        CLRB    RAB+RAB$B_KSZ
+        $CLOSE  FAB=FAB
+        RSB
+
+; MBTEST: MB.SEQ, 200 VAR records over 22 blocks, put through 3 buffers
+; of 2 blocks with write behind, and read through 2 of 3 blocks with
+; read ahead: in order, by RFA back and forth, updated, and cut in the
+; middle by a $PUT. Then a $CONNECT with a negative multiblock count, and
+; one with a negative multibuffer count.
+MBTEST:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        SAY     SEQ
+        MOVZBL  MBNAME, R1
+        MOVAB   MBNAME+1, R2
+        BSBW    ADDSTR
+        BSBW    OUT
+        MOVAB   MBNAME+1, FAB+FAB$L_FNA
+        MOVB    MBNAME, FAB+FAB$B_FNS
+        MOVB    #FAB$C_SEQ, FAB+FAB$B_ORG
+        MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
+        MOVB    #FAB$M_CR, FAB+FAB$B_RAT
+        CLRW    FAB+FAB$W_MRS
+        CLRB    FAB+FAB$B_FSZ
+        MOVB    #FAB$M_PUT!FAB$M_GET!FAB$M_UPD!FAB$M_TRN, FAB+FAB$B_FAC
+        $CREATE FAB=FAB
+        SAY     CREATE
+        BSBW    STS
+        MOVB    #2, RAB+RAB$B_MBC
+        MOVB    #3, RAB+RAB$B_MBF
+        BISL2   #RAB$M_WBH, RAB+RAB$L_ROP
+        $CONNECT RAB=RAB
+        SAY     CONNECT
+        BSBW    STS
+        MOVL    #1, R9
+10$:    MOVL    R9, R1
+        BSBW    MKMREC
+        MOVAB   MREC, RAB+RAB$L_RBF
+        MOVW    R1, RAB+RAB$W_RSZ
+        $PUT    RAB=RAB
+        BSBW    COUNT
+        MOVAB   MBRFA, R1               ; the RFAs of 1, 77 and 150
+        CMPL    R9, #1
+        BEQL    15$
+        ADDL2   #6, R1
+        CMPL    R9, #77
+        BEQL    15$
+        ADDL2   #6, R1
+        CMPL    R9, #150
+        BNEQ    20$
+15$:    MOVL    RAB+RAB$W_RFA, (R1)
+        MOVW    RAB+RAB$W_RFA+4, 4(R1)
+20$:    AOBLEQ  #200, R9, 10$
+        BSBW    COUNTS
+        $CLOSE  FAB=FAB
+        SAY     CLOSE
+        BSBW    STS
+        $OPEN   FAB=FAB
+        SAY     OPEN
+        BSBW    STS
+        BSBW    ATTRS
+        MOVB    #3, RAB+RAB$B_MBC
+        MOVB    #2, RAB+RAB$B_MBF
+        BICL2   #RAB$M_WBH, RAB+RAB$L_ROP
+        BISL2   #RAB$M_RAH, RAB+RAB$L_ROP
+        $CONNECT RAB=RAB
+        SAY     CONNECT
+        BSBW    STS
+        BSBW    SUMALL
+        MOVB    #RAB$C_RFA, RAB+RAB$B_RAC       ; back and forth by RFA
+        MOVL    #12, R1
+        BSBW    MBGET
+        CLRL    R1
+        BSBW    MBGET
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        BSBW    GET
+        MOVB    #RAB$C_RFA, RAB+RAB$B_RAC
+        MOVL    #6, R1
+        BSBW    MBGET
+        MOVL    RAB+RAB$L_RBF, R0       ; its first byte changed
+        MOVB    #^A/M/, (R0)
+        $UPDATE RAB=RAB
+        SAY     UPDATE
+        BSBW    STS
+        MOVL    #12, R1
+        BSBW    MBGET
+        MOVL    #6, R1
+        BSBW    MBGET
+        MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
+        $REWIND RAB=RAB                 ; 100, then a $PUT that cuts the rest
+        MOVL    #100, R9
+30$:    $GET    RAB=RAB
+        SOBGTR  R9, 30$
+        BISL2   #RAB$M_TPT, RAB+RAB$L_ROP
+        MOVZBL  NEWREC, R1
+        MOVAB   NEWREC+1, R2
+        BSBW    PUT
+        BICL2   #RAB$M_TPT, RAB+RAB$L_ROP
+        $REWIND RAB=RAB
+        BSBW    SUMALL
+        $CLOSE  FAB=FAB
+        SAY     CLOSE
+        BSBW    STS
+        $OPEN   FAB=FAB
+        BSBW    ATTRS
+        MNEGB   #1, RAB+RAB$B_MBC       ; a negative multiblock count
+        $CONNECT RAB=RAB
+        SAY     CONNECT
+        BSBW    STS
+        CLRB    RAB+RAB$B_MBC           ; and multibuffer count
+        MNEGB   #1, RAB+RAB$B_MBF
+        $CONNECT RAB=RAB
+        SAY     CONNECT
+        BSBW    STS
+        BSBW    GET
+        $CLOSE  FAB=FAB
+        CLRB    RAB+RAB$B_MBF
+        BICL2   #RAB$M_RAH, RAB+RAB$L_ROP
+        RSB
+
+; MBGET: R1 = where in MBRFA an RFA is. $GETs the record there, and
+; prints what GET does.
+MBGET:
+        .JSB_ENTRY
+        MOVL    MBRFA(R1), RAB+RAB$W_RFA
+        MOVW    MBRFA+4(R1), RAB+RAB$W_RFA+4
+        BSBW    GET
+        RSB
+
+; MKMREC: R1 = a number, up to 999. Puts it in MREC, and R1 = the size
+; of the record that makes: 22 bytes, and 7 times it modulo 61 more.
+; Uses R0-R3.
+MKMREC:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R1
+        MOVL    #3, R2
+10$:    DIVL3   #10, R1, R0
+        MULL3   #10, R0, R3
+        SUBL3   R3, R1, R3
+        ADDB3   #^A/0/, R3, MREC+17[R2]
+        MOVL    R0, R1
+        SOBGTR  R2, 10$
+        MULL3   #7, (SP)+, R1
+        DIVL3   #61, R1, R0
+        MULL2   #61, R0
+        SUBL2   R0, R1
+        ADDL2   #22, R1
+        RSB
+
+; SUMALL: $GETs until one fails, and prints its status, how many records
+; it read, their bytes, and the sum of those bytes.
+SUMALL:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CLRL    R3
+        CLRL    R4
+        CLRL    R5
+10$:    $GET    RAB=RAB
+        BLBC    R0, 30$
+        INCL    R3
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        ADDL2   R1, R4
+        MOVL    RAB+RAB$L_RBF, R2
+20$:    DECL    R1
+        BLSS    10$
+        MOVZBL  (R2)+, R0
+        ADDL2   R0, R5
+        BRB     20$
+30$:    SAY     GETS
+        BSBW    ADDSTS
+        SAY     SP
+        MOVL    R3, R1
+        BSBW    ADDDEC
+        SAY     SP
+        MOVL    R4, R1
+        BSBW    ADDDEC
+        SAY     SP
+        MOVL    R5, R1
+        BSBW    ADDDEC
+        BSBW    OUT
         RSB
 
 ; RELTEST: REL.REL, VAR records in cells by number, up to 100: $PUTs by

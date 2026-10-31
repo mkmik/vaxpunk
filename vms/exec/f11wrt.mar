@@ -1447,8 +1447,7 @@ CLUSTERS:
 ; disk's error.
 ; vaxpunk: VMS's SET VOLUME, installed with CMKRNL, rewrites the home
 ; blocks itself with $QIOs through INDEXF.SYS, and changes the VCB in
-; kernel mode; SET.EXE here has no privileges of its own, so a volume's
-; owner without CMKRNL can't.
+; kernel mode; here SET.EXE, a known image with CMKRNL, calls this.
         .ENTRY  FIL$SETVOLUME, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         MOVL    #SS$_BADPARAM, R0

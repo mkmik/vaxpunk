@@ -198,7 +198,13 @@ LITERAL
 
 ! $PCBDEF
 LITERAL
-    PCB$K_LENGTH = 696,
+    PCB$K_LENGTH = 712,
+    PCB$K_RMSMBF_SDK = 0,  ! in PCB$AB_RMSDFMBF and SGN$AB_RMSDFMBF: sequential files on disks,
+    PCB$K_RMSMBF_SMT = 1,  ! magnetic tapes,
+    PCB$K_RMSMBF_SUR = 2,  ! and unit record devices,
+    PCB$K_RMSMBF_REL = 3,  ! relative files,
+    PCB$K_RMSMBF_IDX = 4,  ! indexed files
+    PCB$K_RMSMBF = 5,
     PCB$C_MAXCHAN = 31,  ! channels 1-31, a bit each in PCB$L_CHANS
     PCB$V_WAKEPEN = 0,  ! a $WAKE came that $HIBER hasn't seen
     PCB$V_WALL = 1,  ! the wait is for all of EFWM
@@ -265,7 +271,15 @@ MACRO
     PCB$L_BUFIO = 672, 0, 32, 0 %,  ! buffered I/O requests it has made
     PCB$L_DIRIO = 676, 0, 32, 0 %,  ! direct I/O requests it has made
     PCB$L_RIGHTS = 680, 0, 32, 0 %,  ! its rights list, a block of pool, or 0: a longword count of quadwords, its size, then the quadwords, an identifier and its attributes each
-    PCB$Q_IMAGPRIV = 688, 0, 64, 0 %;  ! those its known image gives it: $SETPRV may enable them too until the image exits
+    PCB$Q_IMAGPRIV = 688, 0, 64, 0 %,  ! those its known image gives it: $SETPRV may enable them too until the image exits
+    PCB$B_RMSDFMBC = 696, 0, 8, 0 %,  ! SET RMS_DEFAULT's: blocks in an RMS buffer, 0 for the system's
+    PCB$AB_RMSDFMBF = 697, 0, 0, 0 %,  ! RMS buffers, PCB$K_RMSMBF_ bytes, 0 for the system's
+    PCB$B_RMSDFNBC = 702, 0, 8, 0 %,  ! network block count, 0 for the system's
+    PCB$B_RMSPROLOG = 703, 0, 8, 0 %,  ! an indexed file's prologue, 0 for the system's
+    PCB$W_RMSEXTEND = 704, 0, 16, 0 %,  ! blocks a file is extended by, 0 for the system's
+    PCB$W_RMSPATHTMO = 706, 0, 16, 0 %,  ! PATH_TIMEOUT, seconds, 0 for the system's
+    PCB$B_RMSQUERY = 708, 0, 8, 0 %,  ! QUERY_LOCK: 0 the system's, 1 enabled, 2 disabled
+    PCB$B_RMSCONTEND = 709, 0, 8, 0 %;  ! CONTENTION_POLICY: 0 the system's, 1 never, 2 sometimes, 3 always
 
 ! $CEBDEF
 LITERAL
@@ -598,7 +612,7 @@ MACRO
 
 ! $IFBDEF
 LITERAL
-    IFB$K_LENGTH = 600,  ! the fixed part
+    IFB$K_LENGTH = 612,  ! the fixed part
     IFB$V_WRITE = 0,  ! it may be written: $CREATE made it or $OPEN opened it for that
     IFB$V_DIRTY = 1,  ! the buffer holds what the file hasn't yet
     IFB$V_HDR = 2,  ! the header changed: its end of file
@@ -639,6 +653,11 @@ MACRO
     IFB$AB_HDR = 80, 0, 0, 0 %,  ! the file's header
     IFB$W_VERLIMIT = 592, 0, 16, 0 %,  ! its name's version limit, in its directory
     IFB$L_RLB = 596, 0, 32, 0 %,  ! the record locks the stream holds: a list of RLBs, or 0
+    IFB$W_RTDEQ = 600, 0, 16, 0 %,  ! sequential: the blocks an extension takes at least, FAB$W_DEQ at $OPEN or $CREATE, else the header's
+    IFB$B_MBC = 602, 0, 8, 0 %,  ! sequential: blocks in each of the stream's buffers
+    IFB$B_MBF = 603, 0, 8, 0 %,  ! and its buffers, which $CONNECT gives it
+    IFB$L_BDB = 604, 0, 32, 0 %,  ! sequential: the buffer used last, a BDB, or 0
+    IFB$L_USE = 608, 0, 32, 0 %,  ! sequential: buffers used, a count, which says which was used least recently
     RLB$L_NEXT = 0, 0, 32, 0 %,  ! the next of the stream's, or 0
     RLB$L_LKID = 4, 0, 32, 0 %,  ! the lock
     RLB$L_ID = 8, 0, 32, 0 %,  ! the lock's name: the RFA's ID, a longword,
