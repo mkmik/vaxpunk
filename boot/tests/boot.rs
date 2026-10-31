@@ -1091,6 +1091,8 @@ const BACKUP: Phase = Phase {
 /// session). SET RMS_DEFAULT sets the process's multiblock count and
 /// indexed files' buffers, and the system's extension; a prologue that
 /// isn't one sets nothing; SHOW RMS_DEFAULT shows them as OpenVMS's does.
+/// A prologue default of 2 makes CONVERT/FDL's indexed file, whose FDL
+/// names none, prologue 1, as its key is a string.
 const RMS: Phase = Phase {
     name: "rms",
     secs: 90,
@@ -1121,6 +1123,19 @@ const RMS: Phase = Phase {
                 "SET RMS_DEFAULT/SYSTEM/EXTEND_QUANTITY=0\r",
             ),
         ),
+        (
+            "System      0              7                 10",
+            1,
+            "CREATE DKB0:[RMS]P.FDL\rFILE\rORGANIZATION indexed\rKEY 0\rDUPLICATES yes\rSEG0_LENGTH 1\r\x1a",
+        ),
+        (
+            "SEG0_LENGTH 1",
+            1,
+            concat!(
+                "SET DEFAULT DKB0:[RMS]\rSET RMS_DEFAULT/PROLOG=2\rCONVERT/FDL=P.FDL P.FDL P2.IDX\r",
+                "DIRECTORY/FULL P2.IDX\rSET RMS_DEFAULT/PROLOG=0\rSET DEFAULT DKB0:[000000]\r",
+            ),
+        ),
     ],
     lines: &[
         "SPILLTEST: ok",
@@ -1133,6 +1148,7 @@ const RMS: Phase = Phase {
             "Process     0              0                  0\n",
             "System      0              7                 10\n",
         ),
+        "File organization:  Indexed, Prolog: 1, Using 1 key",
     ],
 };
 

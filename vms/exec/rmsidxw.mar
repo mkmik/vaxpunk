@@ -53,6 +53,7 @@
         $XABDEF
         $XABKEYDEF
         $XABALLDEF
+        $PCBDEF
 
         .EXTERNAL RMS$WRITEBKT, RMS$CHECKSUM, RMS$FINDXAB, RMS$SYNC, FIL$EXTEND, FIL$WRITEHDR
         .EXTERNAL IDX$OPEN, IDX$KEYDESC, IDX$GETKEY, IDX$KEYCMP, IDX$ISNULL
@@ -61,6 +62,7 @@
         .EXTERNAL IDX$PTRNEXT, IDX$MATCHKEY, IDX$RDPLG, IDX$AB_PLG, IDX$NEXT
         .EXTERNAL IDX$DECODE, IDX$KEEP, IDX$SETCTX, IDX$KEYOK
         .EXTERNAL RMS$LOCKREC, RMS$UNLOCKAUTO, RMS$RECHELD
+        .EXTERNAL SCH$GL_CURPCB, SGN$GB_RMSPROLOG
 
 BLOCK = 512
 MAXBKS = 63                             ; the largest bucket, blocks
@@ -2993,7 +2995,8 @@ IDX$CREATE::
 
 ; PROLOG: R10 = a FAB, R5 = its keys. R0 = the prologue IDX$CREATE
 ; makes: 3, unless the primary key's XABKEY asks for 1 or 2 in
-; XAB$B_PROLOG, or its segments overlap, which prologue 3 can't take;
+; XAB$B_PROLOG, or, where that is 0, SET RMS_DEFAULT/PROLOG's process
+; then system default does, or its segments overlap, which prologue 3 can't take;
 ; then 1 if every key is a string, 2 if not, and 3 for a collated key,
 ; as VMS's. Keeps every other register.
 PROLOG:
@@ -3004,12 +3007,18 @@ PROLOG:
         BSBW    KEYXAB
         BSBW    OVERLAP                 ; segments that overlap: 1 or 2
         BLBS    R0, 5$
+        CLRL    R2
         CMPB    XAB$B_BLN(R1), #XAB$B_PROLOG+1
-        BLSSU   90$
-        CMPB    XAB$B_PROLOG(R1), #PLG$C_VER_2
-        BGTRU   90$
-        TSTB    XAB$B_PROLOG(R1)
+        BLSSU   2$
+        MOVZBL  XAB$B_PROLOG(R1), R2    ; R2 = the prologue asked for
+        BNEQ    4$
+2$:     MOVL    SCH$GL_CURPCB, R2       ; else the process's default,
+        MOVZBL  PCB$B_RMSPROLOG(R2), R2
+        BNEQ    4$
+        MOVZBL  SGN$GB_RMSPROLOG, R2    ; then the system's
         BEQL    90$
+4$:     CMPL    R2, #PLG$C_VER_2
+        BGTRU   90$
 5$:     MOVL    #PLG$C_VER_1, R3
         CLRL    R2                      ; R2 = a key
 10$:    CMPL    R2, R5
