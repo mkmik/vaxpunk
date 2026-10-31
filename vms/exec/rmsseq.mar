@@ -315,8 +315,10 @@ SEQLOCATE:
 ; each record takes FAB$W_MRS bytes, and a pad byte after an odd size,
 ; and in a FAB$M_BLK file each block holds as many as fit, from its
 ; start. R0 = RMS$_NORMAL, RMS$_RAC for another record format, RMS$_KSZ,
-; RMS$_KEY for 0 or one past where a file can reach, or SS$_ACCVIO. Uses
-; R0-R3.
+; RMS$_KEY for 0, RMS$_EOF for one past where a file can reach, or
+; SS$_ACCVIO. As VMS's, a number of 2**31 and past that isn't a
+; FAB$M_BLK file's counts back from 0: R0 = RMS$_RFA, and the RAB's RFA
+; the place before the file it gives. Uses R0-R3.
 KEYPOS:
         .JSB_ENTRY  OUTPUT=<R1>, SCRATCH=<R2, R3>
         MOVL    #RMS$_RAC, R0
@@ -338,8 +340,10 @@ KEYPOS:
         BBC     #FAB$V_BLK, IFB$B_RAT(R7), 50$
         DIVL3   R2, #BLOCK, R3          ; R3 = records in a block
         BEQL    50$
+        TSTL    R1
+        BLSS    80$
         DIVL3   R3, R1, R0              ; R0 = its block, from 0
-        CMPL    R0, #^X7FFFFF
+        CMPL    R0, #^X3FFFFF           ; the offset stays under 2**31
         BGTRU   80$
         MULL2   R0, R3
         SUBL2   R3, R1
@@ -347,13 +351,21 @@ KEYPOS:
         MULL2   #BLOCK, R0
         ADDL2   R0, R1
         BRB     88$
-50$:    DIVL3   R2, #^X7FFFFFFF, R0
+50$:    TSTL    R1
+        BLSS    70$
+        DIVL3   R2, #^X7FFFFFFF, R0
         CMPL    R1, R0
         BGTRU   80$
         MULL2   R2, R1
 88$:    MOVL    #RMS$_NORMAL, R0
         RSB
-80$:    MOVL    #RMS$_KEY, R0
+70$:    EMUL    R1, R2, #0, R2          ; before the file: R2 and R3 its place
+        BICW3   #^C<BLOCK-1>, R2, RAB$W_RFA4(R10)
+        ASHQ    #-9, R2, R2
+        ADDL3   #1, R2, RAB$L_RFA0(R10)
+        MOVL    #RMS$_RFA, R0
+        RSB
+80$:    MOVL    #RMS$_EOF, R0
         RSB
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    RSB
@@ -494,7 +506,8 @@ BLKFIT:
 ; of file, zeros up to it, and the stream stays where it was. R0 =
 ; RMS$_NORMAL, RMS$_FAC without FAB$M_PUT, RMS$_NEF if the stream isn't
 ; at the end and RAB$M_TPT isn't set, or the record's number is one the
-; file has, KEYPOS's error, WRITEREC's, SS$_ACCVIO, or RMS$_WER if the
+; file has or before it, RMS$_FUL for one past where a file can reach,
+; KEYPOS's other errors, WRITEREC's, SS$_ACCVIO, or RMS$_WER if the
 ; file system fails, with its error in RAB$L_STV. Uses R0-R6.
 SEQ$PUT::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
@@ -508,9 +521,18 @@ SEQ$PUT::
         IFNORD  R5, (R6), 85$
 3$:     CMPB    RAB$B_RAC(R10), #RAB$C_KEY      ; by number: there
         BNEQ    5$
+        CLRL    RAB$L_RFA0(R10)
+        CLRW    RAB$W_RFA4(R10)
         BSBW    KEYPOS
-        BLBC    R0, 99$
-        MOVL    #RMS$_RSZ, R0
+        BLBS    R0, 2$
+        CMPL    R0, #RMS$_EOF           ; past where a file can reach
+        BNEQ    1$
+        MOVL    #RMS$_FUL, R0
+1$:     CMPL    R0, #RMS$_RFA           ; before it
+        BNEQ    99$
+        MOVL    #RMS$_NEF, R0
+        RSB
+2$:     MOVL    #RMS$_RSZ, R0
         CMPW    R5, IFB$W_MRS(R7)
         BNEQ    99$
         DIVL3   #BLOCK, R1, R0

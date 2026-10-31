@@ -321,7 +321,8 @@ M_OPENFDL:
 
 ; INIT: makes the FAB, RAB and XABs as an empty FDL file has them: a
 ; sequential file of variable records with carriage return control, no
-; areas, no keys. Uses R0-R5.
+; areas, no keys, and XAB$B_PROLOG 0, for RMS to choose, as VMS's. Uses
+; R0-R5.
 INIT:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         MOVC5   #0, (SP), #0, #FAB$C_BLN, FDL$AB_FAB
@@ -339,7 +340,6 @@ INIT:
         MOVB    #XAB$C_KEY, XAB$B_COD(R1)
         MOVB    #XAB$C_KEYLEN, XAB$B_BLN(R1)
         MOVB    R0, XAB$B_REF(R1)
-        MOVB    #XAB$C_PRG3, XAB$B_PROLOG(R1)
         AOBLSS  #MAXKEYS, R0, 10$
         CLRL    R0
 20$:    MULL3   #XAB$C_ALLLEN, R0, R1

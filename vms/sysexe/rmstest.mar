@@ -387,7 +387,8 @@ DUMPTEST:
 
 ; KEYTEST: R11 = a FIX file's test. Makes it with 30 records, then gets,
 ; finds, updates and puts them by record number, RAB$C_KEY: across a
-; block, past the end, 0, with keys of other sizes, and in order after.
+; block, past the end, 0, with keys of other sizes, and in order after;
+; then numbers past where any file reaches.
 KEYTEST:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         BSBW    SEQFAB
@@ -476,6 +477,14 @@ KEYTEST:
         MOVB    #RAB$C_KEY, RAB+RAB$B_RAC
         MOVL    #10, R1
         BSBW    KGET
+        MOVL    #^X80000000, R1         ; numbers no file reaches
+        BSBW    KGET
+        MOVL    #^XFFFFFFFF, R1
+        BSBW    KGET
+        MOVL    #^XFFFFFFFF, KEYNUM
+        MOVZBL  NEWFIX, R1
+        MOVAB   NEWFIX+1, R2
+        BSBW    PUT
         MOVB    #RAB$C_SEQ, RAB+RAB$B_RAC
         CLRB    RAB+RAB$B_KSZ
         $CLOSE  FAB=FAB
