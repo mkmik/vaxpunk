@@ -71,8 +71,8 @@ wait, in `RWAST`, until the requests the device has are done.
    calls `EXE$READLOCK` or `EXE$WRITELOCK`. They call `MMG$IOLOCK`,
    which reads each page's PTE with a new PAL call, `RDPTE`, checks the
    caller's mode may write (read) it, raises a word count per PFN in a
-   new table of the PFN database, `MMG$GL_PFNREFCNT`, and puts the PFN
-   in the list; `IRP$L_BOFF` is the offset in the first page, and
+   new table of the PFN database, `MMG$GL_PFNREFCNT`, or fails with
+   `SS$_EXQUOTA` once it holds 32,767, and puts the PFN in the list; `IRP$L_BOFF` is the offset in the first page, and
    `IRP$V_LOCKED` says it holds the locks. `IOC$REQCOM` unlocks them
    (`MMG$UNLOCK`), and so does `IOC$CANCELQ` for a request it frees
    unstarted.
@@ -112,7 +112,10 @@ wait, in `RWAST`, until the requests the device has are done.
    `IOWAIT` too, since a process `$DELPRC` deletes is no longer found by
    its PID when its IRP completes. `$CANCEL` lets
    such a request end as it would have.
-8. **The idle loop looks for work after lowering IPL.** `SCH$SCHED`
+8. **`$QIO` clears the IOSB**, as VMS's does: a disk request is no
+   longer done when `$QIO` returns, so a status left from before must not
+   end `$QIOW`'s wait.
+9. **The idle loop looks for work after lowering IPL.** `SCH$SCHED`
    checks the computable queues again once `IPL$_RESCHED` has let the
    pending forks through, before `WTINT`, so a completion that came while
    it looked doesn't wait for the next tick.

@@ -329,9 +329,10 @@ FREEPFN:
 ; access mode that must be able to. Locks each page of the buffer for a
 ; direct I/O, as VMS's MMG$IOLOCK: counts the lock in its PFN, which no
 ; deletion frees while it is held (FREEPFN), and puts the PFN in the
-; list, for the device. R0 = SS$_NORMAL and R1 = the pages locked, or
-; SS$_ACCVIO, with none locked, if a page isn't there or the mode may not
-; read (write) it. Uses R0-R3.
+; list, for the device. R0 = SS$_NORMAL and R1 = the pages locked, or,
+; with none locked, SS$_ACCVIO if a page isn't there or the mode may not
+; read (write) it, or SS$_EXQUOTA if a page has as many locks as its
+; count holds, 32,767. Uses R0-R3.
 ; vaxpunk: it lists the PFNs, where VMS's returns the address of the
 ; first page's PTE, SVAPTE, and it faults no page in, as there is no
 ; paging.
@@ -362,17 +363,24 @@ MMG$IOLOCK::
         EVAX_SRL R0, #PTE$V_PFN, R0
         CMPL    R0, MMG$GL_MAXPFN
         BGEQU   70$
-        MOVL    R0, (R2)[R7]
         MOVL    MMG$GL_PFNREFCNT, R1
+        MOVZWL  (R1)[R0], R3
+        BICL2   #DELCON, R3
+        CMPL    R3, #DELCON-1
+        BGEQU   75$                     ; its count is full, up to DELCON
+        MOVL    R0, (R2)[R7]
         INCW    (R1)[R0]
         ADDL2   #MMG$C_PAGESIZE, R5
         INCL    R7
         BRB     10$
-70$:    MOVL    R2, R0                  ; what it locked goes back
+70$:    MOVL    #SS$_ACCVIO, -(SP)
+        BRB     78$
+75$:    MOVL    #SS$_EXQUOTA, -(SP)
+78$:    MOVL    R2, R0                  ; what it locked goes back
         MOVL    R7, R1
         BSBW    MMG$UNLOCK
         CLRL    R1
-        MOVL    #SS$_ACCVIO, R0
+        MOVL    (SP)+, R0
         BRB     90$
 80$:    MOVL    R4, R1
         MOVL    #SS$_NORMAL, R0

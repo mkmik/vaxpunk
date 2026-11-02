@@ -958,7 +958,7 @@ as a kernel mode AST.
   driver's `DDT$L_CLONEDUCB` sets up or refuses; a network unit needs
   `NETMBX`. `$DASSGN` cancels the channel's requests and gives it back.
 - **`$QIO`** checks the channel and that the caller can write the IOSB,
-  clears the event flag, and calls the FDT routine at `IPL$_SYNCH` with
+  clears the IOSB and the event flag, and calls the FDT routine at `IPL$_SYNCH` with
   its arguments. That checks the function and its parameters, a failure
   being `$QIO`'s status, makes the IRP (`$IRPDEF`, `IOC$ALLOCIRP`, from
   pool, up to 64 KB with a buffered read's prompt and data), and does

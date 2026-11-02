@@ -537,7 +537,8 @@ IOC$DELETE_UCB::
         RET
 
 ; $QIO efn, chan, func, iosb, astadr, astprm, p1, p2, p3, p4, p5, p6:
-; requests I/O on the channel's device: clears event flag efn and calls
+; requests I/O on the channel's device: clears iosb and event flag efn, as
+; VMS's does, so that a stale status doesn't end a $QIOW, and calls
 ; the device's driver, whose FDT routine, its DDT's DDT$L_FDT, checks
 ; func and the parameters,
 ; which it may fail, and does the I/O or queues it. Once it is done,
@@ -564,6 +565,7 @@ EXE$QIO::
         MOVL    16(AP), R0
         BEQL    10$
         IFNOWRT #8, (R0), 85$
+        CLRQ    (R0)                    ; no status until the request ends
 10$:    PUSHL   4(AP)
         CALLS   #1, G^EXE$CLREF
         BLBC    R0, 90$
@@ -793,16 +795,22 @@ IOC$INITIATE::
 ; at IRP$L_BUFADR, with IRP$K_MAXPFN longwords past it. Checks that the
 ; caller's mode, IRP$B_PMOD, may write each page of the buffer, and locks
 ; them (MMG$IOLOCK), their PFNs past the packet, IRP$L_BOFF the offset in
-; the first, until IOC$REQCOM unlocks them. EXE$WRITELOCK does the same
-; for an IRP that writes the buffer's bytes, which the mode must be able
-; to read. R0 = SS$_NORMAL, or SS$_ACCVIO with none locked. IPL$_SYNCH
-; or below. Uses R0-R2.
-; vaxpunk: they return the status, where VMS's end the request.
+; the first, until IOC$REQCOM unlocks them. R0 = SS$_NORMAL, or, with
+; none locked, SS$_ACCVIO, or SS$_EXQUOTA for a page locked too many
+; times. IPL$_SYNCH or below. Uses R0-R2.
+; vaxpunk: it returns the status, where VMS's ends the request.
 EXE$READLOCK::
         .JSB_ENTRY  SCRATCH=<R2>
         MOVL    #1, R0
         BRB     LOCK
 
+; EXE$WRITELOCK: R3 = a direct I/O's IRP that writes the IRP$L_BCNT bytes
+; at IRP$L_BUFADR, with IRP$K_MAXPFN longwords past it. Checks that the
+; caller's mode, IRP$B_PMOD, may read each page of the buffer, and locks
+; them as EXE$READLOCK does. R0 = SS$_NORMAL, or, with none locked,
+; SS$_ACCVIO, or SS$_EXQUOTA for a page locked too many times. IPL$_SYNCH
+; or below. Uses R0-R2.
+; vaxpunk: it returns the status, where VMS's ends the request.
 EXE$WRITELOCK::
         .JSB_ENTRY  SCRATCH=<R2>
         CLRL    R0
