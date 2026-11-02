@@ -31,6 +31,8 @@
 ; wildcards, its owner, protection and ACL, $GET_SECURITY's, the ACEs as
 ; $FORMAT_ACL writes them (docs/adr/0040-acls-in-file-headers-and-rights-
 ; identifiers.md).
+; SHOW RMS_DEFAULT shows the process's RMS defaults, $GETJPI's, and the
+; system's, $GETSYI's, as VMS's does.
 ; SHOW LOGICAL translates a logical name, or lists the names of each
 ; table a table name names, sorted. VMS installs SHOW.EXE with CMKRNL,
 ; NETMBX and WORLD so that it can read the tables in kernel mode, and
@@ -144,6 +146,36 @@ JPIITEMS:                               ; what $GETJPIW returns of a process
         .ADDRESS BYTCNT
         .LONG   0
         .LONG   0
+; SHOW RMS_DEFAULT's: the process's RMS defaults, then the system's, a
+; longword each in the order of its columns.
+        .MACRO  RMSITEM CODE, AT
+        .WORD   4, CODE
+        .ADDRESS AT
+        .LONG   0
+        .ENDM   RMSITEM
+RMSJPI: RMSITEM JPI$_RMS_DFMBC, PRMS
+        RMSITEM JPI$_RMS_DFMBFIDX, PRMS+4
+        RMSITEM JPI$_RMS_DFMBFREL, PRMS+8
+        RMSITEM JPI$_RMS_DFMBFSDK, PRMS+12
+        RMSITEM JPI$_RMS_DFMBFSMT, PRMS+16
+        RMSITEM JPI$_RMS_DFMBFSUR, PRMS+20
+        RMSITEM JPI$_RMS_DFNBC, PRMS+24
+        RMSITEM JPI$_RMS_PROLOGUE, PRMS+28
+        RMSITEM JPI$_RMS_EXTEND_SIZE, PRMS+32
+        .LONG   0
+RMSSYI: RMSITEM SYI$_RMS_DFMBC, SRMS
+        RMSITEM SYI$_RMS_DFMBFIDX, SRMS+4
+        RMSITEM SYI$_RMS_DFMBFREL, SRMS+8
+        RMSITEM SYI$_RMS_DFMBFSDK, SRMS+12
+        RMSITEM SYI$_RMS_DFMBFSMT, SRMS+16
+        RMSITEM SYI$_RMS_DFMBFSUR, SRMS+20
+        RMSITEM SYI$_RMS_DFNBC, SRMS+24
+        RMSITEM SYI$_RMS_PROLOGUE, SRMS+28
+        RMSITEM SYI$_RMS_EXTEND_SIZE, SRMS+32
+        .LONG   0
+PRMS:   .BLKL   9
+SRMS:   .BLKL   9
+RMSCOLS:.BYTE   24, 34, 43, 51, 61, 0   ; where the buffer counts end
 SYIITEMS:                               ; and $GETSYIW of the system
         .WORD   8, SYI$_VERSION
         .ADDRESS VERSION
@@ -524,11 +556,14 @@ CHARS:  .BYTE   TT$V_PASSALL, NOT!ALT
         BEQL    PROCESS
         CMPB    R0, #^A/L/
         BEQL    2$
+        CMPB    R0, #^A/R/
+        BEQL    1$
         CMPW    WHAT, #^A/SE/
         BNEQ    4$
         CALLS   #0, SECURITY
         RET
 4$:     BRW     SYSTEM
+1$:     BRW     SHOWRMS
 2$:     CALLS   #0, SHOWLOG
         RET
 3$:     BRW     SHOWCPU
@@ -1044,6 +1079,41 @@ SHOWERR:
 60$:    MOVL    #SS$_NORMAL, R0
         RET
 
+; SHOW RMS_DEFAULT: the process's RMS defaults, $GETJPI's, and the
+; system's, $GETSYI's, under VMS's headings.
+; ponytail: RMS has no query locks, contention policy or path timeouts,
+; so their lines say what VMS's say when no one has set them.
+SHOWRMS:
+        $GETJPIW_S ITMLST=RMSJPI
+        BLBC    R0, 90$
+        $GETSYIW_S ITMLST=RMSSYI
+        BLBC    R0, 90$
+        PRINT   "          MULTI-  |                MULTIBUFFER COUNTS               | NETWORK"
+        PRINT   "          BLOCK   | Indexed  Relative            Sequential         |  BLOCK"
+        PRINT   "          COUNT   |                     Disk   Magtape  Unit Record |  COUNT"
+        ADDTEXT "Process"
+        MOVAL   PRMS, R6
+        BSBW    RMSLINE
+        ADDTEXT "System"
+        MOVAL   SRMS, R6
+        BSBW    RMSLINE
+        PRINT   ""
+        PRINT   "          Prolog    Extend Quantity     PATH_TIMEOUT"
+        ADDTEXT "Process"
+        MOVAL   PRMS, R6
+        CLRL    R4
+        BSBW    RMSLINE2
+        ADDTEXT "System"
+        MOVAL   SRMS, R6
+        MOVL    #10, R4
+        BSBW    RMSLINE2
+        PRINT   ""
+        PRINT   "          QUERY_LOCK      CONTENTION_POLICY"
+        PRINT   "Process    System            System"
+        PRINT   "System     Enabled           Never"
+        MOVL    #SS$_NORMAL, R0
+90$:    RET
+
 ; SHOW QUOTA
 SHOWQUOTA:
         GETVALUE "DISK", QDSC, QDSC
@@ -1336,6 +1406,49 @@ PHYSICAL:
         BSBW    PADTO
         ADDTEXT "Disconnected"
 90$:    RSB
+
+; RMSLINE: R6 = PRMS or SRMS. Appends the multiblock, multibuffer and
+; network block counts there to LINE, in SHOW RMS_DEFAULT's columns, and
+; writes it. Uses R0-R6.
+RMSLINE:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
+        MOVL    (R6)+, R1
+        MOVL    #13, R3
+        BSBW    RIGHT
+        MOVL    #18, R3
+        BSBW    PADTO
+        ADDTEXT "|"
+        MOVAB   RMSCOLS, R4
+10$:    MOVZBL  (R4)+, R3
+        BEQL    20$
+        MOVL    (R6)+, R1
+        BSBW    RIGHT
+        BRB     10$
+20$:    MOVL    #68, R3
+        BSBW    PADTO
+        ADDTEXT "|"
+        MOVL    (R6), R1
+        MOVL    #74, R3
+        BSBW    RIGHT
+        BSBW    SAY
+        RSB
+
+; RMSLINE2: R6 = PRMS or SRMS, R4 = a path timeout. Appends the prologue
+; and extension there and the timeout to LINE, in SHOW RMS_DEFAULT's
+; columns, and writes it. Uses R0-R5.
+RMSLINE2:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R5>
+        MOVL    28(R6), R1
+        MOVL    #13, R3
+        BSBW    RIGHT
+        MOVL    32(R6), R1
+        MOVL    #28, R3
+        BSBW    RIGHT
+        MOVL    R4, R1
+        MOVL    #47, R3
+        BSBW    RIGHT
+        BSBW    SAY
+        RSB
 
 ; PADTO: appends blanks to LINE until it is R3 characters long. Uses R0-R2.
 PADTO:

@@ -1088,19 +1088,68 @@ const BACKUP: Phase = Phase {
 /// SPILLTEST.COM, a name with more versions than one directory record
 /// holds, on DKB0:; then RMSTEST in a directory of its own there, whose
 /// output must be OpenVMS's, vms/sysexe/rmstest.out (checked after the
-/// session).
+/// session). SET RMS_DEFAULT sets the process's multiblock count and
+/// indexed files' buffers, and the system's extension; a prologue that
+/// isn't one sets nothing; SHOW RMS_DEFAULT shows them as OpenVMS's does.
+/// A prologue default of 2 makes CONVERT/FDL's indexed file, whose FDL
+/// names none, prologue 1, as its key is a string.
 const RMS: Phase = Phase {
     name: "rms",
     secs: 90,
-    steps: &[(
-        "NEW.TXT;2            [SYSTEM]                         (RWED,RWED,RE,RE)",
-        1,
-        concat!(
-            "@SYS$MANAGER:SPILLTEST\r",
-            "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\rSET DEFAULT DKB0:[000000]\r",
+    steps: &[
+        (
+            "NEW.TXT;2            [SYSTEM]                         (RWED,RWED,RE,RE)",
+            1,
+            concat!(
+                "@SYS$MANAGER:SPILLTEST\r",
+                "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\rSET DEFAULT DKB0:[000000]\r",
+            ),
         ),
-    )],
-    lines: &["SPILLTEST: ok", "RMSTEST done"],
+        (
+            "RMSTEST done",
+            1,
+            concat!(
+                "SET RMS_DEFAULT/BLOCK_COUNT=24/BUFFER_COUNT=-5/INDEXED\r",
+                "SET RMS_DEFAULT/EXTEND_QUANTITY=100/PROLOG=1\r",
+                "SET RMS_DEFAULT/SYSTEM/EXTEND_QUANTITY=7\r",
+            ),
+        ),
+        (
+            "%SET-E-VALERR, specified value is out of legal range",
+            1,
+            concat!(
+                "SHOW RMS_DEFAULT\r",
+                "SET RMS_DEFAULT/BLOCK_COUNT=0/BUFFER_COUNT=0/INDEXED\r",
+                "SET RMS_DEFAULT/SYSTEM/EXTEND_QUANTITY=0\r",
+            ),
+        ),
+        (
+            "System      0              7                 10",
+            1,
+            "CREATE DKB0:[RMS]P.FDL\rFILE\rORGANIZATION indexed\rKEY 0\rDUPLICATES yes\rSEG0_LENGTH 1\r\x1a",
+        ),
+        (
+            "SEG0_LENGTH 1",
+            1,
+            concat!(
+                "SET DEFAULT DKB0:[RMS]\rSET RMS_DEFAULT/PROLOG=2\rCONVERT/FDL=P.FDL P.FDL P2.IDX\r",
+                "DIRECTORY/FULL P2.IDX\rSET RMS_DEFAULT/PROLOG=0\rSET DEFAULT DKB0:[000000]\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "SPILLTEST: ok",
+        "RMSTEST done",
+        "%SET-E-VALERR, specified value is out of legal range",
+        concat!(
+            "Process    24     |    5         0        0       0         0       |    0\n",
+            "System     32     |    0         0        0       0         0       |    8\n\n",
+            "          Prolog    Extend Quantity     PATH_TIMEOUT\n",
+            "Process     0              0                  0\n",
+            "System      0              7                 10\n",
+        ),
+        "File organization:  Indexed, Prolog: 1, Using 1 key",
+    ],
 };
 
 /// EDIT/TPU/NODISPLAY runs a command file CREATE makes on DKB0:: TPU

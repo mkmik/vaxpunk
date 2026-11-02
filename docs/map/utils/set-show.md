@@ -123,7 +123,9 @@ needs = ["/exec/timers"]
 [[feature]]
 id = "rms-default"
 title = "SET RMS_DEFAULT and SHOW RMS_DEFAULT"
-status = "todo"
+status = "done"
+needs = ["#set-privileged"]
+note = "The process's in its PCB, the system's in SGN$ cells (rms.mar), set by RMS$SETDEF in kernel mode, read with $GETJPI's and $GETSYI's RMS_ items. No /QUERY_LOCK, /CONTENTION_POLICY or /PATH_TIMEOUT: SHOW prints VMS's defaults for them"
 
 [[feature]]
 id = "security"
@@ -165,10 +167,10 @@ needs = ["#show-logical", "/exec/logical-names#directories", "/exec/logical-name
 
 [[feature]]
 id = "set-privileged"
-title = "SET.EXE installed with CMKRNL, SYSPRV and TMPMBX: SET VOLUME by a volume's owner without CMKRNL"
-status = "todo"
+title = "SET.EXE installed with CMKRNL: SET VOLUME by a volume's owner without CMKRNL, SET RMS_DEFAULT"
+status = "done"
 needs = ["/exec/installed-images#fixed-list", "/dcl/interpreter#ctrl-y-privileges"]
-note = "As VMS V4.3's VMSIMAGES.DAT installs it; vaxpunk's SET.EXE has no privileges of its own (f11wrt.mar FIL$SETVOLUME)"
+note = "process.mar's KNOWN list; VMS V4.3's VMSIMAGES.DAT also gives it SYSPRV and TMPMBX, which nothing here needs"
 
 [[needs]]
 on = "/exec/information-services"
@@ -219,15 +221,16 @@ vaxpunk's `SET.EXE` is `vms/sysexe/set.mar`: `SET PROCESS/PRIVILEGES`,
 which ask the file system with `IO$_ACCESS` and `IO$_MODIFY`, `SET
 SECURITY`, a file's owner, protection and ACL through `$SET_SECURITY`
 ([ADR-0040](../../adr/0040-acls-in-file-headers-and-rights-identifiers.md)),
-`SET VOLUME`, and `SET TERMINAL`, which asks the terminal its type with
-`/INQUIRE` or takes it from `/DEVICE_TYPE`, and sets its speeds and,
-with `/PERMANENT`, its permanent characteristics.
+`SET VOLUME`, `SET RMS_DEFAULT`, and `SET TERMINAL`, which asks the
+terminal its type with `/INQUIRE` or takes it from `/DEVICE_TYPE`, and
+sets its speeds and, with `/PERMANENT`, its permanent characteristics.
 `SHOW.EXE` is `show.mar`: `SHOW PROCESS`, with `/RIGHTS`, `SHOW SYSTEM`,
 `SHOW TERMINAL`, `SHOW USERS`, `SHOW MEMORY`, `SHOW ERROR`, `SHOW QUOTA`,
-`SHOW CPU`, `SHOW SECURITY` and `SHOW LOGICAL`, which, as VMS's, is
-installed with `CMKRNL` to read the logical name tables in kernel mode,
-so any user can list them, sorted. `SET DEFAULT`, `SHOW DEFAULT`,
-`SHOW DEVICES` and `SHOW SYMBOL` are DCL's own code
-(`dcl/setshow.mar`). `SET.EXE` is installed
-with privileges on VMS too, and has none of its own here. PRD-0003 still wants `SHOW TIME`, quotas and
-accounting figures, and every device listed from its UCB.
+`SHOW CPU`, `SHOW SECURITY`, `SHOW RMS_DEFAULT` and `SHOW LOGICAL`,
+which, as VMS's, is installed with `CMKRNL` to read the logical name
+tables in kernel mode, so any user can list them, sorted. `SET DEFAULT`,
+`SHOW DEFAULT`, `SHOW DEVICES` and `SHOW SYMBOL` are DCL's own code
+(`dcl/setshow.mar`). `SET.EXE` is installed with `CMKRNL` too, as on
+VMS, for `SET VOLUME` and `SET RMS_DEFAULT`. PRD-0003 still wants `SHOW
+TIME`, quotas and accounting figures, and every device listed from its
+UCB.

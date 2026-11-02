@@ -15,7 +15,9 @@
 ; them, and the I/O counts, JPI$_BUFIO and JPI$_DIRIO. Its rights list,
 ; JPI$_PROCESS_RIGHTS and JPI$_RIGHTSLIST, is its UIC, a RESOURCE
 ; identifier, then the identifiers in the block of pool PCB$L_RIGHTS
-; points at, a quadword each; there are no system rights.
+; points at, a quadword each; there are no system rights. A process's
+; RMS defaults, JPI$_RMS_DFMBC and the others, and the system's,
+; SYI$_RMS_DFMBC and the others, are SET RMS_DEFAULT's (rms.mar).
 ; ponytail: done at once, no AST; no CPU times or the other quotas, as
 ; nothing keeps them, and no cluster, so $GETSYI's csidadr and nodename
 ; are ignored.
@@ -35,6 +37,8 @@
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SGN$GW_QUANTUM, SGN$GW_MAXPRCCT
         .EXTERNAL SGN$GB_STARTUP_P1, MMG$GL_MAXPFN, MMG$GL_FREECNT
         .EXTERNAL EXE$GL_NONPAGED, MMG$GL_NPAGEDYN, MMG$GL_NPAGNEXT
+        .EXTERNAL SGN$GB_RMSDFMBC, SGN$AB_RMSDFMBF, SGN$GB_RMSPROLOG, SGN$GW_RMSEXTEND
+        .EXTERNAL SGN$GB_RMSDFNBC
 
 ; ITMENT code, size, at: a table's entry. size is 1, 2 or 4 for a byte, word
 ; or longword, returned as a longword, 8 for a quadword, 0 for a
@@ -77,6 +81,15 @@ JPITAB: ITMENT  JPI$_PID, 4, PCB$L_PID  ; at an offset in the PCB
         ITMENT  JPI$_RIGHTSLIST, 7, RIGHTS
         ITMENT  JPI$_SYSTEM_RIGHTS, 7, NORIGHTS
         ITMENT  JPI$_RIGHTS_SIZE, 3, RIGHTSSIZE
+        ITMENT  JPI$_RMS_DFMBC, 1, PCB$B_RMSDFMBC
+        ITMENT  JPI$_RMS_DFMBFSDK, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_SDK
+        ITMENT  JPI$_RMS_DFMBFSMT, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_SMT
+        ITMENT  JPI$_RMS_DFMBFSUR, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_SUR
+        ITMENT  JPI$_RMS_DFMBFREL, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_REL
+        ITMENT  JPI$_RMS_DFMBFIDX, 1, PCB$AB_RMSDFMBF+PCB$K_RMSMBF_IDX
+        ITMENT  JPI$_RMS_PROLOGUE, 1, PCB$B_RMSPROLOG
+        ITMENT  JPI$_RMS_EXTEND_SIZE, 2, PCB$W_RMSEXTEND
+        ITMENT  JPI$_RMS_DFNBC, 1, PCB$B_RMSDFNBC
         .LONG   0
 SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
         ITMENT  SYI$_MAXPROCESSCNT, 2, SGN$GW_MAXPRCCT
@@ -102,6 +115,15 @@ SYITAB: ITMENT  SYI$_VERSION, 8, VERSION ; at an address
         ITMENT  SYI$_NPAGED_FREE, 3, NPGFREE
         ITMENT  SYI$_NPAGED_INUSE, 3, NPGINUSE
         ITMENT  SYI$_NPAGED_LARGEST, 3, NPGLARGEST
+        ITMENT  SYI$_RMS_DFMBC, 1, SGN$GB_RMSDFMBC
+        ITMENT  SYI$_RMS_DFMBFSDK, 1, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_SDK
+        ITMENT  SYI$_RMS_DFMBFSMT, 1, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_SMT
+        ITMENT  SYI$_RMS_DFMBFSUR, 1, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_SUR
+        ITMENT  SYI$_RMS_DFMBFREL, 1, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_REL
+        ITMENT  SYI$_RMS_DFMBFIDX, 1, SGN$AB_RMSDFMBF+PCB$K_RMSMBF_IDX
+        ITMENT  SYI$_RMS_PROLOGUE, 1, SGN$GB_RMSPROLOG
+        ITMENT  SYI$_RMS_EXTEND_SIZE, 2, SGN$GW_RMSEXTEND
+        ITMENT  SYI$_RMS_DFNBC, 1, SGN$GB_RMSDFNBC
         .LONG   0
 VERSION:
         .ASCII  "V0.1    "
