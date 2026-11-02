@@ -5,17 +5,27 @@ Instructions are standard ARM64. Directives and macros follow MACRO-64 and
 MACRO-32.
 
 ```
-vasm [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] SOURCE
+vasm [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] [/LIST[=file]] SOURCE
 ```
 
 The object file defaults to the source name with `.obj`. Errors and warnings
 show file, line and column, the line with a caret, and the macro calls it came
 from. Nothing is written if there are errors.
 
+`/LIST` also writes a listing, by default the source name with `.lis`, laid
+out as AMACRO's `/LIST/MACHINE_CODE`. The first page is the source: each line
+numbered, with the location counter in the current psect before it. The
+second is the machine code, a psect at a time: its labels, then each
+instruction and data item as hex and offset, with the statement it came from
+and, on the first one a source line made, that line's number. A line of a
+macro expansion counts as the line of the macro call. The listing has no
+page breaks within a part, no psect or qualifier summary, and isn't written
+when there are errors.
+
 `vmacro`, the MACRO-32 compiler, is vasm with a dialect that translates VAX
 instructions; `docs/macro32.md` describes what changes there.
 
-Status: work order step 8. Not there yet: listings, procedure descriptors,
+Status: work order step 8. Not there yet: procedure descriptors,
 literal pools (`ldr x0, =value`), and SIMD arithmetic. Loads and stores of
 B/H/S/D/Q registers work, and scalar floating point: `FADD`, `FSUB`, `FMUL`,
 `FDIV`, `FMAX`, `FMIN`, `FNMUL`, `FABS`, `FNEG`, `FSQRT`, the `FRINT`s,

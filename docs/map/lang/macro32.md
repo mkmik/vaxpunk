@@ -55,8 +55,8 @@ note = "macro32.md: not yet; INSQUE and REMQUE aren't interlocked. The PAL has t
 [[feature]]
 id = "listing"
 title = "/LIST: a listing with the machine code each line became"
-status = "todo"
-note = "macro32.md: not yet"
+status = "done"
+note = "vasm's listing (assembler.md): the source, then the ARM64 each line became, in AMACRO's layout"
 
 [[feature]]
 id = "native"
@@ -92,7 +92,7 @@ it on the calling standard
 ([ADR-0023](../../adr/0023-calling-standard.md)) in AMACRO's
 dialect: declarations, every register kept in full, the argument list at
 `32(FP)`, and DEC's 64-bit pieces under DEC's names. Missing: floating
-point, packed decimal, the interlocked queue instructions and listings.
+point, packed decimal and the interlocked queue instructions.
 The compiler's own bugs (PRD-0003 tier 2 #16 and #17, tier 4 #45)
 belong to `t8y:/host/vmacro`. A MACRO-32 compiler written in BLISS that
 runs on vaxpunk is a stated goal.
