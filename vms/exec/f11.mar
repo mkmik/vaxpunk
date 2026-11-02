@@ -64,7 +64,7 @@
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$LOCATE, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
         .EXTERNAL IOC$SEARCHDEV, IOC$RETURN, IOC$RETQUOTA, EXE$INSIOQ, EXE$READLOCK, EXE$WRITELOCK
-        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB, SCH$SCHED, SCH$BOOST
+        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAKEPCB, SCH$SCHED, SCH$BOOST
         .EXTERNAL XQP$GL_IRP, FIL$ACLCHK, LNM$GL_SYSTEM, LNM$CREATE, LNM$DELETE
         .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX
 
@@ -172,54 +172,75 @@ MNTPROT:
 
         .PSECT  $CODE$
 
-; FIL$LOCK: takes the file system's lock, waiting while another process
-; holds it, and raises IPL to IPL$_ASTDEL, unless it is above, so no
-; kernel mode AST deletes the process while it holds it. FIL$UNLOCK gives
-; it back. Not twice. Keeps every register.
+; FIL$LOCK: takes the file system's lock, waiting in line while another
+; process holds it, and raises IPL to IPL$_ASTDEL, unless it is above, so
+; no kernel mode AST deletes the process while it holds it. FIL$UNLOCK
+; gives it back. Not twice. The wait, in resource wait, delivers no AST,
+; so the process takes the lock once it is its turn: an AST queued to it
+; meanwhile ends the wait, and it waits again at the head of the line.
+; Keeps every register.
 FIL$LOCK::
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R4>
         MFPR    #PR$_IPL, R1
         SETIPL  #IPL$_SYNCH
         MOVL    SCH$GL_CURPCB, R4
-10$:    TSTL    OWNER
-        BEQL    20$
-        MOVL    #SCH$C_MWAIT, PCB$L_STATE(R4)
         MOVAQ   LOCKWQ, R0
-        BSBW    SCH$WAIT
+        TSTL    OWNER
+        BEQL    20$
+        INSQUE  (R4), @4(R0)            ; at the tail
+10$:    MOVL    #SCH$C_MWAIT, PCB$L_STATE(R4)
+        BSBW    SCH$SCHED
+        CMPL    OWNER, R4
+        BEQL    30$                     ; FIL$UNLOCK gave it this one
+        TSTL    OWNER
+        BEQL    20$
+        INSQUE  (R4), (R0)              ; an AST ended the wait: at the head
         BRB     10$
 20$:    MOVL    R4, OWNER
-        MOVL    R1, LOCKIPL
+30$:    MOVL    R1, LOCKIPL
         CMPL    R1, #IPL$_ASTDEL
-        BGEQ    30$
+        BGEQ    40$
         MOVL    #IPL$_ASTDEL, R1
-30$:    MTPR    R1, #PR$_IPL
+40$:    MTPR    R1, #PR$_IPL
         POPR    #^M<R0, R1, R4>
         RSB
 
-; FIL$UNLOCK: gives back the lock FIL$LOCK took, ends the waits for it,
-; each waiter trying again, and puts back the IPL FIL$LOCK's caller had.
-; Keeps every register.
+; FIL$UNLOCK: gives back the lock FIL$LOCK took, to the first process in
+; line, which takes it when it runs, as VMS's XQP hands its queue to the
+; first waiter, with a boost, PRI$_RESAVL (SCH$BOOST): a process its disk
+; I/O boosts would otherwise take it back each time before the others
+; ran, and the next holder waits for no one computing at its priority.
+; Those ahead of it that $SUSPND suspended are suspended now, and ask
+; again once resumed. Puts back the IPL FIL$LOCK's caller had. Keeps
+; every register.
 FIL$UNLOCK::
         .JSB_ENTRY
-        PUSHR   #^M<R0, R1, R4>
+        PUSHR   #^M<R0, R1, R2, R4>
         MOVL    LOCKIPL, R1
         SETIPL  #IPL$_SYNCH
         CLRL    OWNER
-        MOVAQ   LOCKWQ, R0
-10$:    MOVL    (R0), R4
+10$:    MOVAQ   LOCKWQ, R0
+        MOVL    (R0), R4
         CMPL    R4, R0
-        BEQL    20$
+        BEQL    20$                     ; none waits
+        BBS     #PCB$V_SUSPEN, PCB$L_STS(R4), 15$
+        MOVL    R4, OWNER
+        MOVL    #PRI$_RESAVL, R2
+        BSBW    SCH$BOOST
         BSBW    SCH$WAKEPCB
+        BRB     20$
+15$:    BSBW    SCH$WAKEPCB
         BRB     10$
 20$:    MTPR    R1, #PR$_IPL
-        POPR    #^M<R0, R1, R4>
+        POPR    #^M<R0, R1, R2, R4>
         RSB
 
 ; FIL$READLBLK: R0 = a buffer, R1 = a block count, R2 = an LBN. Reads the
 ; blocks from F11$GL_VCB's disk, with an IO$_READLBLK in F11$AB_IRP to its
 ; driver, the buffer's pages locked, and waits for it while other
-; processes run (IOWAIT); above IPL$_ASTDEL, at boot, the PAL reads them
+; processes run (IOWAIT), unless it ended at once; above IPL$_ASTDEL, at
+; boot, the PAL reads them
 ; at once (DISKIO). R0 = SS$_NORMAL, or the device's error. Holding
 ; FIL$LOCK. Uses R1.
 FIL$READLBLK::
@@ -256,8 +277,10 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
 10$:    BSBW    EXE$WRITELOCK
 15$:    BLBC    R0, 80$
         DSBINT  #IPL$_SYNCH
-        MOVL    SCH$GL_CURPCB, R4
         BSBW    EXE$INSIOQ
+        ENBINT                          ; one done already ends now, unwaited for, as after VMS's $QIO
+        DSBINT  #IPL$_SYNCH
+        MOVL    SCH$GL_CURPCB, R4
         MOVAB   F11$AB_IRP, R3
 20$:    TSTL    IRP$L_IOST1(R3)
         BNEQ    30$

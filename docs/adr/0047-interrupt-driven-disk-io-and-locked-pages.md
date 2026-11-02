@@ -119,6 +119,35 @@ wait, in `RWAST`, until the requests the device has are done.
    checks the computable queues again once `IPL$_RESCHED` has let the
    pending forks through, before `WTINT`, so a completion that came while
    it looked doesn't wait for the next tick.
+10. **`FIL$LOCK` goes to its waiters in turn.** `FIL$UNLOCK` hands it to
+    the first process in line, with a boost, `PRI$_RESAVL`, as VMS's XQP
+    hands its queue to the first waiter, where it woke every waiter to
+    try again ([ADR-0020](0020-file-system-lock-below-ipl-synch.md)
+    decision 1); the boost keeps the new holder from waiting a quantum
+    behind a process that computes at its priority, with the lock idle.
+    Now that the holder waits for its disk, the others queue meanwhile,
+    and the holder, boosted by the completion, ran again before them and
+    took the lock back each time: FSTEST's two processes, 50 directory
+    scans each, kept every other process out of the file system for
+    minutes on a slow machine. The wait delivers no AST, so a process the
+    lock was handed to takes it before an AST, `$DELPRC`'s among them, can
+    end it; an AST queued meanwhile ends the wait, and the process waits
+    again at the head of the line. A waiter `$SUSPND` suspended is passed
+    over, and waits again once resumed.
+11. **A request that ends at once isn't waited for, and doesn't boost.**
+    `FIL$READLBLK` lowers IPL once it has queued its IRP, as VMS's `$QIO`
+    returns below `IPL$_SYNCH`, so a request the device already finished,
+    as QEMU's often has, completes then; `SCH$BOOST` boosts only a process
+    that waits, as VMS's `SCH$RSE` does. `$PRIDEF`'s values are VMS's
+    increment classes, `PRI$_IOCOM` 1 for 2 more, `PRI$_RESAVL` 2 for 3,
+    whose increments `SCH$BOOST` looks up.
+12. **`SCH$PIXSCAN` keeps the boosts from starving a process.** Once a
+    second it gives a time-sharing process that has been computable since
+    an earlier second the highest time-sharing priority among the current
+    process and the computable ones, as VMS's PIXSCAN does. A process
+    whose reads each wait a moment is boosted by each and computable again
+    at once; at its base priority, `DCL` ran no command for minutes, on a
+    slow host, while FSTEST read.
 
 ## Alternatives considered
 
@@ -132,6 +161,8 @@ wait, in `RWAST`, until the requests the device has are done.
 | The disk interrupt at IPL 22 so that it has a level of its own | VAX and Alpha disks interrupted at 20 or 21, beside other devices; two vectors at one IPL is what the VAX's UNIBUS did |
 | VMS's fork queue, `EXE$FORK`, with fork blocks | One driver forks; its routine looks at each disk. A queue when a second driver forks |
 | Wait in `SCH$WAIT` | It delivers ASTs, kernel mode's among them, which may delete the process while it holds `FIL$LOCK`, or run a user mode AST in the middle of rundown |
+| No boost on a disk's completion | A process that computes at the same priority holds the CPU a quantum, 200 ms, before each read of a process that waits for the disk: behind `HOG`, the boot test's image activations stalled |
+| Keep waking every waiter of `FIL$LOCK`, and stop boosting the holder | Without a boost it still runs on after `FIL$UNLOCK` and takes the lock back before the processes it woke run; only a turn each stops that |
 
 ## Consequences
 
@@ -142,7 +173,17 @@ wait, in `RWAST`, until the requests the device has are done.
   disk's badge.
 - A request a disk has can't be cancelled; rundown waits for it.
 - The file system's I/O switches processes; one process's file system
-  I/O still waits for another's, as `FIL$LOCK` is one for every volume.
+  I/O still waits for another's, as `FIL$LOCK` is one for every volume,
+  and each process now waits its turn for it.
+- A process waiting for `FIL$LOCK` gets no AST, `$DELPRC`'s included,
+  until it has had its turn.
+- A process boosted by a quick disk outruns those at their base priority
+  for up to a second at a time, until `SCH$PIXSCAN` lifts them.
+- The PCB is 720 bytes, with `PCB$L_WAITIME`.
+- FSTEST scans `SYS$SYSTEM:` 10 times, not 50: its two processes take
+  turns with the lock at each disk read, which the 50 scans were there to
+  bring about with quantum ends, and the boot test's other processes wait
+  less for it.
 
 **What stays easy.**
 - The executive's drivers look like VMS's: `EXE$INSIOQ`, `IOC$INITIATE`,

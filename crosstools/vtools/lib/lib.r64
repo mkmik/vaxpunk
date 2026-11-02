@@ -203,11 +203,15 @@ LITERAL
 ! $PRIDEF
 LITERAL
     PRI$_NULL = 0,  ! none
-    PRI$_IOCOM = 2;  ! a disk's request is done
+    PRI$_IOCOM = 1,  ! a disk's request is done: 2 more
+    PRI$_RESAVL = 2,  ! a resource it waited for is available: 3 more
+    PRI$_TOCOM = 3,  ! terminal output is done: 4 more
+    PRI$_TICOM = 4,  ! terminal input is done: 6 more
+    PRI$_TIMER = 2;  ! a timer is due: 3 more
 
 ! $PCBDEF
 LITERAL
-    PCB$K_LENGTH = 712,
+    PCB$K_LENGTH = 720,
     PCB$K_RMSMBF_SDK = 0,  ! in PCB$AB_RMSDFMBF and SGN$AB_RMSDFMBF: sequential files on disks,
     PCB$K_RMSMBF_SMT = 1,  ! magnetic tapes,
     PCB$K_RMSMBF_SUR = 2,  ! and unit record devices,
@@ -288,7 +292,8 @@ MACRO
     PCB$W_RMSEXTEND = 704, 0, 16, 0 %,  ! blocks a file is extended by, 0 for the system's
     PCB$W_RMSPATHTMO = 706, 0, 16, 0 %,  ! PATH_TIMEOUT, seconds, 0 for the system's
     PCB$B_RMSQUERY = 708, 0, 8, 0 %,  ! QUERY_LOCK: 0 the system's, 1 enabled, 2 disabled
-    PCB$B_RMSCONTEND = 709, 0, 8, 0 %;  ! CONTENTION_POLICY: 0 the system's, 1 never, 2 sometimes, 3 always
+    PCB$B_RMSCONTEND = 709, 0, 8, 0 %,  ! CONTENTION_POLICY: 0 the system's, 1 never, 2 sometimes, 3 always
+    PCB$L_WAITIME = 712, 0, 32, 0 %;  ! the second, EXE$GL_ABSTIM, it last became computable (SCH$INSCOM), for SCH$PIXSCAN
 
 ! $CEBDEF
 LITERAL

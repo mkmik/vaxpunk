@@ -39,7 +39,13 @@ note = "PRD-0003 tier 1 #4, step 5"
 id = "boosts"
 title = "Priority boosts on I/O completion and wakes, decaying each quantum"
 status = "wip"
-note = "ADR-0047: a disk's request done boosts its process by PRI$_IOCOM (SCH$BOOST), and SCH$QEND takes a step off each quantum; left: terminal I/O, event flags and other wakes; PRD-0003 tier 3 #31"
+note = "ADR-0047: VMS's increment classes; a disk's request done boosts its process by PRI$_IOCOM, FIL$LOCK's handoff by PRI$_RESAVL (SCH$BOOST), and SCH$QEND takes a step off each quantum; left: terminal I/O, event flags and other wakes; PRD-0003 tier 3 #31"
+
+[[feature]]
+id = "pixscan"
+title = "PIXSCAN: a process computable for a second without running gets the current one's priority"
+status = "done"
+note = "ADR-0047: SCH$PIXSCAN once a second, by PCB$L_WAITIME; it scans every slot and the boost decays a step a quantum"
 
 [[feature]]
 id = "resource-wait"

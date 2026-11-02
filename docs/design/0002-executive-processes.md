@@ -583,11 +583,12 @@ computable, or its quantum is up, as on VMS:
 1. **`EXE$HWCLKINT`**, the interval timer interrupt, every 10 ms at
    `IPL$_HWCLK` (24), counts the current process's `PCB$W_QUANT` up from
    minus `SGN$GW_QUANTUM`, 20 ticks, which `$CREPRC` sets. At 0 it requests
-   the software timer interrupt, `SOFTINT #IPL$_TIMER` (7). A tick while
-   the CPU is idle charges no one.
+   the software timer interrupt, `SOFTINT #IPL$_TIMER` (7), and so it does
+   once a second. A tick while the CPU is idle charges no one. It counts
+   the seconds since boot in `EXE$GL_ABSTIM`.
 2. **`EXE$SWTIMINT`**, at `IPL$_TIMER`, raises IPL to `IPL$_SYNCH`, calls
-   `SCH$QEND` if the quantum is still up, and serves the timer queue
-   ([Time](#time)).
+   `SCH$QEND` if the quantum is still up, `SCH$PIXSCAN` once a second, and
+   serves the timer queue ([Time](#time)).
 3. **`SCH$QEND`** gives the process a new quantum, takes a step off a
    boost, and, if a COM queue at its priority or above isn't empty,
    requests the reschedule interrupt, which puts it on its queue's tail:
@@ -595,11 +596,24 @@ computable, or its quantum is up, as on VMS:
    up, keep the CPU.
 
 A disk's request that ends boosts its process, below priority 16, to
-its base priority plus `PRI$_IOCOM`, 2, if that is higher (`SCH$BOOST`),
-as VMS's scheduler does, so a process that waits for the disk runs
-before one that computes at its base priority; each quantum end takes a
-step of the boost off. ponytail: only a disk's completion boosts, not a
-terminal's I/O, an event flag or a `$WAKE`.
+its base priority plus 2, the increment of `PRI$_IOCOM`'s class, if that
+is higher (`SCH$BOOST`), as VMS's scheduler does, so a process that waits
+for the disk runs before one that computes at its base priority; each
+quantum end takes a step of the boost off. The file system's lock,
+handed to the next process in line, boosts it by 3, `PRI$_RESAVL`'s. Only
+a wait's end boosts: a process whose request ended before it waited,
+current or computable, keeps its priority. ponytail: only those boost,
+not a terminal's I/O, an event flag or a `$WAKE`.
+
+A virtual disk often ends a request as soon as it has it, so a process
+that reads one block after another is boosted each time and is
+computable again at once: it would keep the CPU from processes at their
+base priority for as long as it reads. Once a second, `SCH$PIXSCAN` gives
+each time-sharing process that has been computable since an earlier
+second, `PCB$L_WAITIME`, which `SCH$INSCOM` sets, the highest
+time-sharing priority among the current process and the computable
+ones, if that is higher, as VMS's PIXSCAN does; the boost decays as any
+other.
 
 Code at `IPL$_TIMER` or above, the scheduler included, defers quantum end
 until IPL drops.

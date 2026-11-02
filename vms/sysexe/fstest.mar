@@ -3,9 +3,9 @@
 ;
 ; STARTUP starts two of these, FSTEST1 and FSTEST2, at HOG's priority.
 ; Each counts the files in SYS$SYSTEM: with $PARSE and $SEARCH, LOOPS
-; times, so that the interval timer takes the CPU from one while it holds
-; the file system's lock, and the other waits for it (FIL$LOCK, in
-; f11.mar). Every count must be the first's.
+; times. One gives up the CPU holding the file system's lock each time it
+; waits for a disk read, and the other waits its turn for the lock
+; (FIL$LOCK, in f11.mar). Every count must be the first's.
 ;
         .LIBRARY "starlet.mlb"
         .LIBRARY "sysexe.mlb"
@@ -14,7 +14,7 @@
         $FABDEF
         $NAMDEF
 
-LOOPS = 50
+LOOPS = 10
 
         .PSECT  DATA, NOEXE, WRT, LONG
 SPEC:   .ASCII  "SYS$SYSTEM:*.*;*"

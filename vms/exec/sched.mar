@@ -16,7 +16,12 @@
 ;
 ; The interval timer takes the CPU from a process whose quantum is up, if
 ; another computable one has its priority or a higher one: SCH$QEND, round
-; robin within a priority.
+; robin within a priority. A wait's end may boost a time-sharing process
+; (SCH$BOOST), and each quantum takes a step of that back. Once a second,
+; SCH$PIXSCAN lifts a process that has been computable for a second
+; without running to the current one's priority, as VMS's PIXSCAN does,
+; so that processes whose I/O ends at once, boosted each time, don't keep
+; the CPU from it.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -28,8 +33,9 @@
         $RPBDEF
         $HWPCBDEF
         $PSLDEF
+        $PRIDEF
 
-        .EXTERNAL EXE$GL_RPB, EXE$ASTDEL, EXE$ALONONPAGED
+        .EXTERNAL EXE$GL_RPB, EXE$ASTDEL, EXE$ALONONPAGED, EXE$GL_ABSTIM
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 SCH$GL_CURPCB::                         ; the current process
@@ -65,6 +71,7 @@ SCH$GL_SEQ::
         .LONG   1
 SGN$GW_QUANTUM::                        ; ticks of 10 ms in a quantum, as SYSGEN's QUANTUM
         .WORD   20
+PINC:   .BYTE   0, 2, 3, 4, 6           ; the boost of each priority increment class, $PRIDEF's, VMS's
 ; The swapper, process 1: the boot context, whose HWPCB is the RPB's.
         .ALIGN  QUAD
 SWAPPER:
@@ -137,11 +144,13 @@ SCH$INIT::
         RSB
 
 ; SCH$INSCOM: R4 = a PCB in no queue. Makes it computable: on the tail of
-; the COM queue of its priority. IPL$_SYNCH. Keeps every register.
+; the COM queue of its priority, from this second, PCB$L_WAITIME.
+; IPL$_SYNCH. Keeps every register.
 SCH$INSCOM::
         .JSB_ENTRY
         PUSHR   #^M<R0, R1>
         MOVL    #SCH$C_COM, PCB$L_STATE(R4)
+        MOVL    EXE$GL_ABSTIM, PCB$L_WAITIME(R4)
         MOVZBL  PCB$B_PRI(R4), R0
         MOVAQ   SCH$AQ_COMH[R0], R1
         INSQUE  (R4), @4(R1)
@@ -279,12 +288,13 @@ SCH$RESCHED::
         MOVL    (SP)+, R4
         REI
 
-; SCH$BOOST: R4 = a PCB that isn't computable, R2 = a priority increment,
-; a PRI$_ value. Boosts a normal process, below priority 16, for an event
-; that ends its wait, as VMS's scheduler does: its priority becomes its
-; base priority plus the increment, at most 15, if that is higher.
-; SCH$QEND takes it back down a step a quantum. IPL$_SYNCH. Keeps every
-; register.
+; SCH$BOOST: R4 = a PCB, R2 = a priority increment class, a PRI$_ value.
+; Boosts a normal process, below priority 16, for an event that ends its
+; wait, as VMS's scheduler does: its priority becomes its base priority
+; plus the class's increment, 2 for PRI$_IOCOM, 3 for PRI$_RESAVL, at
+; most 15, if that is higher. One that doesn't wait, current or
+; computable, isn't boosted. SCH$QEND takes it back down a step a
+; quantum. IPL$_SYNCH. Keeps every register.
 ; vaxpunk: VMS boosts in the routines that end a wait, SCH$RSE and
 ; SCH$CHSEP; here they call this one.
 SCH$BOOST::
@@ -292,10 +302,12 @@ SCH$BOOST::
         PUSHL   R0
         CMPL    PCB$L_STATE(R4), #SCH$C_COM     ; on a COM queue by its priority
         BEQL    90$
+        CMPL    PCB$L_STATE(R4), #SCH$C_CUR
+        BEQL    90$
         MOVZBL  PCB$B_PRIB(R4), R0
         CMPL    R0, #16
         BGEQU   90$
-        ADDL2   R2, R0
+        ADDB2   PINC[R2], R0
         CMPL    R0, #15
         BLEQU   10$
         MOVL    #15, R0
@@ -303,6 +315,49 @@ SCH$BOOST::
         BLEQU   90$
         MOVB    R0, PCB$B_PRI(R4)
 90$:    MOVL    (SP)+, R0
+        RSB
+
+; SCH$PIXSCAN: once a second, from the software timer interrupt. Gives
+; each time-sharing process that has been computable since an earlier
+; second, PCB$L_WAITIME, the highest time-sharing priority among the
+; current process and the computable ones, if that is higher, as VMS's
+; PIXSCAN does: it then runs before long, though processes whose quick
+; I/O boosts them each time are computable whenever it would. Not while
+; the current process is a real-time one. SCH$QEND takes the boost back
+; a step a quantum. IPL$_SYNCH. Keeps every register.
+; vaxpunk: it scans every process slot each second, where VMS's scans
+; SYSGEN's PIXSCAN of them; the boost decays as an I/O boost does, where
+; VMS's lasts a quantum.
+SCH$PIXSCAN::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4>
+        CLRL    R2                      ; the priority it gives
+        MOVL    SCH$GL_CURPCB, R0
+        CMPL    PCB$L_STATE(R0), #SCH$C_CUR
+        BNEQ    5$                      ; idle
+        MOVZBL  PCB$B_PRI(R0), R2
+        CMPL    R2, #16
+        BGEQU   90$
+5$:     MOVL    #15, R1                 ; or a computable one's, if higher
+6$:     BBS     R1, SCH$GL_COMQS, 7$
+        SOBGTR  R1, 6$
+7$:     CMPL    R1, R2
+        BLEQ    8$
+        MOVL    R1, R2
+8$:     MOVL    #1, R3
+10$:    MOVL    @SCH$GL_PCBVEC[R3], R4
+        BEQL    20$
+        CMPL    PCB$L_STATE(R4), #SCH$C_COM
+        BNEQ    20$
+        CMPB    PCB$B_PRI(R4), R2
+        BGEQU   20$
+        CMPL    PCB$L_WAITIME(R4), EXE$GL_ABSTIM
+        BGEQU   20$                     ; computable since this second
+        BSBW    SCH$REMCOM
+        MOVB    R2, PCB$B_PRI(R4)
+        BSBW    SCH$INSCOM
+20$:    AOBLSS  SCH$GL_MAXPIX, R3, 10$
+90$:    POPR    #^M<R0, R1, R2, R3, R4>
         RSB
 
 ; SCH$QEND: R4 = the current PCB, whose quantum is up. Gives it a new

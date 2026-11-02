@@ -51,7 +51,7 @@ same commit; `todography lint` checks it.
 | [ADR-0017](adr/0017-command-tables-from-cld-with-vcdu.md) | Commands are defined in CLD files that vcdu compiles at build time, and a parser library linked into each image reads them | Proposed |
 | [ADR-0018](adr/0018-set-command-and-foreign-commands.md) | SET COMMAND compiles CLD in DCL into tables DCL looks in first, and a foreign command's image gets its line as $LINE | Proposed |
 | [ADR-0019](adr/0019-mailboxes.md) | A mailbox is a unit of its own, MBnn, whose writes are done at once, and process deletion writes the termination message to it | Proposed; decision 1 superseded by ADR-0044 |
-| [ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md) | The file system runs below IPL$_SYNCH, holding a lock of its own, as the XQP does | Proposed |
+| [ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md) | The file system runs below IPL$_SYNCH, holding a lock of its own, as the XQP does | Proposed; decision 1 superseded by ADR-0047: FIL$UNLOCK hands the lock to the first waiter |
 | [ADR-0021](adr/0021-condition-handlers-run-in-the-mode-that-signals.md) | Condition handlers are found along the FP chain and run in the mode that signaled, from code in the vector | Proposed |
 | [ADR-0022](adr/0022-tcpip-utility-and-dhcp.md) | The network is set with TCP/IP Services' TCPIP utility, which parses its own commands, and lwIP's DHCP client can give the interface its address | Proposed |
 | [ADR-0023](adr/0023-calling-standard.md) | The vaxpunk calling standard is AAPCS64 with VMS's argument count, sign extension and self-describing frames, and MACRO-32 is compiled onto it as AMACRO compiled it onto Alpha's | Accepted |

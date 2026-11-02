@@ -633,12 +633,14 @@ executive feature:
   LOCKTEST holds, and exits as soon as it gets it, still holding both. Its image rundown dequeues them,
   which grants LOCKTEST the lock on `LOCKTEST$S` it waits for, and
   LOCKTEST prints `LOCKTEST: ok`.
-- **FSTEST1** and **FSTEST2** each count the files in `SYS$SYSTEM:` 50
+- **FSTEST1** and **FSTEST2** each count the files in `SYS$SYSTEM:` 10
   times with `$PARSE` and `$SEARCH`, at once. The file system runs
   holding a lock of its own, `FIL$LOCK`, below `IPL$_SYNCH`
-  ([ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md)), so the
-  timer takes the CPU from one while it holds the lock, and the other
-  waits for it. Each prints `FSTEST: ok` if every count was the first's.
+  ([ADR-0020](adr/0020-file-system-lock-below-ipl-synch.md)), so one
+  gives up the CPU holding the lock each time it waits for the disk, and
+  the other waits its turn for it
+  ([ADR-0047](adr/0047-interrupt-driven-disk-io-and-locked-pages.md)).
+  Each prints `FSTEST: ok` if every count was the first's.
 - **CHFTEST** checks condition handlers: a `LIB$SIGNAL` that its own
   handler continues, one an inner routine's handler passes on to it, an
   access violation that `LIB$SIG_TO_RET` turns into the status of the
