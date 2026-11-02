@@ -38,8 +38,8 @@ note = "PRD-0003 tier 1 #4, step 5"
 [[feature]]
 id = "boosts"
 title = "Priority boosts on I/O completion and wakes, decaying each quantum"
-status = "todo"
-note = "PRD-0003 tier 3 #31; sched.mar"
+status = "wip"
+note = "ADR-0047: a disk's request done boosts its process by PRI$_IOCOM (SCH$BOOST), and SCH$QEND takes a step off each quantum; left: terminal I/O, event flags and other wakes; PRD-0003 tier 3 #31"
 
 [[feature]]
 id = "resource-wait"

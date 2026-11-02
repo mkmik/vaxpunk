@@ -44,6 +44,9 @@ LITERAL
     PAL$_DOORBELL = 72,  ! R0 = a port: MTPR #n, #PR$_DOORBELL
     PAL$_GETENTROPY = 73,  ! R0 = buffer, R1 = byte count, at most 256; R0 = status
     PAL$_GETMAXBLOCK = 74,  ! R0 = unit; R0 = the disk's blocks, 0 without it
+    PAL$_RDPTE = 75,  ! R0 = address; R0 = its page's PTE, as WRPTE left it, or 0
+    PAL$_DISKSTART = 76,  ! R0 = PFN list, R1 = byte count, R2 = LBN, R3 = unit, R4 = offset, R5 = 1 to write; R0 = 0 or a status
+    PAL$_DISKDONE = 77,  ! R0 = unit; R0 = its request's status once done, else 0
     PAL$_RD_PS = 145;  ! R0 = the PSL: the modes and IPL
 
 ! $IPLDEF
@@ -61,7 +64,7 @@ LITERAL
 
 ! $SCBDEF
 LITERAL
-    SCB$K_LENGTH = 260;
+    SCB$K_LENGTH = 264;
 MACRO
     SCB$L_OPCDEC = 16, 0, 32, 0 %,  ! reserved or privileged instruction
     SCB$L_ACCVIO = 32, 0, 32, 0 %,  ! access violation: a mask and the address
@@ -72,7 +75,8 @@ MACRO
     SCB$L_SOFTINT = 128, 0, 32, 0 %,  ! software interrupt level n at +4*n
     SCB$L_INTTIM = 192, 0, 32, 0 %,  ! interval timer, at IPL$_HWCLK
     SCB$L_CONSRCV = 248, 0, 32, 0 %,  ! console receive, at IPL$_CONSOLE
-    SCB$L_PORT = 256, 0, 32, 0 %;  ! port 0's completion, at IPL$_PORT
+    SCB$L_PORT = 256, 0, 32, 0 %,  ! port 0's completion, at IPL$_PORT
+    SCB$L_DISK = 260, 0, 32, 0 %;  ! vaxpunk: a disk request's completion, DISKSTART's, at IPL$_PORT too
 
 ! $FDSCDEF
 LITERAL
@@ -195,6 +199,11 @@ LITERAL
     SCH$C_SUSP = 9,  ! suspended
     SCH$C_COM = 12,  ! computable
     SCH$C_CUR = 14;  ! current
+
+! $PRIDEF
+LITERAL
+    PRI$_NULL = 0,  ! none
+    PRI$_IOCOM = 2;  ! a disk's request is done
 
 ! $PCBDEF
 LITERAL
@@ -424,6 +433,7 @@ MACRO
 ! $UCBDEF
 LITERAL
     UCB$K_LENGTH = 72,
+    UCB$K_DKLENGTH = 76,  ! a disk
     UCB$K_NETLENGTH = 80,  ! a network unit, cloned from BG0:
     UCB$K_MBLENGTH = 84,  ! a mailbox
     UCB$K_TTLENGTH = 5624,  ! a terminal, its connection at UCB$L_CONN
@@ -441,6 +451,8 @@ LITERAL
     UCB$V_TT_VT = 8,  ! a virtual terminal, VTAn: a session that outlives its line
     UCB$V_ONLINE = 4,  ! UCB$L_STS: the device is online
     UCB$M_ONLINE = 16,
+    UCB$V_BSY = 8,  ! the device has a request, UCB$L_IRP, and the others wait on UCB$L_IOQFL (EXE$INSIOQ)
+    UCB$M_BSY = 256,
     UCB$V_TEMPLATE = 13,  ! a template: $ASSIGN clones a unit of its own from it
     UCB$M_TEMPLATE = 8192,
     UCB$V_DELETEUCB = 16,  ! delete it once no channel has it (IOC$DELETE_UCB)
@@ -474,6 +486,7 @@ MACRO
     UCB$W_DEVSTS = 64, 0, 16, 0 %,  ! device dependent status: a mailbox's UCB$V_PRMMBX and UCB$V_DELMBX
     UCB$W_ERRCNT = 66, 0, 16, 0 %,  ! the errors the device reported, SS$_DRVERR
     UCB$W_UNIT_SEED = 68, 0, 16, 0 %,  ! a template's: the unit last cloned from it
+    UCB$L_IRP = 72, 0, 32, 0 %,  ! a disk's: the request the device has, which EXE$INSIOQ started, or 0
     UCB$L_CONN = 72, 0, 32, 0 %,  ! a network unit's or a TELNET terminal's connection on the port, 0 none
     UCB$L_PROTO = 76, 0, 32, 0 %,  ! a network unit's socket's protocol, TCPIP$C_, or 0 before it has one
     UCB$L_MSGQFL = 72, 0, 32, 0 %,  ! a mailbox's messages, oldest first
@@ -518,6 +531,9 @@ LITERAL
     IRP$V_BUFIO = 0,  ! a read whose data IOC$POST copies to the caller's buffer
     IRP$M_BUFIO = 1,
     IRP$V_STARTED = 1,  ! the terminal has written its prompt
+    IRP$V_LOCKED = 2,  ! vaxpunk: its buffer's pages are locked (EXE$READLOCK), their PFNs past the packet, until IOC$REQCOM
+    IRP$M_LOCKED = 4,
+    IRP$K_MAXPFN = 17,  ! vaxpunk: PFNs past a direct I/O's packet, at most: 64 KB's pages, where VMS's IRP$L_SVAPTE points at their PTEs
     DYN$C_IRP = 10;  ! IRP$B_TYPE
 MACRO
     IRP$L_IOQFL = 0, 0, 32, 1 %,  ! the UCB's queue, then the AST queue
@@ -525,9 +541,9 @@ MACRO
     IRP$W_SIZE = 8, 0, 16, 0 %,  ! with the prompt and data
     IRP$B_TYPE = 10, 0, 8, 0 %,
     IRP$B_RMOD = 11, 0, 8, 0 %,  ! the AST's mode: kernel, then the caller's
-    IRP$L_PID = 12, 0, 32, 0 %,  ! the process it is for
+    IRP$L_PID = 12, 0, 32, 0 %,  ! the process it is for, 0 for the file system's
     IRP$L_AST = 16, 0, 32, 0 %,  ! the caller's AST routine, or 0
-    IRP$L_ASTPRM = 20, 0, 32, 0 %,  ! its parameter
+    IRP$L_ASTPRM = 20, 0, 32, 0 %,  ! its parameter; the file system's: the PCB waiting for it, which IOC$REQCOM wakes
     IRP$L_KAST = 24, 0, 32, 1 %,  ! IOC$POST once done, then 0
     IRP$L_UCB = 28, 0, 32, 1 %,  ! the device
     IRP$L_FUNC = 32, 0, 32, 0 %,  ! the function code and its modifiers
@@ -543,7 +559,7 @@ MACRO
     IRP$L_PROMPT = 68, 0, 32, 0 %,  ! a read's prompt's size: it is past IRP$K_LENGTH, and the data past it
     IRP$L_MEDIA = 72, 0, 32, 1 %,  ! a disk's LBN, p3
     IRP$L_POST = 76, 0, 32, 0 %,  ! a routine IOC$POST JSBs, R6 the IRP, in its process, or 0
-    IRP$L_BOFF = 80, 0, 32, 0 %,  ! the bytes charged to its process's BYTCNT
+    IRP$L_BOFF = 80, 0, 32, 0 %,  ! a buffered I/O's: the bytes charged to its process's BYTCNT; a direct I/O's: its buffer's offset in its first page
     IRP$B_QUOTA = 84, 0, 8, 0 %;  ! what it is charged to: IRP$K_BIO, IRP$K_DIO, or 0 for nothing
 
 ! $PORTDEF

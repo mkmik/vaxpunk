@@ -399,7 +399,8 @@ const DATA_DISK: Phase = Phase {
             ),
         ),
         (
-            "CUR     4 SHOW.EXE",
+            // Its priority is boosted by its disk I/O (SCH$BOOST).
+            "SYSTEM          CUR ",
             1,
             concat!(
                 "SHOW USERS/FULL\rSHOW USERS NOBODY\rSHOW MEMORY/SLOTS\r",
@@ -454,7 +455,7 @@ const DATA_DISK: Phase = Phase {
         "UIC:                [1,4]",
         " CPU limit:                      Infinite  Direct I/O limit:        150\n Buffered I/O byte count quota:    128000  Buffered I/O limit:      150",
         "00010001 SWAPPER",
-        "SYSTEM          CUR     4 SHOW.EXE",
+        "SYSTEM          CUR ",
         "    Total number of users = 1,  number of processes = 1\n\n Username    Process Name    PID       Terminal\n SYSTEM      SYSTEM          ",
         "%SHOW-I-NOSUCHUSER, no processes found for user NOBODY",
         " Process Entry Slots               1024",
@@ -477,11 +478,7 @@ const CONTROL_KEYS: Phase = Phase {
     name: "control keys",
     secs: 60,
     steps: &[
-        (
-            "SYSTEM          CUR     4 SHOW.EXE",
-            1,
-            "CONTINUE\rRUN CTRLC\r",
-        ),
+        ("SYSTEM          CUR ", 1, "CONTINUE\rRUN CTRLC\r"),
         ("CTRLC: waiting for CTRL/C", 1, "\x03"),
         ("CTRLC: ok", 1, "\x19"),
         ("*INTERRUPT*", 1, "RUN SPIN\r"),

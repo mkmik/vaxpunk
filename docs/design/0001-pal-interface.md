@@ -95,18 +95,32 @@ QEMU gives the first `-device` the highest transport, so the PAL numbers
 the block devices from there down.
 
 The PAL maps the transports from their device untyped, finds the block
-devices among them and sets up one queue of four descriptors for each.
-A disk's queue, a request's header and status share one page of the
-PAL's, and the data of both goes through another, eight blocks at a time;
-seL4 tells the PAL their physical addresses. It does a request at a time
-and polls the used ring until the device is done. ponytail: polled and synchronous; the device's
-interrupt, through seL4's IRQ handler, when I/O is asynchronous.
+devices among them and sets up one queue of 32 descriptors for each. A
+disk's queue, a request's header and status, and a block of padding
+share one page of the PAL's; seL4 tells the PAL its physical address. It
+takes each disk's interrupt, QEMU virt's SPI 16 plus the transport's
+number, through seL4's IRQ handler, on its own notification. A disk has
+a request at a time, which goes one of two ways:
+
+- **Polled.** `READLBLK` and `WRITELBLK` copy the data through another
+  page of the PAL's, eight blocks at a time, and poll the used ring until
+  the device is done. The PAL's own boot and the executive's, until its
+  scheduler runs, read this way. If the device has a request from
+  `DISKSTART`, they wait for that first.
+- **By interrupt.** `DISKSTART` hands the device the executive's own pages,
+  by their PFNs, a descriptor each, and returns at once. The executive has
+  locked them, so their frames stay its own until the request is done
+  ([ADR-0047](../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)).
+  The device's interrupt ends the request: the PAL keeps its status and
+  requests the disks' interrupt (*Interrupts and exceptions*), whose
+  routine takes the status with `DISKDONE`.
 
 To boot, the PAL reads Files-11 as VMS's VMB did, enough to find the
 executive: the home block at LBN 1, the index file's header from it, the
 MFD's (file 4), `SYSEXE.DIR` in the MFD, `EXEC.EXE` in that, then the
 file, through the map in its header, up to its end of file. The executive
-reads and writes the disks with `READLBLK` and `WRITELBLK` (*Function codes*).
+reads and writes the disks with `READLBLK` and `WRITELBLK` at boot, and
+with `DISKSTART` and `DISKDONE` once it schedules processes (*Function codes*).
 
 ### The entropy device
 
@@ -114,8 +128,8 @@ The last transport is a virtio-rng device, which `scripts/run-qemu.sh`
 attaches with no backend of its own, so QEMU fills it from the host's
 random generator ([ADR-0031](../adr/0031-entropy-from-virtio-rng.md)).
 The PAL gives it a queue of its own, in the page after the disks', and
-`GETENTROPY` hands it the data page for each request, polled, as the
-disks' are. VAX and Alpha machines had no such device, and VMS on them no
+`GETENTROPY` hands it the data page for each request, polled, as
+`READLBLK` does the disks'. VAX and Alpha machines had no such device, and VMS on them no
 service to read one: this is vaxpunk's, for `$GET_ENTROPY`.
 
 ## Calling the PAL
@@ -235,6 +249,12 @@ which caches that, as Alpha's TLB cached the page tables
 The PAL sees every PFN at an address of its own, the way Alpha PALcode read
 memory physically. It reads and writes the executive's memory there to push
 and pop interrupt frames and to read HWPCBs and the SCB.
+
+`RDPTE` reads a page's PTE without changing it, as Alpha's executive read
+its page tables in memory. The executive locks a direct I/O's pages by
+their PFNs, which it reads with it, and hands a disk the PFNs (*The
+disks*): a device reads and writes frames, whatever process is current
+when it is done.
 
 ## Process contexts
 
@@ -362,6 +382,11 @@ starts as `REI` from the frame at its KSP, with R0 the HWPCB the CPU left.
   21 and delivers it through vector 0x100 as the console's
   ([DESIGN-0003](0003-tcpip-port.md)). Only port 0 exists, and only with a
   network device; without one the doorbell does nothing.
+- **The disks.** When a request from `DISKSTART` is done, the PAL requests
+  an interrupt at IPL 21 too, and delivers it through vector 0x104 as the
+  port's. Each of the two at IPL 21 has its own vector: the PAL delivers
+  the port's first, and the other once IPL drops below 21 again. The
+  handler asks each disk for its status with `DISKDONE`.
 - Interrupts go to kernel mode, with kernel as the previous mode, as the
   VAX's do.
 - **`CHMx`**, x the mode: `CHMK` 0, `CHME` 1, `CHMS` 2, `CHMU` 3. The code in
@@ -502,8 +527,8 @@ and gets:
 | `CALL_PAL #code` | any call: a0-a5 in R0-R5, v0 in R0, as on Alpha |
 
 `CALL_PAL` reaches the calls the VAX has no instruction for: `SWPCTX`,
-`WTINT`, `WRPTE`, `DELCTX`, `READLBLK`, `WRITELBLK`. `$PALDEF` in `lib.mlb` names their
-codes.
+`WTINT`, `WRPTE`, `RDPTE`, `DELCTX`, `READLBLK`, `WRITELBLK`,
+`DISKSTART`, `DISKDONE`. `$PALDEF` in `lib.mlb` names their codes.
 
 ## Function codes
 
@@ -543,6 +568,9 @@ unused.
 | 0x48 | `MTPR_DOORBELL` | vaxpunk | a0 = port | | signals the port's component; never waits |
 | 0x49 | `GETENTROPY` | vaxpunk | a0 = buffer, a1 = byte count | v0 = status | fills the buffer, at most 256 bytes, which kernel mode must be able to write, from the entropy device |
 | 0x4A | `GETMAXBLOCK` | vaxpunk | a0 = unit | v0 = blocks | a disk's size in blocks, the device's capacity, or 0 without the disk |
+| 0x4B | `RDPTE` | vaxpunk | a0 = address | v0 = PTE | the PTE of the address's page as `WRPTE` left it, the current process's in P0 and P1, or 0 if there is none |
+| 0x4C | `DISKSTART` | vaxpunk | a0 = PFN list, a1 = byte count, a2 = LBN, a3 = unit, a4 = offset, a5 = 1 to write | v0 = 0, or status | hands a disk a read or write of the pages whose PFNs the list holds and returns: 0 once the device has it |
+| 0x4D | `DISKDONE` | vaxpunk | a0 = unit | v0 = status, or 0 | the status of the disk's request from `DISKSTART` once its interrupt ended it, which it takes, else 0 |
 | 0x82 | `CHME` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to executive mode |
 | 0x83 | `CHMK` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to kernel mode |
 | 0x84 | `CHMS` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to supervisor mode |
@@ -597,6 +625,22 @@ mode may write (read), `SS$_ILLBLKNUM` past the disk's end,
 `SS$_NOSUCHDEV` with no such disk and `SS$_DRVERR` if the device fails,
 as it does for a write to the system disk, which QEMU attaches read only.
 The executive waits in it until the device is done.
+
+`DISKSTART` starts the same read or write without waiting: a1 bytes, at
+most 65,535, from the byte at offset a4 of the first page on, through as
+many pages as they take, whose PFNs are the longwords at a0, in S0. The
+executive locks the pages first (`MMG$IOLOCK`), so the PFNs stay its own
+while the device reads or writes them. A last block in part is read only
+as far as a1 and written padded with zeros. It returns 0 once the device
+has the request; else the request is done, or refused, at once, and v0
+is its status: `SS$_NORMAL` for no bytes, `SS$_NOSUCHDEV` without the
+disk, `SS$_ILLBLKNUM` past its end, and `SS$_BADPARAM` for more than
+65,535 bytes, an offset past a page, a list the PAL can't read, a PFN
+past the executive's last, or a disk that has a request already. Its
+interrupt, at IPL 21 through vector 0x104, ends it; `DISKDONE` then
+returns its status, `SS$_NORMAL` or `SS$_DRVERR`, once, and 0 before.
+`RDPTE` gives the executive the PFNs to lock, from the PTEs the PAL keeps
+for it.
 
 `GETENTROPY` is `$GET_ENTROPY`'s, and only `EXE$GET_ENTROPY` calls it.
 It asks the device until the buffer is full, since it may give fewer
@@ -669,3 +713,6 @@ vaxpunk's own, 0x40-0x7F:
 | 0x46, 0x47 | `READLBLK`, `WRITELBLK` | Alpha's console `READ` and `WRITE` callbacks |
 | 0x48 | `MTPR_DOORBELL` | a smart peripheral's doorbell, as an MSCP port's polling register |
 | 0x4A | `GETMAXBLOCK` | what a disk driver learns from the device, as SCSI's READ CAPACITY, for `UCB$L_MAXBLOCK` |
+| 0x4B | `RDPTE` | reading a PTE in memory, as `MMG$IOLOCK` and `MMG$SVAPTECHK` did on Alpha |
+| 0x4C | `DISKSTART` | a driver loading a controller's map registers with a buffer's PFNs and starting it, as an MSCP port's or a SCSI adapter's DMA |
+| 0x4D | `DISKDONE` | reading the controller's status register in its interrupt service routine |

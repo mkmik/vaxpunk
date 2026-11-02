@@ -2,15 +2,23 @@
         .IDENT  /V0.2/
 ;
 ; Each disk has a VCB: DKA0:, the system disk, a Files-11 ODS-2 volume
-; (crosstools/ods/docs/) that the PAL reads a block at a time with READLBLK; DKB0:,
-; the data disk, which the PAL also writes, with WRITELBLK; and MDA0:,
-; the ramdisk (mddriver.mar). The file system can write the last two.
+; (crosstools/ods/docs/) on a virtio disk the PAL drives; DKB0:, the data
+; disk, another, which can be written; and MDA0:, the ramdisk
+; (mddriver.mar). The file system can write the last two.
 ; DK$DDT is their driver's dispatch table: its FDT routine, DK$FDT, for
 ; $QIO's reads and writes by LBN, and its start I/O routine, DK$STARTIO,
 ; which does the file system's too: as VMS's XQP, FIL$READLBLK and
 ; FIL$WRITELBLK hand the driver an IRP, through the disk's UCB, a unit of
 ; the I/O database (qio.mar), whose DEV$M_MNT, DEV$M_SWL and DEV$M_ALL
 ; mounting sets, as VMS's MOUNT does.
+; The device takes a request at a time, as a VMS disk does: EXE$INSIOQ
+; queues the others on the UCB. DK$STARTIO hands the PAL the request's
+; pages, which the FDT routine or FIL$READLBLK locked (EXE$READLOCK), with
+; DISKSTART, and returns; the device's interrupt, DK$INTERRUPT, forks to
+; DK$FORK, which takes its status with DISKDONE and completes it, and
+; IOC$REQCOM starts the next. FIL$READLBLK waits for its IRP meanwhile,
+; and other processes run. Until the scheduler runs, at IPL 31, the file
+; system reads with the PAL's READLBLK, which waits for the device.
 ; FIL$MOUNT mounts a volume: it reads the home block and keeps the index
 ; file's header, through which every other file's header is found;
 ; $DISMOU forgets it. A volume $MOUNT mounts without MNT$M_SYSTEM is its
@@ -29,10 +37,7 @@
 ; ponytail: no extension headers, so a file's map is what its one header
 ; holds; one lock for every volume, where the XQP $ENQs one per volume and
 ; one per file header (RMS takes the access arbitration lock, as the
-; XQP's); DKA0:'s and DKB0:'s I/O waits for the device, at
-; IPL$_SYNCH, and the file system waits for none: its IRP is done when the
-; driver returns. A driver that queues it needs FIL$READLBLK to wait for
-; it, as the lock lets it.
+; XQP's), so one process's file system I/O waits for another's.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -52,12 +57,13 @@
         $IODEF
         $ARMDEF
         $DEVDEF
+        $PTEDEF
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$LOCATE, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
-        .EXTERNAL IOC$SEARCHDEV, IOC$RETURN
-        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB
+        .EXTERNAL IOC$SEARCHDEV, IOC$RETURN, IOC$RETQUOTA, EXE$INSIOQ, EXE$READLOCK, EXE$WRITELOCK
+        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB, SCH$SCHED
         .EXTERNAL XQP$GL_IRP, FIL$ACLCHK, LNM$GL_SYSTEM, LNM$CREATE, LNM$DELETE
         .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX
 
@@ -101,7 +107,7 @@ FAT$W_MAXREC = 16
 MAXSYSGROUP = 8                         ; UIC groups up to this one are the system's
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-        DDT     DK$DDT, DK$FDT, START=DK$STARTIO, UNITINIT=DK$UNITINIT ; the disks' driver's
+        DDT     DK$DDT, DK$FDT, START=DK$STARTIO, CANCEL=DK$CANCEL, UNITINIT=DK$UNITINIT ; the disks' driver's
 F11$GL_VCB::                            ; the volume the routines here work on
         .ADDRESS F11$AB_DKA0
 F11$AB_DKA0::                           ; DKA0:'s VCB, the system disk's
@@ -135,7 +141,8 @@ F11$GW_FID::                            ; the file ID FIL$SEARCHDIR found
         .BLKW   3
         .ALIGN  LONG
 F11$AB_IRP::                            ; the IRP FIL$READLBLK and FIL$WRITELBLK hand the driver, with no process
-        .BLKB   IRP$K_LENGTH
+        .BLKB   IRP$K_LENGTH+<4*IRP$K_MAXPFN>   ; and its pages' PFNs
+IOWQ:   .ADDRESS IOWQ, IOWQ             ; the processes waiting for a disk's request, SCH$C_MWAIT (IOWAIT)
 OWNER:  .LONG   0                       ; the PCB holding the file system's lock, or 0
 LOCKIPL:                                ; the IPL it had
         .LONG   0
@@ -210,7 +217,9 @@ FIL$UNLOCK::
 
 ; FIL$READLBLK: R0 = a buffer, R1 = a block count, R2 = an LBN. Reads the
 ; blocks from F11$GL_VCB's disk, with an IO$_READLBLK in F11$AB_IRP to its
-; driver, at IPL$_SYNCH. R0 = SS$_NORMAL, or the device's error. Holding
+; driver, the buffer's pages locked, and waits for it while other
+; processes run (IOWAIT); above IPL$_ASTDEL, at boot, the PAL reads them
+; at once (DISKIO). R0 = SS$_NORMAL, or the device's error. Holding
 ; FIL$LOCK. Uses R1.
 FIL$READLBLK::
         .JSB_ENTRY
@@ -231,22 +240,68 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
         MOVL    R0, IRP$L_BUFADR(R3)
         MULL3   #BLOCK, R1, IRP$L_BCNT(R3)
         MOVL    R2, IRP$L_MEDIA(R3)
-        MOVL    F11$GL_VCB, R5
-        MOVL    VCB$L_UCB(R5), R5
+        MOVL    F11$GL_VCB, R4
+        MOVL    VCB$L_UCB(R4), R5
         MOVL    R5, IRP$L_UCB(R3)
-        MOVL    UCB$L_DDT(R5), R0
-        MOVL    DDT$L_START(R0), R0
+        CLRQ    IRP$L_IOST1(R3)
+        CLRL    IRP$L_STS(R3)
+        MFPR    #PR$_IPL, R0
+        CMPL    R0, #IPL$_ASTDEL
+        BGTR    50$                     ; at boot: polled
+        CMPL    16(SP), #IO$_READLBLK
+        BNEQ    10$
+        BSBW    EXE$READLOCK
+        BRB     15$
+10$:    BSBW    EXE$WRITELOCK
+15$:    BLBC    R0, 80$
         DSBINT  #IPL$_SYNCH
-        JSB     (R0)
-        ENBINT
-        MOVZWL  F11$AB_IRP+IRP$L_IOST1, R0
-        POPR    #^M<R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    R4, IRP$L_ASTPRM(R3)    ; IOC$REQCOM wakes it
+        BSBW    EXE$INSIOQ
+        MOVAB   F11$AB_IRP, R3
+20$:    TSTL    IRP$L_IOST1(R3)
+        BNEQ    30$
+        BSBW    IOWAIT
+        BRB     20$
+30$:    ENBINT
+        MOVZWL  IRP$L_IOST1(R3), R0
+        BRB     80$
+50$:    CLRL    R0                      ; 0: a read
+        CMPL    16(SP), #IO$_READLBLK
+        BEQL    55$
+        INCL    R0                      ; 1: a write
+55$:    PUSHL   R0
+        MOVL    IRP$L_BUFADR(R3), R0
+        MOVL    IRP$L_BCNT(R3), R1
+        MOVL    IRP$L_MEDIA(R3), R2
+        MOVL    (SP)+, R3
+        BSBW    DISKIO
+        CMPL    R0, #SS$_DRVERR
+        BNEQ    80$
+        INCW    UCB$W_ERRCNT(R5)
+80$:    POPR    #^M<R2, R3, R4, R5>
         TSTL    (SP)+
+        RSB
+
+; IOWAIT: R4 = the current PCB. Waits in resource wait, SCH$C_MWAIT,
+; until IOC$REQCOM ends the wait, for the file system's request or one of
+; the process's, without delivering the ASTs that may end it early: the
+; caller looks again at what it waits for. IPL$_SYNCH. Keeps every
+; register.
+IOWAIT:
+        .JSB_ENTRY
+        PUSHL   R0
+        MOVL    #SCH$C_MWAIT, PCB$L_STATE(R4)
+        MOVAQ   IOWQ, R0
+        INSQUE  (R4), @4(R0)
+        BSBW    SCH$SCHED
+        MOVL    (SP)+, R0
         RSB
 
 ; DISKIO: R0 = a buffer, R1 = a byte count, R2 = an LBN, R3 = 0 to read
 ; the blocks there into the buffer, 1 to write it there, R4 = the disk's
-; VCB. R0 = SS$_NORMAL, SS$_WRITLCK if the disk is read only, or the
+; VCB. Polled: the PAL's READLBLK and WRITELBLK, which wait for the
+; device. R0 = SS$_NORMAL, SS$_WRITLCK if the disk is read only, or the
 ; device's error. Uses R1, R3 and R4.
 DISKIO:
         .JSB_ENTRY  SCRATCH=<R3, R4>
@@ -270,7 +325,8 @@ DISKIO:
 ; R5 = the disk's UCB, AP = $QIO's arguments. For IO$_READLBLK and
 ; IO$_READPBLK, which read the blocks from LBN p3 into the p2 bytes at
 ; p1, and IO$_WRITELBLK and IO$_WRITEPBLK, which write those bytes there,
-; checks the buffer and makes the IRP, which DK$STARTIO does at once.
+; makes the IRP, with room for the buffer's PFNs, locks its pages, which
+; checks the caller may write (read) each, and queues it (EXE$INSIOQ).
 ; The logical functions take LOG_IO or PHY_IO, the physical ones PHY_IO,
 ; as on VMS. For the file system's, IO$_ACCESS and IO$_MODIFY, makes the
 ; IRP and leaves it in XQP$GL_IRP, for $QIO to hand XQP$PERFORM. R0 =
@@ -304,55 +360,149 @@ DK$FDT::
         RSB
 3$:     IFPRIV  LOG_IO, 7$
 5$:     IFNPRIV PHY_IO, 86$
-7$:     CMPL    R0, #IO$_READLBLK
-        BEQL    10$
-        CMPL    R0, #IO$_READPBLK
-        BNEQ    20$
-10$:    IFNOWRT R3, (R2), 85$
-        BRB     30$
-20$:    IFNORD  R3, (R2), 85$
-30$:    CLRL    R1
+7$:     BICL3   #^C<MMG$C_PAGESIZE-1>, R2, R1   ; the buffer's pages
+        ADDL2   R3, R1
+        ADDL2   #MMG$C_PAGESIZE-1, R1
+        ASHL    #-MMG$C_VPCTX, R1, R1
+        ASHL    #2, R1, R1              ; their PFNs, past the packet
         BSBW    IOC$ALLOCIRP
         BLBC    R0, 90$
         MOVL    36(AP), IRP$L_MEDIA(R3)
-        BRB     DK$STARTIO
-85$:    MOVL    #SS$_ACCVIO, R0
+        BICL3   #^C63, IRP$L_FUNC(R3), R0
+        CMPL    R0, #IO$_READLBLK
+        BEQL    10$
+        CMPL    R0, #IO$_READPBLK
+        BNEQ    20$
+10$:    BSBW    EXE$READLOCK
+        BRB     30$
+20$:    BSBW    EXE$WRITELOCK
+30$:    BLBC    R0, 85$
+        BSBW    EXE$INSIOQ
+        RSB
+85$:    PUSHL   R0                      ; the caller can't: the IRP goes
+        MOVL    R3, R0
+        BSBW    IOC$RETQUOTA
+        MOVZWL  IRP$W_SIZE(R0), R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
         RSB
 86$:    MOVL    #SS$_NOPRIV, R0
         RSB
 87$:    MOVL    #SS$_BADPARAM, R0
 90$:    RSB
 
-; DK$STARTIO: the disks' start I/O routine. R3 = an IRP, R5 = the disk's
-; UCB. Does the IRP's read or write of IRP$L_BCNT bytes at IRP$L_BUFADR,
-; from or to LBN IRP$L_MEDIA, at once, and completes it (IOC$REQCOM) with
-; the status, and the count if it is a success; SS$_DRVERR, the device's
-; own failure, counts in UCB$W_ERRCNT. R0 = SS$_NORMAL. IPL$_SYNCH. Uses
-; R0-R3.
+; DK$STARTIO: the disks' start I/O routine, IOC$INITIATE's. R3 = an IRP,
+; R5 = the disk's UCB, whose device it now has. Starts the IRP's read or
+; write of IRP$L_BCNT bytes at IRP$L_BUFADR, from or to LBN IRP$L_MEDIA:
+; on one of the PAL's disks with DISKSTART, of the pages EXE$READLOCK or
+; EXE$WRITELOCK locked, which its interrupt ends (DK$INTERRUPT); on the
+; ramdisk at once (MD$IO). One done at once, or that can't start, is
+; completed now (DKDONE): a write to a disk that is read only with
+; SS$_WRITLCK. IPL$_SYNCH. Uses R0-R3.
 DK$STARTIO::
-        .JSB_ENTRY  SCRATCH=<R2, R3, R4>
-        PUSHR   #^M<R3, R4>
-        BICL3   #^C63, IRP$L_FUNC(R3), R4
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHR   #^M<R4, R5>
+        MOVL    UCB$L_VCB(R5), R4
+        BICL3   #^C63, IRP$L_FUNC(R3), R0
+        CLRL    R5                      ; 0: a read
+        CMPL    R0, #IO$_READLBLK
+        BEQL    10$
+        CMPL    R0, #IO$_READPBLK
+        BEQL    10$
+        INCL    R5                      ; 1: a write, to a disk that can be written
+        MOVL    #SS$_WRITLCK, R0
+        BBC     #VCB$V_WRITE, VCB$L_STATUS(R4), 80$
+10$:    BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R4), 50$
+        PUSHL   R3
+        MOVAB   IRP$K_LENGTH(R3), R0    ; its pages' PFNs
+        MOVL    IRP$L_BCNT(R3), R1
+        MOVL    IRP$L_MEDIA(R3), R2
+        MOVZBL  VCB$B_UNIT(R4), R3
+        MOVL    (SP), R4
+        MOVL    IRP$L_BOFF(R4), R4      ; the offset in the first
+        CALL_PAL #PAL$_DISKSTART
+        MOVL    (SP)+, R3
+        TSTL    R0
+        BNEQ    80$                     ; done or refused at once
+        POPR    #^M<R4, R5>
+        RSB
+50$:    PUSHL   R3
         MOVL    IRP$L_BUFADR(R3), R0
         MOVL    IRP$L_BCNT(R3), R1
         MOVL    IRP$L_MEDIA(R3), R2
-        CLRL    R3                      ; 0: a read
-        CMPL    R4, #IO$_READLBLK
-        BEQL    10$
-        CMPL    R4, #IO$_READPBLK
-        BEQL    10$
-        INCL    R3                      ; 1: a write
-10$:    MOVL    UCB$L_VCB(R5), R4
-        BSBW    DISKIO
-        POPR    #^M<R3, R4>
-        BLBC    R0, 20$
+        MOVL    R5, R3
+        BSBW    MD$IO
+        MOVL    (SP)+, R3
+80$:    POPR    #^M<R4, R5>
+        BSBW    DKDONE
+        RSB
+
+; DKDONE: R3 = a disk's request, done, R5 = its UCB, R0 = its status.
+; Completes it (IOC$REQCOM), with the byte count in the IOSB if it
+; succeeded; the device's failure, SS$_DRVERR, counts in UCB$W_ERRCNT.
+; IPL$_SYNCH. Uses R0-R3.
+DKDONE:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BLBC    R0, 10$
         INSV    IRP$L_BCNT(R3), #16, #16, R0
-        BRB     30$
-20$:    CMPL    R0, #SS$_DRVERR
-        BNEQ    30$
+        BRB     20$
+10$:    CMPL    R0, #SS$_DRVERR
+        BNEQ    20$
         INCW    UCB$W_ERRCNT(R5)
-30$:    CLRL    R1
-        BRW     IOC$REQCOM
+20$:    CLRL    R1
+        BSBW    IOC$REQCOM
+        RSB
+
+; DK$INTERRUPT: the disks' completion interrupt, at IPL$_PORT, through
+; SCB$L_DISK: a request DK$STARTIO gave the PAL is done. Requests the
+; IPL$_SYNCH software interrupt, DK$FORK, which completes it.
+DK$INTERRUPT::
+        .EXCEPTION_ENTRY
+        SOFTINT #IPL$_SYNCH
+        REI
+
+; DK$FORK: the IPL$_SYNCH software interrupt, the disks' fork. For each of
+; the PAL's disks whose request is done, as DISKDONE says, completes it
+; (DKDONE), and IOC$REQCOM starts the next.
+DK$FORK::
+        .EXCEPTION_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        MOVAB   F11$AB_DKA0, R4
+10$:    BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R4), 20$
+        MOVZBL  VCB$B_UNIT(R4), R0
+        CALL_PAL #PAL$_DISKDONE
+        TSTL    R0
+        BEQL    20$
+        MOVL    VCB$L_UCB(R4), R5
+        MOVL    UCB$L_IRP(R5), R3
+        BEQL    20$
+        BSBW    DKDONE
+20$:    ADDL2   #VCB$K_LENGTH, R4
+        MOVAB   F11$A_VCBEND, R0
+        CMPL    R4, R0
+        BLSSU   10$
+        POPR    #^M<R0, R1, R2, R3, R4, R5>
+        REI
+
+; DK$CANCEL: the disks' cancel routine, IOC$CANCEL's. R4 = the current
+; PCB, R5 = the disk's UCB, R2 = a channel, R7 = a status, or 0 for
+; rundown and $DASSGN. The device can't stop a request it has, which ends
+; as it would have; for 0, waits while it has one of the process's on the
+; channel (IOWAIT), as VMS's rundown waits for a channel's I/O: its
+; buffer's pages and its IOSB go next. IPL$_SYNCH. Uses R0.
+DK$CANCEL::
+        .JSB_ENTRY
+        TSTL    R7
+        BNEQ    90$
+10$:    MOVL    UCB$L_IRP(R5), R0
+        BEQL    90$
+        CMPL    IRP$L_PID(R0), PCB$L_PID(R4)
+        BNEQ    90$
+        CMPW    IRP$W_CHAN(R0), R2
+        BNEQ    90$
+        BSBW    IOWAIT
+        BRB     10$
+90$:    RSB
 
 ; DK$UNITINIT: the disks' unit initialization, IOC$INIT's at boot. R5 =
 ; a disk's UCB. Puts it online if the PAL has the disk, as its size,

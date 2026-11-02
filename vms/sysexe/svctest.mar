@@ -514,6 +514,18 @@ BINBUF: .BLKQ   1
         EXPECT  #SS$_NORMAL, 65
         CMPW    DVI_IOSB, #SS$_WRITLCK
         BNEQ    90$
+; The device reads into the caller's own pages, which stay locked while it
+; may: their deletion as the read starts takes them from the process, and
+; the read still ends well, into frames no one else has been given.
+        $CRETVA_S INADR=INADR
+        EXPECT  #SS$_NORMAL, 124
+        $QIO_S  EFN=#4, CHAN=CHAN, FUNC=#IO$_READLBLK, IOSB=DVI_IOSB, P1=@INADR, P2=#8192, P3=#1
+        EXPECT  #SS$_NORMAL, 125
+        $DELTVA_S INADR=INADR
+        EXPECT  #SS$_NORMAL, 126
+        $WAITFR_S EFN=#4
+        CMPL    DVI_IOSB, #<8192@16>!SS$_NORMAL
+        BNEQ    90$
         $DASSGN_S CHAN=CHAN
 
 ; Messages: one it knows, its text alone, one it doesn't, and one

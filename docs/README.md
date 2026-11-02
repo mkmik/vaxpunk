@@ -46,7 +46,7 @@ same commit; `todography lint` checks it.
 | [ADR-0012](adr/0012-data-disk-writable-files-11.md) | DKB0:, a second virtio disk the PAL writes, holds a Files-11 volume that outlives the system | Proposed; decision 4 superseded by ADR-0043 |
 | [ADR-0013](adr/0013-qio-irps-and-drivers.md) | $QIO queues an I/O request packet to the device's driver, and its completion is a kernel mode AST | Proposed; decision 1 superseded by ADR-0044 |
 | [ADR-0014](adr/0014-ctrlc-ctrly-asts.md) | CTRL/C and CTRL/Y are ASTs enabled with IO$_SETMODE, and DCL's CTRL/Y AST stops the image | Proposed |
-| [ADR-0015](adr/0015-file-system-io-through-the-disk-driver.md) | The file system hands its block I/O to the disk's start I/O routine in an IRP of its own | Proposed |
+| [ADR-0015](adr/0015-file-system-io-through-the-disk-driver.md) | The file system hands its block I/O to the disk's start I/O routine in an IRP of its own | Proposed; decision 4 extended by ADR-0047: the IRP's completion wakes the process waiting for it |
 | [ADR-0016](adr/0016-tcpip-component-and-bga0.md) | The TCP/IP component is lwIP and a virtio-net driver of our own that the PAL starts, and BGA0: clones a unit per connection | Proposed; point 3's BGA0: superseded by ADR-0044 |
 | [ADR-0017](adr/0017-command-tables-from-cld-with-vcdu.md) | Commands are defined in CLD files that vcdu compiles at build time, and a parser library linked into each image reads them | Proposed |
 | [ADR-0018](adr/0018-set-command-and-foreign-commands.md) | SET COMMAND compiles CLD in DCL into tables DCL looks in first, and a foreign command's image gets its line as $LINE | Proposed |
@@ -78,6 +78,7 @@ same commit; `todography lint` checks it.
 | [ADR-0044](adr/0044-the-io-database.md) | The devices are VMS's I/O database: a DDB per controller on IOC$GL_DEVLIST, its units' UCBs by number, a dispatch table per driver, and units cloned from templates | Proposed |
 | [ADR-0045](adr/0045-spawn-passes-its-context-as-vms-does.md) | SPAWN's subprocess runs LOGINOUT, a known image with CMKRNL, which copies its owner's process logical names, and DCL passes the rest of the context in a mailbox that is the subprocess's SYS$ERROR | Proposed |
 | [ADR-0046](adr/0046-shared-indexed-files-and-record-locks.md) | Writers share an indexed file in CW mode, each open keeps the file's header and prologue in step under FIL$LOCK, and record locks are sublocks of the access arbitration lock | Proposed |
+| [ADR-0047](adr/0047-interrupt-driven-disk-io-and-locked-pages.md) | A disk request ends by interrupt, the device reads and writes the requester's pages by PFN, and those pages stay locked until it is done | Proposed |
 
 ### PRDs
 

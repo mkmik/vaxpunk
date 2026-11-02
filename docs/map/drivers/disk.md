@@ -63,9 +63,9 @@ note = "PRD-0003 tier 2 #11: what t8y:/files/write-ordering builds on for its or
 [[feature]]
 id = "queued"
 title = "Requests queued, completed by the device's interrupt"
-status = "todo"
+status = "done"
 needs = ["#start-io", "/drivers/interrupt-io"]
-note = "PRD-0003 tier 4 #37"
+note = "ADR-0047: EXE$INSIOQ, DISKSTART of the locked pages, DK$INTERRUPT and DK$FORK; PRD-0003 tier 4 #37"
 
 [[feature]]
 id = "more-disks"
@@ -114,11 +114,14 @@ a disk.
 vaxpunk's disk driver is `DK$DDT`, with `DK$FDT` and `DK$STARTIO`, in
 `vms/exec/f11.mar`, with DDBs and UCBs for `DKA0:`, `DKB0:` and `MDA0:`
 in `qio.mar`, the first on the I/O database
-([ADR-0044](../../adr/0044-the-io-database.md)). The PAL drives the virtio-blk devices itself, polled and a
-request at a time (`pal/src/main.c`): `READLBLK` reads either disk,
-`WRITELBLK` writes `DKB0:`; QEMU attaches `DKA0:` read only
+([ADR-0044](../../adr/0044-the-io-database.md)). The PAL drives the virtio-blk devices itself, a
+request at a time (`pal/src/main.c`); QEMU attaches `DKA0:` read only
 ([ADR-0007](../../adr/0007-system-disk-files-11-and-rms.md),
 [ADR-0012](../../adr/0012-data-disk-writable-files-11.md)). The file
 system hands its own I/O to the start I/O routine in an IRP of its own
 ([ADR-0015](../../adr/0015-file-system-io-through-the-disk-driver.md)).
-Each request finishes before `DK$STARTIO` returns (PRD-0003 tier 4 #37).
+`DK$STARTIO` hands the PAL the request's locked pages with `DISKSTART`,
+the device's interrupt ends it, and the others wait on the UCB
+([ADR-0047](../../adr/0047-interrupt-driven-disk-io-and-locked-pages.md));
+at boot, before the scheduler runs, the file system reads with the
+PAL's polled `READLBLK`.

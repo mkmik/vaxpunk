@@ -237,8 +237,9 @@ SCH$WAIT::
 ; SCH$SCHED: gives the CPU to the highest computable process. The current
 ; one is already in a queue, or deleted. If the CPU comes back to it, this
 ; returns. With nothing computable, the CPU waits for an interrupt at IPL$_RESCHED,
-; below the software timer interrupt's, which may make a process
-; computable. IPL$_SYNCH. Keeps every register.
+; below the software timer interrupt's and the disks' fork, which may make
+; a process computable: one that lowering IPL lets through first is looked
+; for before the wait. IPL$_SYNCH. Keeps every register.
 SCH$SCHED::
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4>
@@ -246,8 +247,10 @@ SCH$SCHED::
 20$:    BBS     R1, SCH$GL_COMQS, 30$
         SOBGEQ  R1, 20$
         SETIPL  #IPL$_RESCHED
+        TSTL    SCH$GL_COMQS
+        BNEQ    25$
         CALL_PAL #PAL$_WTINT
-        SETIPL  #IPL$_SYNCH
+25$:    SETIPL  #IPL$_SYNCH
         BRB     10$
 30$:    MOVAQ   SCH$AQ_COMH[R1], R2
         REMQUE  @(R2), R3               ; its first process
@@ -276,18 +279,46 @@ SCH$RESCHED::
         MOVL    (SP)+, R4
         REI
 
-; SCH$QEND: R4 = the current PCB, whose quantum is up. Gives it a new
-; quantum and, if a computable process has its priority or a higher one,
-; requests a reschedule, which puts it on its COM queue's tail. Real-time
-; processes, priority 16 and up, keep the CPU. IPL$_SYNCH. Keeps every
+; SCH$BOOST: R4 = a PCB that isn't computable, R2 = a priority increment,
+; a PRI$_ value. Boosts a normal process, below priority 16, for an event
+; that ends its wait, as VMS's scheduler does: its priority becomes its
+; base priority plus the increment, at most 15, if that is higher.
+; SCH$QEND takes it back down a step a quantum. IPL$_SYNCH. Keeps every
 ; register.
-; ponytail: no priority decay toward the base, since nothing boosts yet.
+; vaxpunk: VMS boosts in the routines that end a wait, SCH$RSE and
+; SCH$CHSEP; here they call this one.
+SCH$BOOST::
+        .JSB_ENTRY
+        PUSHL   R0
+        CMPL    PCB$L_STATE(R4), #SCH$C_COM     ; on a COM queue by its priority
+        BEQL    90$
+        MOVZBL  PCB$B_PRIB(R4), R0
+        CMPL    R0, #16
+        BGEQU   90$
+        ADDL2   R2, R0
+        CMPL    R0, #15
+        BLEQU   10$
+        MOVL    #15, R0
+10$:    CMPB    R0, PCB$B_PRI(R4)
+        BLEQU   90$
+        MOVB    R0, PCB$B_PRI(R4)
+90$:    MOVL    (SP)+, R0
+        RSB
+
+; SCH$QEND: R4 = the current PCB, whose quantum is up. Gives it a new
+; quantum, a step less of a boost (SCH$BOOST), and, if a computable
+; process has its priority or a higher one, requests a reschedule, which
+; puts it on its COM queue's tail. Real-time processes, priority 16 and
+; up, keep the CPU. IPL$_SYNCH. Keeps every register.
 SCH$QEND::
         .JSB_ENTRY
         MNEGW   SGN$GW_QUANTUM, PCB$W_QUANT(R4)
         CMPB    PCB$B_PRI(R4), #16
         BGEQU   20$
-        PUSHR   #^M<R0>
+        CMPB    PCB$B_PRI(R4), PCB$B_PRIB(R4)
+        BLEQU   5$
+        DECB    PCB$B_PRI(R4)
+5$:     PUSHR   #^M<R0>
         MOVZBL  PCB$B_PRI(R4), R0
         ASHL    R0, #1, R0
         CMPL    SCH$GL_COMQS, R0

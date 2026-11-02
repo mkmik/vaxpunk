@@ -101,8 +101,8 @@ note = "ADR-0007 and ADR-0039 follow-up: a file open on the channel, read and wr
 [[feature]]
 id = "queued-io"
 title = "Waits for a queued IRP from an interrupt-driven disk"
-status = "todo"
-note = "PRD-0003 tier 4 #37; ADR-0015, ADR-0020"
+status = "done"
+note = "ADR-0047: FIL$READLBLK locks its buffer, queues F11$AB_IRP and waits in MWAIT, holding FIL$LOCK, with no AST delivered; PRD-0003 tier 4 #37"
 needs = ["/drivers/interrupt-io"]
 
 [[feature]]

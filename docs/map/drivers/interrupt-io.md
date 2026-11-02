@@ -5,8 +5,8 @@ aka = ["interrupt service routine", "ISR", "fork process", "IOC$REQCOM", "IPL$_I
 kind = "core"
 intent = "goal"
 research = "outline"
-status = "todo"
-refs = ["docs/prd/0003-multi-user-vms.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/design/0001-pal-interface.md", "pal/src/main.c", "vms/exec/qio.mar"]
+status = "done"
+refs = ["docs/adr/0047-interrupt-driven-disk-io-and-locked-pages.md", "docs/prd/0003-multi-user-vms.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/design/0001-pal-interface.md", "pal/src/main.c", "vms/exec/qio.mar"]
 
 [[needs]]
 on = "/platform/pal"
@@ -36,12 +36,16 @@ CPU runs other processes while a disk seeks, and a process waits for its
 I/O in an event flag wait, not a loop. `$CANCEL` and rundown must wait
 for requests the device already holds.
 
-vaxpunk's disks are polled: the PAL starts each virtio-blk request and
-waits for it, so `DK$STARTIO` completes the IRP before it returns
-(`pal/src/main.c`, [ADR-0015](../../adr/0015-file-system-io-through-the-disk-driver.md)).
-The console UART is looked at on each 10 ms tick. PRD-0003 tier 4 #37
-and #38 keep it so until the hardware or the load changes; then the
-PAL takes the devices' interrupts through seL4, the disk driver queues,
-the file system waits for its IRP (t8y:/files/ods2), and
-`IOC$CANCEL` waits for rundown's cancels (tier 2 #18). The TCP/IP port
-already works this way: responses come by interrupt.
+vaxpunk's disks work this way
+([ADR-0047](../../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)).
+The PAL takes each disk's interrupt through seL4's IRQ handler;
+`DISKSTART` hands the device the request's pages, which the driver
+locked by PFN (`EXE$READLOCK`, `MMG$IOLOCK`), and returns. When the
+device is done, the PAL requests an interrupt at IPL 21 through
+`SCB$L_DISK`; `DK$INTERRUPT` forks to `DK$FORK` at `IPL$_SYNCH`, which
+takes the status with `DISKDONE`, completes the IRP and starts the next
+one queued on the UCB (`EXE$INSIOQ`, `IOC$REQCOM`). The file system
+waits for its IRP while other processes run, and rundown waits for a
+request the device has (`DK$CANCEL`). The TCP/IP port already worked
+this way: its responses come by interrupt. The console UART is still
+looked at on each 10 ms tick (t8y:/drivers/console#interrupt-uart).

@@ -76,7 +76,9 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   disk, and unit 1, the data disk, `out/datadisk.img`, and prints
   `disk 0: virtio-blk, 16384 blocks` and `disk 1: ...` for them. From then
   on the PAL can read the disks' blocks, by number, for itself and for the
-  executive, and write the data disk's for the executive. It also
+  executive, and write the data disk's for the executive. It also takes
+  each disk's interrupt, which tells it the device has finished a request
+  the executive started ([ADR-0047](adr/0047-interrupt-driven-disk-io-and-locked-pages.md)). It also
   notes the network device, virtio-net, if QEMU has one, and sets up
   the entropy device, virtio-rng, printing `entropy: virtio-rng`. The
   PAL reads random bytes from it for `$GET_ENTROPY`
@@ -101,8 +103,8 @@ the role PALcode played on an Alpha: it's the "hardware" layer underneath VMS
   ready, and waits: for the executive's doorbell, the device's interrupt
   or the clock's tick, which the PAL's clock thread now gives it too.
 - After that it loops in `serve`: it handles the executive's PAL calls
-  (MTPR, SWPCTX, REI, CHMx…), page faults and clock ticks
-  ([DESIGN-0001](design/0001-pal-interface.md)). It only stops on a halt or
+  (MTPR, SWPCTX, REI, CHMx…), page faults, clock ticks and the disks'
+  interrupts ([DESIGN-0001](design/0001-pal-interface.md)). It only stops on a halt or
   a fatal error.
 
 ## 5. The executive, EXEC.EXE
@@ -114,9 +116,11 @@ compiles.
 `EXEC$START` ([vms/exec/exec.mar](../vms/exec/exec.mar)):
 
 - fills in the system control block (handlers for traps, mode changes and
-  software interrupts, plus the timer and the console receive interrupt)
+  software interrupts, plus the timer and the console receive interrupt,
+  and the disks' interrupt, at IPL 21, and the software interrupt at IPL 8
+  it requests, `DK$INTERRUPT` and `DK$FORK`)
 - starts memory management (`MMG$INIT`): the PFN database, in S0 past
-  `EXEC.EXE`, 8 bytes for each PFN, and the pool; then lets user-mode code
+  `EXEC.EXE`, 10 bytes for each PFN, and the pool; then lets user-mode code
   use the system service vector
 - starts the scheduler (`SCH$INIT`)
 - makes the system's logical name directory, `LNM$SYSTEM_DIRECTORY`, a
@@ -151,8 +155,11 @@ compiles.
 - prints `%EXEC-I-START … free pages`
 - mounts the system disk, `DKA0:`: it reads the volume's home block and
   the index file's header, which says where every other file's header is
-  (`FIL$MOUNT`), handing each read to the disk's driver (`DK$STARTIO`) in
-  an I/O request packet, as the file system always does, defines
+  (`FIL$MOUNT`), with the PAL's `READLBLK`, which waits for the disk: no
+  process can wait for one yet. From the first process on, the file system
+  hands each read to the disk's driver (`DK$STARTIO`) in an I/O request
+  packet and the process waits until the disk's interrupt says the read
+  is done, while other processes run. It defines
   `DISK$VAXPUNK`, the volume's label after `DISK$`, as `_DKA0:` in
   `LNM$SYSTEM_TABLE`, and prints `%MOUNT-I-MOUNTED, VAXPUNK mounted on _DKA0:`
 - defines the system's logical names for it, in `LNM$SYSTEM_TABLE`:
@@ -544,7 +551,10 @@ executive feature:
   event flags. PONG then sets a third flag of theirs, which STARTUP waits
   for.
 - **SVCTEST** checks the status that each system service returns, and
-  reads the system disk's home block by its LBN with `$QIOW`. A `$QIOW`
+  reads the system disk's home block by its LBN with `$QIOW`. It reads two
+  more blocks with `$QIO` into pages it deletes at once, while the disk may
+  still be writing them: the pages stay locked until it is done, and the
+  read ends well. A `$QIOW`
   from ARM64 with a buffer above 4 GB gets `SS$_ARG_GTR_32_BITS` from the
   service dispatcher. It turns fixed times into text with `$ASCTIM` and
   into numbers with `$NUMTIM`, and checks the result. It fills two

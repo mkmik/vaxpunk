@@ -125,10 +125,19 @@ P1 are each process's own, S0 every process's:
 
 - **PFNs.** `MMG$INIT` makes the PFN database for `RPB$L_PFNCNT` PFNs, or
   as many as fit below the pool, and says `%EXEC-W-PFNLIMIT` if that is
-  fewer: 127 MB of S0, 16 million PFNs, 64 GB. The PFNs from
-  `RPB$L_FREEPFN` up are free past `MMG$GL_HIGHPFN`, so boot does no work
-  for each. `MMG$ALLOCPFN` takes one from the free stack, or the next
-  never used; `MMG$DEALLOCPFN` puts one on the stack.
+  fewer: 128 MB of S0 at 10 bytes a PFN, 13 million PFNs, some 51 GB.
+  The PFNs from `RPB$L_FREEPFN` up are free past `MMG$GL_HIGHPFN`, so
+  boot does no work for each. `MMG$ALLOCPFN` takes one from the free
+  stack, or the next never used; `MMG$DEALLOCPFN` puts one on the stack.
+- **Locked pages.** A direct I/O, a disk's, locks its buffer's pages
+  while the device has them (`MMG$IOLOCK`, through `EXE$READLOCK` and
+  `EXE$WRITELOCK`): it reads each PTE with `RDPTE`, checks the caller's
+  mode may write (read) the page, counts the lock in
+  `MMG$GL_PFNREFCNT`, a word per PFN, and lists the PFN past the IRP
+  for the device. A page deleted while it is locked keeps its PFN off the
+  free stack, its count's top bit, `DELCON`, set, until `MMG$UNLOCK`
+  gives back the last lock, as VMS's delete contingency
+  ([ADR-0047](../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)).
 - **Pages.** `MMG$CREPAG` makes pages at an address: for each, a PFN, a
   `WRPTE` with kernel write to zero it, and another with the protection
   asked for. A page that was there goes back to the free list.
@@ -579,11 +588,18 @@ computable, or its quantum is up, as on VMS:
 2. **`EXE$SWTIMINT`**, at `IPL$_TIMER`, raises IPL to `IPL$_SYNCH`, calls
    `SCH$QEND` if the quantum is still up, and serves the timer queue
    ([Time](#time)).
-3. **`SCH$QEND`** gives the process a new quantum and, if a COM queue at its
-   priority or above isn't empty, requests the reschedule interrupt, which
-   puts it on its queue's tail: round robin within a priority. Real-time
-   processes, priority 16 and up, keep the CPU. ponytail: no priority decay
-   toward the base, since nothing boosts a priority yet.
+3. **`SCH$QEND`** gives the process a new quantum, takes a step off a
+   boost, and, if a COM queue at its priority or above isn't empty,
+   requests the reschedule interrupt, which puts it on its queue's tail:
+   round robin within a priority. Real-time processes, priority 16 and
+   up, keep the CPU.
+
+A disk's request that ends boosts its process, below priority 16, to
+its base priority plus `PRI$_IOCOM`, 2, if that is higher (`SCH$BOOST`),
+as VMS's scheduler does, so a process that waits for the disk runs
+before one that computes at its base priority; each quantum end takes a
+step of the boost off. ponytail: only a disk's completion boosts, not a
+terminal's I/O, an event flag or a `$WAKE`.
 
 Code at `IPL$_TIMER` or above, the scheduler included, defers quantum end
 until IPL drops.
@@ -958,7 +974,10 @@ as a kernel mode AST.
   that copies a buffered read's data to the caller's buffer, writes the
   IOSB and sets the event flag. If the caller gave an AST, the IRP goes
   on the AST queue again as an ACB for it, in the caller's mode, with
-  `astprm`; else it is freed.
+  `astprm`; else it is freed. A disk takes a request at a time:
+  `EXE$INSIOQ` starts it, `UCB$L_IRP`, if the device is idle
+  (`UCB$V_BSY`), else queues it on the UCB, and `IOC$REQCOM` starts the
+  next ([ADR-0047](../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)).
 - **`$QIOW`** is `$QIO`, then `$WAITFR` on the event flag, until the
   IOSB, if there is one, has a status: a flag set before that, for
   something else, is cleared and waited for again, as VMS's `$SYNCH`
@@ -967,7 +986,10 @@ as a kernel mode AST.
   channels, its IRPs off the channel's UCB, then calls its driver's
   cancel routine, `DDT$L_CANCEL`, for those the driver holds elsewhere:
   a terminal's writes and its CTRL/C and CTRL/Y ASTs (`TT$CANCEL`), the
-  network's requests on the port (`NET$CANCEL`). `$CANCEL` completes the
+  network's requests on the port (`NET$CANCEL`), a disk's request the
+  device has (`DK$CANCEL`), which it can't stop and lets end as it would
+  have; for rundown and `$DASSGN` it waits for it, as VMS's `RWAST` does,
+  since the IOSB and the pages go next. `$CANCEL` completes the
   requests with `SS$_ABORT`, and leaves those done already. Rundown and
   `$DASSGN` free them unfinished, from its AST queue too: image rundown
   cancels the image's channels before its P0 goes, process rundown all
@@ -1082,14 +1104,18 @@ console, `OPA0:`, which `TTY$INIT` makes at boot, and a TELNET terminal,
 The disks' driver, in `f11.mar`, reads the blocks from LBN p3 into the
 p2 bytes at p1, for `IO$_READLBLK` and `IO$_READPBLK`, or writes them
 there, for `IO$_WRITELBLK` and `IO$_WRITEPBLK`. Its FDT routine,
-`DK$FDT`, checks the function and the buffer and makes the IRP, with the
-LBN in `IRP$L_MEDIA`; its start I/O routine, `DK$STARTIO`, does the I/O
-at once, calling the PAL with the VCB's unit, or `MD$IO` for the ramdisk,
-and completes the request with the status, and the byte count if it is a
-success: `SS$_WRITLCK` for `DKA0:`, `SS$_MEDOFL` for `MDA0:` until it is
-made. `SS$_DRVERR`, the PAL's word that the device itself failed, adds
-one to the UCB's error count. The file system's own reads and writes go
-to `DK$STARTIO` too (*Files*).
+`DK$FDT`, checks the function, makes the IRP, with the LBN in
+`IRP$L_MEDIA` and room for the buffer's PFNs, locks the buffer's pages
+(*Memory*) and queues it (`EXE$INSIOQ`). Its start I/O routine,
+`DK$STARTIO`, hands the PAL the pages with `DISKSTART` and returns; the
+device's interrupt, `DK$INTERRUPT` at IPL 21, requests the `IPL$_SYNCH`
+software interrupt, `DK$FORK`, which takes each disk's status with
+`DISKDONE` and completes its request with the status, and the byte
+count if it is a success. The ramdisk's is done at once, by `MD$IO`, and
+so is a write to `DKA0:`, `SS$_WRITLCK`, or anything on `MDA0:` before
+it is made, `SS$_MEDOFL`. `SS$_DRVERR`, the PAL's word that the device
+itself failed, adds one to the UCB's error count. The file system's own
+reads and writes go to `DK$STARTIO` too (*Files*).
 
 ponytail: the console's output waits for it at `IPL$_SYNCH`, and a
 write in the middle of a line being read doesn't redisplay it; a
@@ -1153,10 +1179,10 @@ counts, owners, device protection or `MAXBLOCK` yet; no ASTs.
 ### Files
 
 There are three disks, each with a VCB (`$VCBDEF`) in `f11.mar`: the
-system disk, `DKA0:`, a Files-11 ODS-2 volume which the PAL reads a block
-at a time with `READLBLK` (DESIGN-0001, *The disks*); the data disk,
-`DKB0:`, a disk image of the host's, which the PAL also writes, with
-`WRITELBLK`, and which keeps its volume from boot to boot; and `MDA0:`, a
+system disk, `DKA0:`, a Files-11 ODS-2 volume on a virtio disk the PAL
+drives (DESIGN-0001, *The disks*); the data disk, `DKB0:`, a disk image
+of the host's, which can be written, and which keeps its volume from
+boot to boot; and `MDA0:`, a
 ramdisk (`mddriver.mar`), as DECram's: blocks in pages of S0, which
 `$INIT_VOL` makes, zeroed, `INIT$_SIZE` of them or as many as the last
 time, 1,024 at first, and which last until the system stops.
@@ -1164,10 +1190,15 @@ time, 1,024 at first, and which last until the system stops.
 through its driver, as VMS's XQP does
 ([ADR-0015](../adr/0015-file-system-io-through-the-disk-driver.md)):
 they fill in `F11$AB_IRP`, the file system's own IRP, with no process,
-and call the start I/O routine of the VCB's UCB, `VCB$L_UCB`. The driver
-completes it with `IOC$REQCOM`, which, for an IRP with no process, only
-leaves the status in it. ponytail: the file system doesn't wait; the
-disk's driver is done when it returns.
+lock the buffer's pages and queue it on the VCB's UCB, `VCB$L_UCB`
+(`EXE$INSIOQ`), and wait in `MWAIT` for it, while other processes run.
+The driver completes it with `IOC$REQCOM`, which, for an IRP with no
+process, leaves the status in it and ends the wait of the PCB in its
+`IRP$L_ASTPRM`. The wait delivers no AST, so none deletes the process
+while it holds the lock. Until the scheduler runs, at boot, IPL is above
+`IPL$_ASTDEL` and they read and write with the PAL's polled `READLBLK`
+and `WRITELBLK` instead
+([ADR-0047](../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)).
 
 The file system, RMS, `$MOUNT`, `$DISMOU`, `$INIT_VOL`, `$GETDVI` and
 the image activator use it holding the file system's lock
@@ -1177,12 +1208,12 @@ process holds it, then raises IPL to `IPL$_ASTDEL`, where kernel mode
 ASTs, a `$DELPRC` among them, wait for `FIL$UNLOCK`, but reschedules and
 interrupts don't: other processes run while one is in the file system.
 The lock keeps the file system's buffers, `F11$AB_IRP` and `F11$GL_VCB`
-to one process. `FIL$READLBLK` raises IPL to `IPL$_SYNCH` for the
-driver's call, `RMS$PARSE` while it holds pointers into logical names'
+to one process. `FIL$READLBLK` raises IPL to `IPL$_SYNCH` while it
+queues its IRP and waits, `RMS$PARSE` while it holds pointers into logical names'
 blocks, and `RMS$VOLIDLE` while it looks through the PCBs. At boot,
 `FIL$MOUNT` mounts `DKA0:` without it, before there is another process.
 ponytail: one lock for every volume, where the XQP `$ENQ`s one per
-volume and one per file; no priority boost for the holder.
+volume and one per file.
 
 `FIL$SELECT` picks the VCB by device name. `f11.mar` reads Files-11 (`crosstools/ods/docs/`) as VMS's XQP
 does:
@@ -1510,8 +1541,8 @@ taking the clock's interrupts.
 
 ## Next
 
-- Priority boosts on wake and decay at quantum end.
-- Writing the system disk, the disk's interrupt, `$QIO` on disk
+- Priority boosts on wakes other than a disk's completion.
+- Writing the system disk, `$QIO` on disk
   channels, logical names in file specifications (`SYS$SYSTEM:DCL.EXE`)
   and `SYS$DISK`.
 - Access modes for logical names.
