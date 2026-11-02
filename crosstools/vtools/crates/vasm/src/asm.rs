@@ -62,7 +62,7 @@ pub struct Symbol {
     pub weak: bool,
     pub external: bool,
     /// Defined by a label, so it can't be redefined.
-    label: bool,
+    pub(crate) label: bool,
 }
 
 /// An assembled module, ready for `emit`.
@@ -74,6 +74,24 @@ pub struct Module {
     pub symbols: Vec<(String, Symbol)>,
     pub transfer: Option<(usize, u64)>,
     pub warnings: Vec<Diagnostic>,
+    /// For the listing, if asked for: `.TITLE`'s text after the name, the
+    /// location counter before each line of the source that was read (line
+    /// number from 1, offset), and what went into the psects.
+    pub title: String,
+    pub offsets: Vec<(usize, u64)>,
+    pub rows: Vec<Row>,
+}
+
+/// A statement's contents in the listing: `size` bytes at `offset`, shown
+/// `unit` bytes at a time, from the source's line `line` (the line of the
+/// macro call, for a line of an expansion).
+pub struct Row {
+    pub psect: usize,
+    pub offset: u64,
+    pub size: u64,
+    pub unit: u8,
+    pub text: String,
+    pub line: usize,
 }
 
 enum Item {
@@ -166,12 +184,14 @@ pub fn assemble(
     path: Option<&Path>,
     include: &[PathBuf],
     dialect: Option<&mut dyn Dialect>,
+    list: bool,
 ) -> std::result::Result<Module, Vec<Diagnostic>> {
     let file: Rc<str> = path.map_or_else(|| "<source>".into(), |p| p.display().to_string().into());
     let mut a = Asm {
         next_label: 30000,
         include: include.to_vec(),
         dialect,
+        list,
         ..Asm::default()
     };
     a.frames.push(Frame {
@@ -183,6 +203,13 @@ pub fn assemble(
         native: false,
     });
     while let Some(line) = a.next_line() {
+        if a.list && a.frames.len() == 1 {
+            let offset = match a.loc() {
+                Value::Psect { offset, .. } => offset as u64,
+                _ => 0,
+            };
+            a.offsets.push((line.loc.line, offset));
+        }
         a.src = line;
         let text = a.src.text.clone();
         if let Err(e) = a.process(&text) {
@@ -251,6 +278,13 @@ struct Asm<'d> {
     /// Labels at the current location, with their psect, for the dialect's
     /// instructions to move when they align it.
     fresh: Vec<(usize, String)>,
+    /// `/LIST`: `Module`'s listing fields, and the statement being read,
+    /// without its labels and comment.
+    list: bool,
+    title: String,
+    offsets: Vec<(usize, u64)>,
+    rows: Vec<Row>,
+    text: String,
 }
 
 /// Symbols and the location counter, as an expression sees them.
@@ -418,6 +452,24 @@ impl Asm<'_> {
         let psect = self.current();
         self.fresh.retain(|(p, _)| *p != psect);
         let p = &mut self.psects[psect];
+        if self.list && size > 0 && !matches!(item, Item::Space) {
+            // The line in the source this came from.
+            let mut loc = &self.src.loc;
+            while let Some(via) = &loc.via {
+                loc = &via.1;
+            }
+            self.rows.push(Row {
+                psect,
+                offset: p.size,
+                size,
+                unit: match item {
+                    Item::Data { size, .. } => size,
+                    _ => 4,
+                },
+                text: self.text.clone(),
+                line: loc.line,
+            });
+        }
         self.stmts.push(Stmt {
             src: self.src.clone(),
             seq: self.seq,
@@ -560,6 +612,12 @@ impl Asm<'_> {
         }
         if c.at_end() {
             return Ok(());
+        }
+        if self.list {
+            // The mnemonic or directive, a tab, and what follows it.
+            let s = c.rest().trim();
+            let (word, rest) = s.split_once(char::is_whitespace).unwrap_or((s, ""));
+            self.text = format!("{word}\t{}", rest.trim());
         }
         let col = c.col();
         let Some(word) = c.name() else {
@@ -899,6 +957,7 @@ impl Asm<'_> {
                     return err(col, "module names are at most 31 characters");
                 }
                 self.name = Some(title);
+                self.title = c.rest().trim().to_string();
                 c.at = c.line.len(); // the rest is the title text
             }
             ".IDENT" => {
@@ -1179,6 +1238,9 @@ impl Asm<'_> {
             symbols,
             transfer,
             warnings: diags,
+            title: self.title,
+            offsets: self.offsets,
+            rows: self.rows,
         })
     }
 

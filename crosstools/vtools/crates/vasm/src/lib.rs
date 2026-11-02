@@ -8,6 +8,7 @@ mod emit;
 mod encode;
 mod expr;
 mod lex;
+mod listing;
 mod macros;
 
 use std::path::PathBuf;
@@ -83,20 +84,43 @@ pub fn assemble_with(
     tool: &str,
     dialect: Option<&mut dyn Dialect>,
 ) -> Result<Object, Vec<Diagnostic>> {
-    let mut dialect = dialect;
+    run(source, opts, tool, dialect, false).map(|(object, _)| object)
+}
+
+/// `assemble_with`, and the listing `/LIST` writes: the source, then the
+/// machine code each line became (`listing.rs`).
+pub fn assemble_listed(
+    source: &str,
+    opts: &Options,
+    tool: &str,
+    dialect: Option<&mut dyn Dialect>,
+) -> Result<(Object, String), Vec<Diagnostic>> {
+    run(source, opts, tool, dialect, true).map(|(object, listing)| (object, listing.unwrap()))
+}
+
+pub(crate) fn run(
+    source: &str,
+    opts: &Options,
+    tool: &str,
+    mut dialect: Option<&mut dyn Dialect>,
+    list: bool,
+) -> Result<(Object, Option<String>), Vec<Diagnostic>> {
     let module = loop {
         let module = asm::assemble(
             source,
             opts.path.as_deref(),
             &opts.include,
             dialect.as_mut().map(|d| &mut **d as &mut dyn Dialect),
+            list,
         );
         if !dialect.as_mut().is_some_and(|d| d.again()) {
             break module?;
         }
     };
-    Ok(Object {
+    let listing = list.then(|| listing::text(source, &module, opts, tool));
+    let object = Object {
         records: emit::records(&module, &opts.name, opts.date, tool),
         warnings: module.warnings,
-    })
+    };
+    Ok((object, listing))
 }

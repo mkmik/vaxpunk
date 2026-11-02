@@ -27,7 +27,7 @@ fn run(name: &str, mut dialect: Option<&mut dyn Dialect>) -> Result<bool, String
     let usage = || {
         format!(
             "USAGE, usage: {name} [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... \
-             [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] [/ENABLE=what | --enable what] SOURCE"
+             [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] [/ENABLE=what | --enable what] [/LIST[=file]] SOURCE"
         )
     };
     // What the dialect may enable, as vmacro's QUADWORD.
@@ -38,7 +38,7 @@ fn run(name: &str, mut dialect: Option<&mut dyn Dialect>) -> Result<bool, String
             .then_some(())
             .ok_or_else(usage)
     };
-    let (mut source, mut output, mut include) = (None, None, Vec::new());
+    let (mut source, mut output, mut include, mut list) = (None, None, Vec::new(), None);
     // The only warning so far is NOTPIC.
     let mut warnings = true;
     let mut args = env::args().skip(1);
@@ -50,6 +50,10 @@ fn run(name: &str, mut dialect: Option<&mut dyn Dialect>) -> Result<bool, String
         };
         if let Some(path) = qualifier("/OBJECT=") {
             output = Some(path);
+        } else if arg.eq_ignore_ascii_case("/LIST") {
+            list = Some(None);
+        } else if let Some(path) = qualifier("/LIST=") {
+            list = Some(Some(path));
         } else if let Some(dir) = qualifier("/INCLUDE=") {
             include.push(dir);
         } else if let Some(name) = qualifier("/NOWARNINGS=") {
@@ -95,8 +99,16 @@ fn run(name: &str, mut dialect: Option<&mut dyn Dialect>) -> Result<bool, String
     };
 
     let tool = format!("{name} {}", env!("CARGO_PKG_VERSION"));
-    let (records, diags) = match crate::assemble_with(&text, &opts, &tool, dialect) {
-        Ok(object) => (Some(object.records), object.warnings),
+    let (records, diags) = match crate::run(&text, &opts, &tool, dialect, list.is_some()) {
+        Ok((object, listing)) => {
+            if let (Some(path), Some(listing)) = (list, listing) {
+                let path =
+                    path.unwrap_or_else(|| opts.path.as_ref().unwrap().with_extension("lis"));
+                fs::write(&path, listing)
+                    .map_err(|e| format!("WRITEERR, {}: {e}", path.display()))?;
+            }
+            (Some(object.records), object.warnings)
+        }
         Err(diags) => (None, diags),
     };
     for d in diags.iter().filter(|d| warnings || !d.warning) {

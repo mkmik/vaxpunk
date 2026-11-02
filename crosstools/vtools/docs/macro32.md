@@ -7,12 +7,14 @@ instruction becomes a few native ones, with VAX registers, condition codes
 and calls kept as the source expects them.
 
 ```
-vmacro [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] [/ENABLE=QUADWORD | --enable QUADWORD] SOURCE
+vmacro [/OBJECT=file | -o file] [/INCLUDE=dir | -I dir]... [/NOWARNINGS=NOTPIC | --nowarnings NOTPIC] [/ENABLE=QUADWORD | --enable QUADWORD] [/LIST[=file]] SOURCE
 ```
 
 The options are vasm's (`docs/assembler.md`), and `/ENABLE=QUADWORD`, which
 starts the module in quadword mode (*64-bit*). The object file defaults to
-the source name with `.obj`.
+the source name with `.obj`. `/LIST` writes vasm's listing: the source, then
+the ARM64 each line became, as AMACRO's `/LIST/MACHINE_CODE` shows the Alpha
+code, with each VAX instruction's lines under the number of its source line.
 
 ```
 vmacro hello.mar && vmacro -o consolio.obj crosstools/vtools/lib/consolio.mar
@@ -29,7 +31,7 @@ Status: integer instructions, the calling standard's `CALLS`, `CALLG` and
 `REMQUE`, the privileged `MTPR`, `MFPR`, `HALT`, `CHMx`, `PROBEx` and `REI`, Alpha's
 `CALL_PAL`, and AMACRO's 64-bit pieces: the `EVAX_` built-ins, `QUAD_ARGS`,
 quadword mode and the 64-bit call macros. Not yet: floating point, packed decimal, the interlocked queue
-instructions, the other string and privileged instructions, listings.
+instructions, the other string and privileged instructions.
 
 ## How it works
 
