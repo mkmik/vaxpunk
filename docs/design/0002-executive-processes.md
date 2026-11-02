@@ -1193,8 +1193,9 @@ they fill in `F11$AB_IRP`, the file system's own IRP, with no process,
 lock the buffer's pages and queue it on the VCB's UCB, `VCB$L_UCB`
 (`EXE$INSIOQ`), and wait in `MWAIT` for it, while other processes run.
 The driver completes it with `IOC$REQCOM`, which, for an IRP with no
-process, leaves the status in it and ends the wait of the PCB in its
-`IRP$L_ASTPRM`. The wait delivers no AST, so none deletes the process
+process, leaves the status in it, and the end of each disk request ends
+the waits on the driver's queue (`IOWAKE`), each process looking again at
+what it waits for. The wait delivers no AST, so none deletes the process
 while it holds the lock. Until the scheduler runs, at boot, IPL is above
 `IPL$_ASTDEL` and they read and write with the PAL's polled `READLBLK`
 and `WRITELBLK` instead

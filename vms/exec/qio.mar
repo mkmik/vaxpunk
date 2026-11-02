@@ -72,6 +72,8 @@ MAXUNIT = 9999                          ; a clone's highest number, VMS's
 IOC$GL_DEVLIST::                        ; the I/O database: the first DDB, the system disk's
         .ADDRESS IOC$AB_DKADDB
 RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, SCH$C_MWAIT
+DRAINUCB:                               ; the UCB whose waiting requests IOC$REQCOM starts, or 0
+        .LONG   0
 ; The disks' DDBs, the system disk's first, and their UCBs, offline
 ; until IOC$INIT calls DK$UNITINIT.
         DDB     IOC$AB_DKADDB, DKA, IOC$AB_DKA0, DK$DDT, IOC$AB_DKBDDB ; the system disk's controller
@@ -841,12 +843,14 @@ UNLOCK:
 ; and a byte count in the high word, R1 = its second. Unlocks its
 ; buffer's pages if a direct I/O locked them. Queues it to its process as
 ; a kernel mode AST, IOC$POST, unless it is the file system's, with no
-; process, which finds the status in the IRP: that ends the wait of the
-; process waiting for it, IRP$L_ASTPRM's PCB. If it was the request its
+; process, which finds the status in the IRP. If it was the request its
 ; device had (EXE$INSIOQ), a disk's, its process gets a boost, PRI$_IOCOM
-; (SCH$BOOST), and the next one waiting on the UCB starts, or the device
-; is idle. R0 = SS$_NORMAL, for an FDT routine to return. IPL$_SYNCH.
-; Uses R1-R3.
+; (SCH$BOOST), and the next ones waiting on the UCB start, one at a time,
+; until the device has one or none is left: then it is idle. A request
+; its start I/O routine completes at once comes back here, which leaves
+; the next to the IOC$REQCOM that started it, so a long queue of those
+; doesn't nest. R0 = SS$_NORMAL, for an FDT routine to return.
+; IPL$_SYNCH. Uses R1-R3.
 IOC$REQCOM::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHL   R5
@@ -879,25 +883,21 @@ IOC$REQCOM::
         MOVAB   IOC$POST, IRP$L_KAST(R3)
         MOVL    R3, R5
         BSBW    SCH$QAST
-        BRB     20$
-10$:    MOVL    IRP$L_ASTPRM(R3), R1    ; the file system's: its waiter
-        BEQL    20$
-        CMPL    PCB$L_STATE(R1), #SCH$C_MWAIT
-        BNEQ    20$
-        PUSHL   R4
-        MOVL    R1, R4
-        MOVL    #PRI$_IOCOM, R2
-        BSBW    SCH$BOOST
-        BSBW    SCH$WAKEPCB
-        MOVL    (SP)+, R4
-20$:    MOVL    (SP)+, R5
+10$:    MOVL    (SP)+, R5
         BEQL    30$
-        REMQUE  @UCB$L_IOQFL(R5), R3    ; the next
+        CLRL    UCB$L_IRP(R5)           ; the device has none now
+        CMPL    R5, DRAINUCB
+        BEQL    30$                     ; the IOC$REQCOM that started it starts the next
+        PUSHL   DRAINUCB
+        MOVL    R5, DRAINUCB
+20$:    REMQUE  @UCB$L_IOQFL(R5), R3    ; the next
         BVS     25$
         BSBW    IOC$INITIATE
-        BRB     30$
+        TSTL    UCB$L_IRP(R5)
+        BEQL    20$                     ; done at once
+        BRB     28$
 25$:    BICL2   #UCB$M_BSY, UCB$L_STS(R5)
-        CLRL    UCB$L_IRP(R5)
+28$:    MOVL    (SP)+, DRAINUCB
 30$:    MOVL    (SP)+, R5
         MOVL    #SS$_NORMAL, R0
         RSB

@@ -91,6 +91,8 @@ STATE:  .LONG   0
 PRI:    .LONG   0
 CHAN:   .LONG   0
 INADR:  .LONG   ^X60000000, ^X60001FFF  ; in P1
+INADR3: .LONG   ^X60000000, ^X60002FFF  ; three pages there,
+MIDDLE: .LONG   ^X60001000, ^X60001FFF  ; and the second of them
 CMPRIVS:                                ; privileges $SETPRV takes away and gives back
         .LONG   PRV$M_CMKRNL!PRV$M_CMEXEC, 0
 DETACHPRIV:
@@ -109,6 +111,13 @@ UIC_ITEMS:                              ; $GETJPIW's: the UIC
         .LONG   0
         .LONG   0
 UIC:    .LONG   0
+STATE_ITEMS:                            ; and NAPPER's scheduling state
+        .WORD   4, JPI$_STATE
+        .ADDRESS NAPSTATE
+        .LONG   0
+        .LONG   0
+NAPSTATE:
+        .LONG   0
 LNM_SYSTEM:
         .ASCID  "LNM$SYSTEM"
 LNM_PROCESS:
@@ -526,6 +535,34 @@ BINBUF: .BLKQ   1
         $WAITFR_S EFN=#4
         CMPL    DVI_IOSB, #<8192@16>!SS$_NORMAL
         BNEQ    90$
+; Each page of the buffer is checked, not only its first and last byte's,
+; as PROBE does: a hole in it, or a page the caller may not write, a
+; system page, is an access violation.
+        $CRETVA_S INADR=INADR3
+        EXPECT  #SS$_NORMAL, 127
+        $DELTVA_S INADR=MIDDLE
+        EXPECT  #SS$_NORMAL, 128
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READLBLK, IOSB=DVI_IOSB, P1=@INADR3, P2=#12288, P3=#1
+        EXPECT  #SS$_ACCVIO, 129
+        $DELTVA_S INADR=INADR3
+        EXPECT  #SS$_NORMAL, 130
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READLBLK, IOSB=DVI_IOSB, P1=G^EXE$GL_RPB, P2=#512, P3=#1 ; in S0
+        EXPECT  #SS$_ACCVIO, 131
+; Requests the disk refuses at once, past its end, wait their turn
+; behind one it has, and end one after another once it is done with that.
+        $QIO_S  EFN=#4, CHAN=CHAN, FUNC=#IO$_READLBLK, IOSB=DVI_IOSB, P1=BLOCK, P2=#512, P3=#1
+        EXPECT  #SS$_NORMAL, 132
+        MOVL    #40, R2
+140$:   $QIO_S  EFN=#5, CHAN=CHAN, FUNC=#IO$_READLBLK, P1=BLOCK, P2=#512, P3=#^X7FFFFFFF
+        EXPECT  #SS$_NORMAL, 133
+        SOBGTR  R2, 140$
+        $WAITFR_S EFN=#4
+        CMPL    DVI_IOSB, #<512@16>!SS$_NORMAL
+        BNEQ    90$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READLBLK, IOSB=DVI_IOSB, P1=BLOCK, P2=#512, P3=#^X7FFFFFFF
+        EXPECT  #SS$_NORMAL, 134
+        CMPW    DVI_IOSB, #SS$_ILLBLKNUM
+        BNEQ    90$
         $DASSGN_S CHAN=CHAN
 
 ; Messages: one it knows, its text alone, one it doesn't, and one
@@ -618,7 +655,8 @@ BINBUF: .BLKQ   1
         EXPECT  #SS$_ACCVIO, 103
 
 ; Other processes: lower this one's priority below NAPPER's so it runs
-; and hibernates; suspend it while it does, so that $WAKE leaves it
+; and hibernates, which takes it a few disk reads, its image's, while
+; this one may run; suspend it while it does, so that $WAKE leaves it
 ; suspended; resume it, and delete it.
         $CREPRC_S IMAGE=SLEEPER_IMAGE, PRCNAM=NAPPER_NAME, BASPRI=#4, STSFLG=#PRC$M_DETACH
         EXPECT  #SS$_NORMAL, 18
@@ -628,6 +666,10 @@ BINBUF: .BLKQ   1
         EXPECT  #SS$_NORMAL, 20
         CMPL    PRI, #4
         BNEQ    90$
+150$:   $GETJPIW_S PRCNAM=NAPPER_NAME, ITMLST=STATE_ITEMS
+        EXPECT  #SS$_NORMAL, 135
+        CMPL    NAPSTATE, #7            ; SCH$C_HIB
+        BNEQ    150$
         $SETPRI_S PRI=#4
         EXPECT  #SS$_NORMAL, 21
         $SUSPND_S PRCNAM=NAPPER_NAME

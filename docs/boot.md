@@ -554,7 +554,8 @@ executive feature:
   reads the system disk's home block by its LBN with `$QIOW`. It reads two
   more blocks with `$QIO` into pages it deletes at once, while the disk may
   still be writing them: the pages stay locked until it is done, and the
-  read ends well. A `$QIOW`
+  read ends well. A read into a buffer with a page missing in its middle,
+  or into the executive's data, is an access violation. A `$QIOW`
   from ARM64 with a buffer above 4 GB gets `SS$_ARG_GTR_32_BITS` from the
   service dispatcher. It turns fixed times into text with `$ASCTIM` and
   into numbers with `$NUMTIM`, and checks the result. It fills two

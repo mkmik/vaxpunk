@@ -58,12 +58,13 @@
         $ARMDEF
         $DEVDEF
         $PTEDEF
+        $PRIDEF
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$LOCATE, MD$IO
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
         .EXTERNAL IOC$SEARCHDEV, IOC$RETURN, IOC$RETQUOTA, EXE$INSIOQ, EXE$READLOCK, EXE$WRITELOCK
-        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB, SCH$SCHED
+        .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAIT, SCH$WAKEPCB, SCH$SCHED, SCH$BOOST
         .EXTERNAL XQP$GL_IRP, FIL$ACLCHK, LNM$GL_SYSTEM, LNM$CREATE, LNM$DELETE
         .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX
 
@@ -256,7 +257,6 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
 15$:    BLBC    R0, 80$
         DSBINT  #IPL$_SYNCH
         MOVL    SCH$GL_CURPCB, R4
-        MOVL    R4, IRP$L_ASTPRM(R3)    ; IOC$REQCOM wakes it
         BSBW    EXE$INSIOQ
         MOVAB   F11$AB_IRP, R3
 20$:    TSTL    IRP$L_IOST1(R3)
@@ -284,10 +284,10 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
         RSB
 
 ; IOWAIT: R4 = the current PCB. Waits in resource wait, SCH$C_MWAIT,
-; until IOC$REQCOM ends the wait, for the file system's request or one of
-; the process's, without delivering the ASTs that may end it early: the
-; caller looks again at what it waits for. IPL$_SYNCH. Keeps every
-; register.
+; until a disk's request ends (DKDONE), for the file system's request or
+; one of the process's, without delivering the ASTs that may end it
+; early: the caller looks again at what it waits for. IPL$_SYNCH. Keeps
+; every register.
 IOWAIT:
         .JSB_ENTRY
         PUSHL   R0
@@ -451,6 +451,26 @@ DKDONE:
         INCW    UCB$W_ERRCNT(R5)
 20$:    CLRL    R1
         BSBW    IOC$REQCOM
+        BSBB    IOWAKE
+        RSB
+
+; IOWAKE: ends the waits in IOWAIT, as a disk's request has ended, with a
+; boost, PRI$_IOCOM (SCH$BOOST): each process looks again at what it
+; waits for, which may be that request. A process deleted meanwhile is
+; woken too, though its PID finds it no more. IPL$_SYNCH. Keeps every
+; register.
+IOWAKE:
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R2, R4>
+        MOVL    #PRI$_IOCOM, R2
+10$:    MOVAQ   IOWQ, R0
+        MOVL    (R0), R4
+        CMPL    R4, R0
+        BEQL    20$
+        BSBW    SCH$BOOST
+        BSBW    SCH$WAKEPCB
+        BRB     10$
+20$:    POPR    #^M<R0, R2, R4>
         RSB
 
 ; DK$INTERRUPT: the disks' completion interrupt, at IPL$_PORT, through

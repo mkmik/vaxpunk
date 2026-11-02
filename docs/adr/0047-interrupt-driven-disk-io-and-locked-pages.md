@@ -63,7 +63,9 @@ wait, in `RWAST`, until the requests the device has are done.
    (`IOC$INITIATE`) if the device has none, `UCB$V_BSY` clear, and
    queues it on `UCB$L_IOQFL` if it has; `UCB$L_IRP`, in a disk's UCB,
    is the one it has. `IOC$REQCOM` starts the next, or clears
-   `UCB$V_BSY`, when the IRP it completes is the device's.
+   `UCB$V_BSY`, when the IRP it completes is the device's: in a loop, so
+   a queue of requests the start I/O routine completes at once, a bad LBN
+   or no bytes, doesn't nest one completion in another.
 2. **A direct I/O's pages are locked by PFN.** `DK$FDT` makes the IRP
    with room for 17 PFNs, a 64 KB buffer's pages, past the packet, and
    calls `EXE$READLOCK` or `EXE$WRITELOCK`. They call `MMG$IOLOCK`,
@@ -95,8 +97,9 @@ wait, in `RWAST`, until the requests the device has are done.
    `DK$FORK`, which asks each disk with `DISKDONE` and completes its IRP.
 6. **The file system waits for its IRP.** `FIL$READLBLK` and
    `FIL$WRITELBLK` lock the buffer, queue `F11$AB_IRP` and wait in
-   resource wait, holding `FIL$LOCK`, while other processes run; the
-   IRP's `IRP$L_ASTPRM` names the waiting PCB, which `IOC$REQCOM` wakes.
+   resource wait, holding `FIL$LOCK`, while other processes run, on a
+   queue of the driver's (`IOWAIT`), whose waits each disk request's end
+   ends, each waiter looking again at what it waits for (`IOWAKE`).
    The wait delivers no AST, so no kernel mode AST deletes the process
    while it holds the lock ([ADR-0020](0020-file-system-lock-below-ipl-synch.md)).
    Above `IPL$_ASTDEL`, at boot before the scheduler runs, they use the
@@ -105,7 +108,9 @@ wait, in `RWAST`, until the requests the device has are done.
 7. **Rundown waits for the device.** `DK$CANCEL`, the disks' cancel
    routine, waits while the device has a request of the process's on
    the channel, for rundown and `$DASSGN`, as VMS's `RWAST` wait does:
-   the IOSB and event flag are the process's until then. `$CANCEL` lets
+   the IOSB and event flag are the process's until then. It waits in
+   `IOWAIT` too, since a process `$DELPRC` deletes is no longer found by
+   its PID when its IRP completes. `$CANCEL` lets
    such a request end as it would have.
 8. **The idle loop looks for work after lowering IPL.** `SCH$SCHED`
    checks the computable queues again once `IPL$_RESCHED` has let the

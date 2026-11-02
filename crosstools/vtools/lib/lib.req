@@ -543,7 +543,7 @@ MACRO
     IRP$B_RMOD = 11, 0, 8, 0 %,  ! the AST's mode: kernel, then the caller's
     IRP$L_PID = 12, 0, 32, 0 %,  ! the process it is for, 0 for the file system's
     IRP$L_AST = 16, 0, 32, 0 %,  ! the caller's AST routine, or 0
-    IRP$L_ASTPRM = 20, 0, 32, 0 %,  ! its parameter; the file system's: the PCB waiting for it, which IOC$REQCOM wakes
+    IRP$L_ASTPRM = 20, 0, 32, 0 %,  ! its parameter
     IRP$L_KAST = 24, 0, 32, 1 %,  ! IOC$POST once done, then 0
     IRP$L_UCB = 28, 0, 32, 1 %,  ! the device
     IRP$L_FUNC = 32, 0, 32, 0 %,  ! the function code and its modifiers
