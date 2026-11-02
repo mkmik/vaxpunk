@@ -1238,9 +1238,10 @@ DELP1:
 ; job mounted privately if it is the master (FIL$RUNDOWN), before its other locks,
 ; among them their access arbitration locks, and ASTs, its logical
 ; names, its pages in P1, its other channels, and its slot, unless
-; $DELPRC gave that to another process already, and sends its termination
-; message. Runs in the process's own context, since P0 and P1 are the
-; current process's. Uses R0-R3.
+; $DELPRC gave that to another process already, and then sends its
+; termination message: whoever it wakes finds the name and the slot free.
+; Runs in the process's own context, since P0 and P1 are the current
+; process's. Uses R0-R3.
 ; ponytail: VMS waits until its subprocesses are gone; this doesn't, so
 ; their termination messages may come after its own.
 EXE$RUNDOWN::
@@ -1280,13 +1281,13 @@ EXE$RUNDOWN::
         BSBW    MMG$DELPAG
 20$:    MOVL    #VA$C_P1END, PCB$L_FREP1VA(R4)
         CLRL    PCB$L_CHANS(R4)
-        BSBB    TERMMSG
         DSBINT  #IPL$_SYNCH
         MOVZWL  PCB$L_PID(R4), R0
         CMPL    @SCH$GL_PCBVEC[R0], R4
         BNEQ    30$
         CLRL    @SCH$GL_PCBVEC[R0]
 30$:    ENBINT
+        BSBB    TERMMSG
         RSB
 
 ; TERMMSG: R4 = the current PCB, of a process that goes. Writes its
