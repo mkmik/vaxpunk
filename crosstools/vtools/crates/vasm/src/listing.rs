@@ -85,16 +85,20 @@ pub fn text(source: &str, m: &Module, opts: &Options, tool: &str) -> String {
             p.name,
             attributes(p.flags, p.align)
         );
-        // The psect's contents, with zeros where the linker stores a value.
-        let mut image = vec![0u8; p.size as usize];
-        for (at, chunk) in &p.chunks {
-            let at = *at as usize;
+        // A byte of the psect, zero where the linker stores a value. The
+        // chunks are in offset order.
+        let byte = |at: u64| -> u8 {
+            let i = p.chunks.partition_point(|(o, _)| *o <= at);
+            let Some((o, chunk)) = i.checked_sub(1).map(|i| &p.chunks[i]) else {
+                return 0;
+            };
+            let k = (at - o) as usize;
             match chunk {
-                Chunk::Bytes(b) => image[at..at + b.len()].copy_from_slice(b),
-                Chunk::Insn { word, .. } => image[at..at + 4].copy_from_slice(&word.to_le_bytes()),
-                Chunk::Data { .. } => {}
+                Chunk::Bytes(b) => b.get(k).copied().unwrap_or(0),
+                Chunk::Insn { word, .. } => word.to_le_bytes().get(k).copied().unwrap_or(0),
+                Chunk::Data { .. } => 0,
             }
-        }
+        };
         let mut labels = labels.into_iter().peekable();
         let mut last = 0;
         for r in rows {
@@ -103,8 +107,10 @@ pub fn text(source: &str, m: &Module, opts: &Options, tool: &str) -> String {
             }
             let end = r.offset + r.size;
             for at in (r.offset..end).step_by(usize::from(r.unit)) {
-                let bytes = &image[at as usize..end.min(at + u64::from(r.unit)) as usize];
-                let hex: String = bytes.iter().rev().map(|b| format!("{b:02X}")).collect();
+                let hex: String = (at..end.min(at + u64::from(r.unit)))
+                    .rev()
+                    .map(|k| format!("{:02X}", byte(k)))
+                    .collect();
                 let mut line = format!("{hex:>8}     {at:04X}");
                 if at == r.offset {
                     line = format!("{line}\t\t{}", r.text);
