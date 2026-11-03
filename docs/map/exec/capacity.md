@@ -90,7 +90,7 @@ title = "The PFN database sized from RPB$L_PFNCNT at boot, not 4,096 longwords i
 status = "done"
 milestone = "m1"
 needs = ["#ram-size"]
-note = "MMG$INIT makes it in S0 from RPB$L_FRESVA, 8 bytes a PFN, at most 127 MB, 64 GB of RAM; %EXEC-W-PFNLIMIT past that, until it moves to S2"
+note = "MMG$INIT makes it in S0 from RPB$L_FRESVA, 10 bytes a PFN (ADR-0047's I/O lock counts), at most 128 MB, some 51 GB of RAM; %EXEC-W-PFNLIMIT past that, until it moves to S2"
 
 [[feature]]
 id = "switch-cost"

@@ -356,10 +356,10 @@ fn data_disk(path: &Path, ca: &str) {
 }
 
 /// Whether SHOW SYSTEM, in a remote login, lists itself in a process named
-/// for its terminal, _TNA1:.
+/// for its terminal, _TNA1:, at whatever priority its disk I/O boosted it to.
 fn remote_login(text: &str) -> bool {
     text.lines()
-        .any(|l| l.contains(" _TNA1:          CUR     4 SHOW.EXE"))
+        .any(|l| l.contains(" _TNA1:          CUR ") && l.ends_with(" SHOW.EXE"))
 }
 
 #[test]
@@ -740,7 +740,7 @@ fn network() {
         "TCPTEST: a datagram from address 0202000A",
         "datagram from the host",
         "TCPTEST: ok",
-        "TCPIP$TELNET    LEF     4 TELNETD.EXE",
+        "TCPIP$TELNET    LEF ",
         "Terminal: _TNA1:",
         "Terminal: _VTA1:      Device_Type: VT100         Owner: _VTA1:\nPhysical Terminal: _TNA3:\n",
         "Terminal: _VTA1:      Device_Type: VT100         Owner: _VTA1:\nPhysical Terminal: _TNA4:\n",
@@ -864,7 +864,7 @@ fn network() {
         "Authorized privileges:\n TMPMBX       OPER         NETMBX",
         // DEFAULT's: ADD's /PRIVILEGES are the authorized ones.
         "Process privileges:\n TMPMBX       NETMBX\n",
-        "JOE             CUR     4 SHOW.EXE",
+        "JOE             CUR ",
         "  JOE          logged out at ",
         "%REM-S-END, control returned to the local node",
         "64 bytes from 10.0.0.1: icmp_seq=1 ttl=255 time=",

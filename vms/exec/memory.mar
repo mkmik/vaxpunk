@@ -34,6 +34,12 @@
 ; are made when the section is, not as they are touched; no GBL$ logical
 ; names, no $UPDSEC.
 ;
+; A direct I/O, a disk's, locks its buffer's pages while the device has
+; them, as VMS's MMG$IOLOCK does: each lock counts in the page's PFN, and
+; a page deleted while it is locked keeps its PFN off the free list, its
+; delete contingency, until MMG$UNLOCK gives back the last lock. So the
+; device never writes a page some other use has taken.
+;
 ; The PFN database, the pool and the global sections are synchronized
 ; at IPL$_SYNCH.
 ;
@@ -56,7 +62,9 @@
         .EXTERNAL EXE$GL_RPB, SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$MATCHNAME, FIL$CHKPRO
 
 POOL_END = ^X4FF00000                   ; past pool: the port's pages
-PFNDB_MAX = 128*1024*1024               ; the PFN database's most bytes: 64 GB of RAM
+PFNDB_MAX = 128*1024*1024               ; the PFN database's most bytes: some 51 GB of RAM
+PFNDB_SIZE = 10                         ; its bytes a PFN: the free stack's, MMG$GL_PFNGSD's, MMG$GL_PFNREFCNT's
+DELCON = ^X8000                         ; in MMG$GL_PFNREFCNT: deleted while locked, VMS's PFN$V_DELCON
 POOL_GROW = 256*1024                    ; what pool grows by, at least
 ZEROVA = ^X4FFE0000
 GSDNAMMAX = 43                          ; a global section name's characters, at most
@@ -82,6 +90,8 @@ MMG$GQ_GSDHD::                          ; global sections by name: GSDs
         .BLKQ   1
 MMG$GL_PFNGSD::                         ; S0, by PFN: the GSD of the global section it is a page of, or 0
         .LONG   0
+MMG$GL_PFNREFCNT::                      ; S0, by PFN, a word: the I/O locks on its page, MMG$IOLOCK's, and DELCON
+        .LONG   0
 MMG$GL_NPAGEDYN::                       ; nonpaged pool's first address
         .LONG   0
 MMG$GL_NPAGNEXT::                       ; and where it grows next
@@ -94,8 +104,9 @@ SGN$GL_NPAGEVIR::                       ; and NPAGEVIR: the most it grows to; 0,
         .PSECT  $CODE$
 
 ; MMG$INIT: makes the PFN database in S0 from RPB$L_FRESVA, past
-; EXEC.EXE, for RPB$L_PFNCNT PFNs, or as many as PFNDB_MAX holds at 8
-; bytes each: the free stack, empty, and MMG$GL_PFNGSD's table. The PFNs
+; EXEC.EXE, for RPB$L_PFNCNT PFNs, or as many as PFNDB_MAX holds at
+; PFNDB_SIZE bytes each: the free stack, empty, MMG$GL_PFNGSD's table and
+; MMG$GL_PFNREFCNT's, zeros. The PFNs
 ; the boot left free are free from MMG$GL_HIGHPFN up, without a walk.
 ; Then makes the pool past it, NPAGEDYN bytes, and the most it may grow
 ; to, NPAGEVIR, no further than POOL_END. Uses R0-R5.
@@ -107,16 +118,17 @@ MMG$INIT::
         MOVL    EXE$GL_RPB, R5
         MOVL    RPB$L_FRESVA(R5), R4    ; the database
         MOVL    RPB$L_PFNCNT(R5), R2
-        CMPL    R2, #PFNDB_MAX/8
+        CMPL    R2, #PFNDB_MAX/PFNDB_SIZE
         BLEQU   10$
-        MOVL    #PFNDB_MAX/8, R2
+        MOVL    #PFNDB_MAX/PFNDB_SIZE, R2
 10$:    MOVL    R2, MMG$GL_MAXPFN
         MOVL    RPB$L_FREEPFN(R5), R0
         MOVL    R0, MMG$GL_HIGHPFN
         SUBL3   R0, R2, MMG$GL_FREECNT
         MOVL    R4, MMG$GL_FREEPFN
         MOVAL   (R4)[R2], MMG$GL_PFNGSD
-        ASHL    #3, R2, R3              ; both tables' bytes
+        MOVAQ   (R4)[R2], MMG$GL_PFNREFCNT
+        MULL3   #PFNDB_SIZE, R2, R3     ; the tables' bytes
         ADDL2   #MMG$C_PAGESIZE-1, R3
         ASHL    #-MMG$C_VPCTX, R3, R3   ; and pages, zeroed
         MOVL    R4, R0
@@ -264,7 +276,7 @@ FREEOLD:
         MOVL    MMG$GL_PFNGSD, R1
         MOVL    (R1)[R0], R1
         BNEQ    20$
-        BSBW    MMG$DEALLOCPFN
+        BSBW    FREEPFN
 10$:    RSB
 20$:    DECL    GSD$L_REFCNT(R1)
         BSBW    CHKGSD
@@ -288,12 +300,113 @@ CHKGSD:
         BRB     30$
 20$:    MOVL    (R3)+, R0
         CLRL    (R4)[R0]
-        BSBW    MMG$DEALLOCPFN
+        BSBW    FREEPFN
 30$:    SOBGEQ  R2, 20$
         MOVL    R1, R0
         MOVL    GSD$L_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ
 90$:    RSB
+
+; FREEPFN: R0 = a PFN no PTE maps any more. Frees it, onto the free
+; stack, unless a direct I/O has its page locked (MMG$IOLOCK): then it is
+; its delete contingency, DELCON, and MMG$UNLOCK frees it with the last
+; lock. IPL$_SYNCH. Keeps every register.
+FREEPFN:
+        .JSB_ENTRY
+        PUSHL   R1
+        MOVL    MMG$GL_PFNREFCNT, R1
+        TSTW    (R1)[R0]
+        BEQL    10$
+        BISW2   #DELCON, (R1)[R0]
+        BRB     20$
+10$:    BSBW    MMG$DEALLOCPFN
+20$:    MOVL    (SP)+, R1
+        RSB
+
+; MMG$IOLOCK: R0 = a buffer, R1 = its size in bytes, R2 = where its pages'
+; PFNs go, a longword each, R3 = the access: bit 0 set if the I/O writes
+; the buffer, a read, clear if it reads it, a write, and in bits 2:1 the
+; access mode that must be able to. Locks each page of the buffer for a
+; direct I/O, as VMS's MMG$IOLOCK: counts the lock in its PFN, which no
+; deletion frees while it is held (FREEPFN), and puts the PFN in the
+; list, for the device. R0 = SS$_NORMAL and R1 = the pages locked, or,
+; with none locked, SS$_ACCVIO if a page isn't there or the mode may not
+; read (write) it, or SS$_EXQUOTA if a page has as many locks as its
+; count holds, 32,767. IPL$_SYNCH. Uses R0-R3.
+; vaxpunk: it lists the PFNs, where VMS's returns the address of the
+; first page's PTE, SVAPTE, and it faults no page in, as there is no
+; paging.
+MMG$IOLOCK::
+        .JSB_ENTRY  OUTPUT=<R1>, SCRATCH=<R2, R3>
+        PUSHR   #^M<R4, R5, R6, R7>
+        CLRL    R4                      ; the pages: none for no bytes
+        TSTL    R1
+        BEQL    5$
+        BICL3   #^C<MMG$C_PAGESIZE-1>, R0, R4
+        ADDL2   R1, R4
+        ADDL2   #MMG$C_PAGESIZE-1, R4
+        ASHL    #-MMG$C_VPCTX, R4, R4
+5$:     BICL3   #MMG$C_PAGESIZE-1, R0, R5       ; the first
+        EXTZV   #1, #2, R3, R6          ; the mode's read enable,
+        ADDL2   #PTE$V_KRE, R6
+        BLBC    R3, 8$
+        ADDL2   #PTE$V_KWE-PTE$V_KRE, R6        ; or its write enable
+8$:     CLRL    R7                      ; the pages locked
+10$:    CMPL    R7, R4
+        BEQL    80$
+        MOVL    R5, R0
+        CALL_PAL #PAL$_RDPTE
+        BLBC    R0, 70$                 ; not valid
+        EXTZV   R6, #1, R0, R1
+        BLBC    R1, 70$
+        EVAX_SRL R0, #PTE$V_PFN, R0
+        CMPL    R0, MMG$GL_MAXPFN
+        BGEQU   70$
+        MOVL    MMG$GL_PFNREFCNT, R1
+        MOVZWL  (R1)[R0], R3
+        BICL2   #DELCON, R3
+        CMPL    R3, #DELCON-1
+        BGEQU   75$                     ; its count is full, up to DELCON
+        MOVL    R0, (R2)[R7]
+        INCW    (R1)[R0]
+        ADDL2   #MMG$C_PAGESIZE, R5
+        INCL    R7
+        BRB     10$
+70$:    MOVL    #SS$_ACCVIO, -(SP)
+        BRB     78$
+75$:    MOVL    #SS$_EXQUOTA, -(SP)
+78$:    MOVL    R2, R0                  ; what it locked goes back
+        MOVL    R7, R1
+        BSBW    MMG$UNLOCK
+        CLRL    R1
+        MOVL    (SP)+, R0
+        BRB     90$
+80$:    MOVL    R4, R1
+        MOVL    #SS$_NORMAL, R0
+90$:    POPR    #^M<R4, R5, R6, R7>
+        RSB
+
+; MMG$UNLOCK: R0 = the PFNs of pages MMG$IOLOCK locked, a longword each,
+; R1 = how many. Gives back a lock on each; a page deleted while it was
+; locked is freed with its last lock, its delete contingency. IPL$_SYNCH.
+; Uses R0-R1.
+MMG$UNLOCK::
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R4>
+        MOVL    R0, R2
+        MOVL    R1, R3
+        BEQL    20$
+        MOVL    MMG$GL_PFNREFCNT, R4
+10$:    MOVL    (R2)+, R0
+        DECW    (R4)[R0]
+        MOVZWL  (R4)[R0], R1
+        CMPL    R1, #DELCON             ; the last lock on a page deleted
+        BNEQ    15$
+        CLRW    (R4)[R0]
+        BSBW    MMG$DEALLOCPFN
+15$:    SOBGTR  R3, 10$
+20$:    POPR    #^M<R2, R3, R4>
+        RSB
 
 ; ZEROPFN: R0 = a PFN no PTE maps. Zeroes its page, through ZEROVA.
 ; IPL$_SYNCH. Uses R0-R2.

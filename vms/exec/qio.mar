@@ -9,7 +9,12 @@
 ; Either way it ends with IOC$REQCOM, which queues the IRP to its process
 ; as a kernel mode AST, IOC$POST: there the data, the I/O status block
 ; and the event flag are written, and the caller's AST queued. $QIOW waits
-; for that.
+; for that. A disk's driver hands the device one request at a time, as
+; VMS's do: EXE$INSIOQ starts it if the device is idle, else queues it on
+; the UCB, and IOC$REQCOM starts the next. The device reads and writes
+; the caller's pages itself, a direct I/O, so they stay locked
+; (EXE$READLOCK, EXE$WRITELOCK) until IOC$REQCOM unlocks them, and
+; rundown waits for a request the device has (DK$CANCEL).
 ; The devices are VMS's I/O database (docs/adr/0044-the-io-database.md):
 ; IOC$GL_DEVLIST lists a DDB for each controller, which has its devices'
 ; name but their units' numbers, and their driver's dispatch table, its
@@ -49,29 +54,34 @@
         $DEVDEF
         $DCDEF
         $SSDEF
+        $PRIDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$QAST, SCH$ASTBITS, SCH$GETEFC, SCH$POSTEF
         .EXTERNAL SCH$WAIT, SCH$GL_PCBVEC, SCH$GL_MAXPIX
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$WAITFR
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
-        .EXTERNAL LNM$TRNLOG, DK$DDT
+        .EXTERNAL LNM$TRNLOG, DK$DDT, MMG$IOLOCK, MMG$UNLOCK, SCH$WAKEPCB, SCH$BOOST
         .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0, XQP$GL_IRP, XQP$PERFORM, FIL$CHKALLOC
 
 DISK = DEV$M_FOD!DEV$M_DIR!DEV$M_SHR!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV!DEV$M_RND
+PAGESIZE = 4096                         ; MMG$C_PAGESIZE
+VPCTX = 12
 MAXUNIT = 9999                          ; a clone's highest number, VMS's
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 IOC$GL_DEVLIST::                        ; the I/O database: the first DDB, the system disk's
         .ADDRESS IOC$AB_DKADDB
 RWAITQ: .ADDRESS RWAITQ, RWAITQ         ; the processes waiting for I/O quota, SCH$C_MWAIT
+DRAINUCB:                               ; the UCB whose waiting requests IOC$REQCOM starts, or 0
+        .LONG   0
 ; The disks' DDBs, the system disk's first, and their UCBs, offline
 ; until IOC$INIT calls DK$UNITINIT.
         DDB     IOC$AB_DKADDB, DKA, IOC$AB_DKA0, DK$DDT, IOC$AB_DKBDDB ; the system disk's controller
         DDB     IOC$AB_DKBDDB, DKB, IOC$AB_DKB0, DK$DDT, IOC$AB_MDADDB ; the data disk's
         DDB     IOC$AB_MDADDB, MDA, IOC$AB_MDA0, DK$DDT ; the ramdisk's
-        UCB     IOC$AB_DKA0, IOC$AB_DKADDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_DKA0 ; DKA0:, the system disk
-        UCB     IOC$AB_DKB0, IOC$AB_DKBDDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_DKB0 ; DKB0:, the data disk
-        UCB     IOC$AB_MDA0, IOC$AB_MDADDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_MDA0 ; MDA0:, the ramdisk
+        UCB     IOC$AB_DKA0, IOC$AB_DKADDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_DKA0, SIZE=UCB$K_DKLENGTH ; DKA0:, the system disk
+        UCB     IOC$AB_DKB0, IOC$AB_DKBDDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_DKB0, SIZE=UCB$K_DKLENGTH ; DKB0:, the data disk
+        UCB     IOC$AB_MDA0, IOC$AB_MDADDB, DK$DDT, DC$_DISK, DISK, 512, VCB=F11$AB_MDA0, SIZE=UCB$K_DKLENGTH ; MDA0:, the ramdisk
 
         .PSECT  $CODE$
 
@@ -507,7 +517,8 @@ IOC$DELETE_UCB::
 
 ; $CANCEL chan: cancels the channel's I/O (IOC$CANCEL): the requests its
 ; device's driver holds end with SS$_ABORT, and its CTRL/C and CTRL/Y ASTs
-; are disabled. Those done already are left as they are.
+; are disabled. Those done already are left as they are, and so is one a
+; disk has started, which ends as it would have.
         .ENTRY  EXE$CANCEL, ^M<R2, R3, R4, R5>
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  4(AP), R5
@@ -526,7 +537,8 @@ IOC$DELETE_UCB::
         RET
 
 ; $QIO efn, chan, func, iosb, astadr, astprm, p1, p2, p3, p4, p5, p6:
-; requests I/O on the channel's device: clears event flag efn and calls
+; requests I/O on the channel's device: clears iosb and event flag efn, as
+; VMS's does, so that a stale status doesn't end a $QIOW, and calls
 ; the device's driver, whose FDT routine, its DDT's DDT$L_FDT, checks
 ; func and the parameters,
 ; which it may fail, and does the I/O or queues it. Once it is done,
@@ -553,6 +565,7 @@ EXE$QIO::
         MOVL    16(AP), R0
         BEQL    10$
         IFNOWRT #8, (R0), 85$
+        CLRQ    (R0)                    ; no status until the request ends
 10$:    PUSHL   4(AP)
         CALLS   #1, G^EXE$CLREF
         BLBC    R0, 90$
@@ -755,24 +768,146 @@ IOC$RETQUOTA::
 20$:    ENBINT
         RET
 
+; EXE$INSIOQ: R3 = an IRP, R5 = its UCB, a disk's, whose device takes a
+; request at a time. Starts it, IOC$INITIATE, if the device has none
+; (UCB$V_BSY), else queues it on the UCB, for IOC$REQCOM to start once the
+; one before it is done. R0 = SS$_NORMAL. IPL$_SYNCH. Uses R0-R3.
+EXE$INSIOQ::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        BBSS    #UCB$V_BSY, UCB$L_STS(R5), 10$
+        BSBB    IOC$INITIATE
+        BRB     20$
+10$:    INSQUE  (R3), @UCB$L_IOQBL(R5)
+20$:    MOVL    #SS$_NORMAL, R0
+        RSB
+
+; IOC$INITIATE: R3 = an IRP, R5 = its UCB, whose device is now its
+; (UCB$V_BSY). Makes it the device's request, UCB$L_IRP, and calls the
+; driver's start I/O routine. IPL$_SYNCH. Uses R0-R3.
+IOC$INITIATE::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    R3, UCB$L_IRP(R5)
+        MOVL    UCB$L_DDT(R5), R0
+        JSB     @DDT$L_START(R0)
+        RSB
+
+; EXE$READLOCK: R3 = a direct I/O's IRP that reads into IRP$L_BCNT bytes
+; at IRP$L_BUFADR, with IRP$K_MAXPFN longwords past it. Checks that the
+; caller's mode, IRP$B_PMOD, may write each page of the buffer, and locks
+; them (MMG$IOLOCK), their PFNs past the packet, IRP$L_BOFF the offset in
+; the first, until IOC$REQCOM unlocks them. R0 = SS$_NORMAL, or, with
+; none locked, SS$_ACCVIO, or SS$_EXQUOTA for a page locked too many
+; times. IPL$_SYNCH. Uses R0-R2.
+; vaxpunk: it returns the status, where VMS's ends the request.
+EXE$READLOCK::
+        .JSB_ENTRY  SCRATCH=<R2>
+        MOVL    #1, R0
+        BRB     LOCK
+
+; EXE$WRITELOCK: R3 = a direct I/O's IRP that writes the IRP$L_BCNT bytes
+; at IRP$L_BUFADR, with IRP$K_MAXPFN longwords past it. Checks that the
+; caller's mode, IRP$B_PMOD, may read each page of the buffer, and locks
+; them as EXE$READLOCK does. R0 = SS$_NORMAL, or, with none locked,
+; SS$_ACCVIO, or SS$_EXQUOTA for a page locked too many times. IPL$_SYNCH.
+; Uses R0-R2.
+; vaxpunk: it returns the status, where VMS's ends the request.
+EXE$WRITELOCK::
+        .JSB_ENTRY  SCRATCH=<R2>
+        CLRL    R0
+LOCK:   .GLOBAL_LABEL                   ; EXE$READLOCK's too
+        PUSHL   R3
+        MOVZBL  IRP$B_PMOD(R3), R1
+        ASHL    #1, R1, R1
+        BISL3   R1, R0, R3              ; the access
+        MOVL    (SP), R0
+        BICL3   #^C<PAGESIZE-1>, IRP$L_BUFADR(R0), IRP$L_BOFF(R0)
+        MOVAB   IRP$K_LENGTH(R0), R2
+        MOVL    IRP$L_BCNT(R0), R1
+        MOVL    IRP$L_BUFADR(R0), R0
+        BSBW    MMG$IOLOCK
+        MOVL    (SP)+, R3
+        BLBC    R0, 90$
+        TSTL    R1
+        BEQL    90$                     ; no pages: nothing to unlock
+        BISL2   #IRP$M_LOCKED, IRP$L_STS(R3)
+90$:    RSB
+
+; UNLOCK: R3 = an IRP. Gives back the locks EXE$READLOCK or
+; EXE$WRITELOCK took on its buffer's pages, if it holds them. IPL$_SYNCH.
+; Keeps every register.
+UNLOCK:
+        .JSB_ENTRY
+        BBCC    #IRP$V_LOCKED, IRP$L_STS(R3), 90$
+        PUSHR   #^M<R0, R1>
+        ADDL3   IRP$L_BOFF(R3), IRP$L_BCNT(R3), R1
+        ADDL2   #PAGESIZE-1, R1
+        ASHL    #-VPCTX, R1, R1
+        MOVAB   IRP$K_LENGTH(R3), R0
+        BSBW    MMG$UNLOCK
+        POPR    #^M<R0, R1>
+90$:    RSB
+
 ; IOC$REQCOM: R3 = an IRP, done, R0 = its IOSB's first longword, a status
-; and a byte count in the high word, R1 = its second. Queues it to its
-; process as a kernel mode AST, IOC$POST, unless it is the file system's,
-; with no process, which finds the status in the IRP. R0 = SS$_NORMAL, for
-; an FDT routine to return. IPL$_SYNCH. Uses R1-R3.
+; and a byte count in the high word, R1 = its second. Unlocks its
+; buffer's pages if a direct I/O locked them. Queues it to its process as
+; a kernel mode AST, IOC$POST, unless it is the file system's, with no
+; process, which finds the status in the IRP. If it was the request its
+; device had (EXE$INSIOQ), a disk's, its process gets a boost, PRI$_IOCOM
+; (SCH$BOOST), and the next ones waiting on the UCB start, one at a time,
+; until the device has one or none is left: then it is idle. A request
+; its start I/O routine completes at once comes back here, which leaves
+; the next to the IOC$REQCOM that started it, so a long queue of those
+; doesn't nest. R0 = SS$_NORMAL, for an FDT routine to return.
+; IPL$_SYNCH. Uses R1-R3.
 IOC$REQCOM::
         .JSB_ENTRY  SCRATCH=<R2, R3>
+        PUSHL   R5
         MOVL    R0, IRP$L_IOST1(R3)
         MOVL    R1, IRP$L_IOST2(R3)
+        BSBB    UNLOCK
+        MOVL    IRP$L_UCB(R3), R5       ; the device it was the request of, if so
+        BBC     #UCB$V_BSY, UCB$L_STS(R5), 5$
+        CMPL    UCB$L_IRP(R5), R3
+        BEQL    6$
+5$:     CLRL    R5
+6$:     PUSHL   R5
         TSTL    IRP$L_PID(R3)
         BEQL    10$
-        CLRB    IRP$B_RMOD(R3)
+        TSTL    R5                      ; a disk's: its process gets a boost
+        BEQL    8$
+        MOVZWL  IRP$L_PID(R3), R1
+        CMPL    R1, SCH$GL_MAXPIX
+        BGEQU   8$
+        MOVL    @SCH$GL_PCBVEC[R1], R1
+        BEQL    8$
+        CMPL    PCB$L_PID(R1), IRP$L_PID(R3)
+        BNEQ    8$
+        PUSHL   R4
+        MOVL    R1, R4
+        MOVL    #PRI$_IOCOM, R2
+        BSBW    SCH$BOOST
+        MOVL    (SP)+, R4
+8$:     CLRB    IRP$B_RMOD(R3)
         MOVAB   IOC$POST, IRP$L_KAST(R3)
-        PUSHL   R5
         MOVL    R3, R5
         BSBW    SCH$QAST
-        MOVL    (SP)+, R5
-10$:    MOVL    #SS$_NORMAL, R0
+10$:    MOVL    (SP)+, R5
+        BEQL    30$
+        CLRL    UCB$L_IRP(R5)           ; the device has none now
+        CMPL    R5, DRAINUCB
+        BEQL    30$                     ; the IOC$REQCOM that started it starts the next
+        PUSHL   DRAINUCB
+        MOVL    R5, DRAINUCB
+20$:    REMQUE  @UCB$L_IOQFL(R5), R3    ; the next
+        BVS     25$
+        BSBW    IOC$INITIATE
+        TSTL    UCB$L_IRP(R5)
+        BEQL    20$                     ; done at once
+        BRB     28$
+25$:    BICL2   #UCB$M_BSY, UCB$L_STS(R5)
+28$:    MOVL    (SP)+, DRAINUCB
+30$:    MOVL    (SP)+, R5
+        MOVL    #SS$_NORMAL, R0
         RSB
 
 ; IOC$POST: a done IRP's kernel mode AST, in its process. R4 = the PCB, R5
@@ -834,8 +969,6 @@ IOC$POST::
 ; for 0, the process's IRPs for those channels on its AST queue, done
 ; but not yet posted, or posted with an AST, are freed too. IPL$_SYNCH.
 ; Uses R0-R3.
-; ponytail: VMS waits for rundown's to end, for drivers that can't stop
-; at once.
 IOC$CANCEL::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         PUSHR   #^M<R5, R6, R7, R8, R9>
@@ -888,6 +1021,10 @@ IOC$CANCELQ::
         REMQUE  (R0), R0
         TSTL    R7
         BNEQ    20$
+        PUSHL   R3
+        MOVL    R0, R3
+        BSBW    UNLOCK
+        MOVL    (SP)+, R3
         BSBW    IOC$RETQUOTA
         MOVZWL  IRP$W_SIZE(R0), R1
         BSBW    EXE$DEANONPGDSIZ

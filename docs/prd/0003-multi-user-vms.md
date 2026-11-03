@@ -224,7 +224,7 @@ until the hardware or size changes; leave it.
 
 | # | Notes | What closes them |
 | --- | --- | --- |
-| 10 | `IOC$POST` writes the caller's buffer and IOSB without probing them: deleting the pages under a pending read takes the system down (ADR-0013, `qio.mar`) | Probe in `IOC$POST`, or lock the pages (`$LCKPAG` is a stub) |
+| 10 | A disk's pages are locked while the device has them, and a page deleted meanwhile waits for it ([ADR-0047](../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)); left: `IOC$POST` writes a buffered read's data and the IOSB without probing them, so deleting those pages under a pending terminal or mailbox read takes the system down (ADR-0013, `qio.mar`) | Probe in `IOC$POST`, as VMS's does |
 | 11 | No write ordering or flush on `DKB0:`: a host crash mid-`COPY` can leave a header without its directory entry (ADR-0012); no backup home block or index file header (`f11wrt.mar`, DESIGN-0002) | Write the header before the directory entry, a flush on `DISMOUNT`, and the backup home block `INITIALIZE` writes |
 | 12 | A fault in an outer mode ends the image past its exit handlers (`process.mar`, DESIGN-0002) | A last chance handler that calls `$EXIT` |
 | 13 | An AST routine's kernel code can be deleted halfway without `IPL$_ASTDEL` around it (ADR-0011) | Raise IPL as VMS does around such code |
@@ -232,7 +232,7 @@ until the hardware or size changes; leave it.
 | 15 | A directory is rewritten whole on each change (`f11wrt.mar`) | Insert records in place |
 | 16 | `EXTZV`/`INSV` read and write 8 bytes around the field, not atomically, and fault across a page end (`vmacro/src/insn.rs`); `crosstools/vtools/tests/macro32-bugs/fields.mar` shows it | Narrower accesses at a page end; atomic where the field is shared |
 | 17 | Shift counts of 32 and up wrap instead of clearing (`vmacro/src/insn.rs`); `crosstools/vtools/tests/macro32-bugs/shifts.mar` shows it | A compare and select, as the note says |
-| 18 | `IOC$CANCEL` doesn't wait for rundown's cancels to finish (`qio.mar`) | Needed once a driver can't stop at once: the interrupt-driven disk (tier 4) |
+| 18 | Done ([ADR-0047](../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)): rundown and `$DASSGN` wait for a request a disk has (`DK$CANCEL`); the other drivers stop theirs at once | — |
 | 19 | Common event flag clusters are kept while processes wait on them (`event.mar`) | Fine as is; listed so it isn't fixed twice |
 
 ### Tier 3: fidelity
@@ -250,7 +250,7 @@ until the hardware or size changes; leave it.
 | 28 | `IO$_WRITEOF` done; left: mailbox writes never wait, no attention ASTs (`mbdriver.mar`) | When a program needs them; the job controller may |
 | 29 | Terminal editing and `SET HOST` done (step 3); left: the recall buffer is the terminal's, not DCL's, and there's no `RECALL`; no CTRL/O, CTRL/T, XON and XOFF or formatted writes (`ttdriver.mar`, DESIGN-0002); EDIT/EDT lacks several commands (`edit.mar`); `EDIT` is TPU and EVE (PRD-0006) | DCL's own recall buffer with `RECALL`; the rest when a user misses it |
 | 30 | Image and process rundown delete every page of P0's and P1's ranges, mapped or not (`process.mar`) | When the walk shows in a profile |
-| 31 | The scheduler has no priority boosts or decay (`sched.mar`, DESIGN-0002) | Boosts on I/O completion and wakes, with decay; worth it once interactive users share the CPU with batch jobs |
+| 31 | A disk's request that ends boosts its process by `PRI$_IOCOM`, and quantum end takes a step off ([ADR-0047](../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)); left: no boost for terminal I/O, event flags or `$WAKE` (`sched.mar`, DESIGN-0002) | Boosts on the other wakes; worth it once interactive users share the CPU with batch jobs |
 | 32 | The CLI: parse limits of 128 entities, 1 KB of values, a 512-byte line; the parse copied to a fixed address; the first `SET COMMAND` error ends the compile; at most 8 `SET COMMAND` files; a qualifier the syntax lacks is an error, not ignored; an entity present by default doesn't count; `$IMGACT` calls the image (ADR-0017, ADR-0018, `cli.mar`, `cdu.mar`, `process.mar`, DESIGN-0002) | When a command or a CLD file runs into one |
 | 33 | `$GETDVI`, `$GETJPI` and `$GETLKI` are done at once with no AST (`getdvi.mar`, `getjpi.mar`, `sysenqdeq.mar`) | Fine on one node; the `W` and non-`W` forms behave the same |
 | 34 | AST routines get their parameter only, not R0, R1, PC and PSL (DESIGN-0002) | When a program reads them |
@@ -264,7 +264,7 @@ says what replaces it; this PRD doesn't schedule them.
 
 | # | Notes |
 | --- | --- |
-| 37 | Disk I/O polled and synchronous, the CPU waits for each request; the file system doesn't wait on a queued IRP (ADR-0007, ADR-0015, DESIGN-0001, DESIGN-0002, `main.c`) |
+| 37 | Done ([ADR-0047](../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)): disk requests end by interrupt and the file system waits for its IRP; left: the polled `READLBLK` until the scheduler runs, one request in a disk's queue at a time (`main.c`, `f11.mar`) |
 | 38 | The console UART polled each 10 ms tick, at QEMU virt's fixed address; device addresses not from the DTB (DESIGN-0001, `main.c`) |
 | 40 | The tick a PAL thread (ADR-0004, `main.c`) |
 | 41 | The TCP/IP component's page mapped writable and executable; frames copied, no offloads (`main.c`, `pal/tcpip/src/main.c`) |

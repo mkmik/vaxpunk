@@ -399,7 +399,8 @@ const DATA_DISK: Phase = Phase {
             ),
         ),
         (
-            "CUR     4 SHOW.EXE",
+            // Its priority is boosted by its disk I/O (SCH$BOOST).
+            "SYSTEM          CUR ",
             1,
             concat!(
                 "SHOW USERS/FULL\rSHOW USERS NOBODY\rSHOW MEMORY/SLOTS\r",
@@ -454,7 +455,7 @@ const DATA_DISK: Phase = Phase {
         "UIC:                [1,4]",
         " CPU limit:                      Infinite  Direct I/O limit:        150\n Buffered I/O byte count quota:    128000  Buffered I/O limit:      150",
         "00010001 SWAPPER",
-        "SYSTEM          CUR     4 SHOW.EXE",
+        "SYSTEM          CUR ",
         "    Total number of users = 1,  number of processes = 1\n\n Username    Process Name    PID       Terminal\n SYSTEM      SYSTEM          ",
         "%SHOW-I-NOSUCHUSER, no processes found for user NOBODY",
         " Process Entry Slots               1024",
@@ -477,11 +478,7 @@ const CONTROL_KEYS: Phase = Phase {
     name: "control keys",
     secs: 60,
     steps: &[
-        (
-            "SYSTEM          CUR     4 SHOW.EXE",
-            1,
-            "CONTINUE\rRUN CTRLC\r",
-        ),
+        ("SYSTEM          CUR ", 1, "CONTINUE\rRUN CTRLC\r"),
         ("CTRLC: waiting for CTRL/C", 1, "\x03"),
         ("CTRLC: ok", 1, "\x19"),
         ("*INTERRUPT*", 1, "RUN SPIN\r"),
@@ -1736,12 +1733,14 @@ const STARTUP: Phase = Phase {
         "FSTEST: ok",
         "ASTTEST: ok",
         "MBXTEST: ok",
+        "process MBXCHILD exited with status 00018292",
         "GBLTEST: ok",
         "PTDTEST: ok",
         "LOCKTEST: ok",
         "%SYSTEM-W-NOSIGNAL, no signal currently active",
         "%SYSTEM-F-NOSIGNAL, no signal currently active",
         "CHFTEST: ok",
+        "process CHFTEST exited with status 10000904",
         "QUOTATEST: a read past BIOLM waited for the quota",
         "QUOTATEST: ok",
         "%SYSTEM-F-ACCVIO, access violation, reason mask=00, virtual address=40010000, PC=",
@@ -1855,7 +1854,10 @@ const USERS: Phase = Phase {
         // again leaves PHONE.
         ("2 persons listed.", 1, "x%HELP DIAL\r"),
         ("a node name, as in NODE::USER, is refused", 1, "x\x1a\x1a"),
-        ("PHNTEST: ok", 1, "SHUTDOWN\r"),
+        ("PHNTEST: ok", 1, ""),
+        // PHONE gone, the screen cleared and DCL prompting: a key before
+        // that would be PHONE's.
+        ("\x1b[2J$ ", 1, "SHUTDOWN\r"),
     ],
     lines: &[
         "%UAF-I-ADDMSG, user record successfully added",

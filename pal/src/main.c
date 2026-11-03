@@ -514,55 +514,76 @@ static void fwcfg_init(seL4_BootInfo *bi)
 /*
  * The disks: virtio block devices on QEMU virt's 32 virtio-mmio
  * transports, 0x200 bytes apart from 0x0a000000, which the PAL drives
- * itself, polled, a request at a time (virtio 1.x, modern MMIO: QEMU needs
+ * itself, a request at a time (virtio 1.x, modern MMIO: QEMU needs
  * virtio-mmio.force-legacy=false). Unit 0 is the system disk, DKA0:, and
  * unit 1 the data disk, DKB0:, in the order of QEMU's -device options,
- * which take the transports from the highest down. Each unit's queue and
- * a request's header and status are in a page of the PAL's, the data of
- * both in another, at the physical addresses seL4 tells.
- * ponytail: polled and synchronous, the CPU waits for each request; the
- * device's interrupt, through seL4's IRQ handler, when I/O is
- * asynchronous.
+ * which take the transports from the highest down. Each unit's queue, a
+ * request's header and status, and a block's worth of padding are in a
+ * page of the PAL's, at the physical address seL4 tells.
+ * A request goes one of two ways. READLBLK and WRITELBLK, which the PAL's
+ * own boot and the executive's before its scheduler runs use, are polled:
+ * the data goes through vio_data, a page of the PAL's, and the CPU waits
+ * for the device. DISKSTART hands the device the executive's own pages,
+ * by the PFNs it locked them by, and returns: the device's interrupt,
+ * through seL4's IRQ handler, ends the request, and the PAL requests the
+ * disks' interrupt, whose routine takes the status with DISKDONE.
  */
 #define VIRTIO_PADDR 0x0a000000UL
 #define VIRTIO_VA 0xffff0000UL /* 4 pages, below the RTC */
 #define VIRTIO_SLOTS 32
 #define DISK_BLOCK 512
 #define DISK_UNITS 2
+/* Unit u's interrupt signals the PAL's notification with DISK_BADGE << u. */
+#define DISK_BADGE (1UL << 35)
+#define DISK_BADGES (((1UL << DISK_UNITS) - 1) * DISK_BADGE)
+static seL4_CPtr pal_ntfn; /* the PAL's notification, which the clock signals too */
 enum { VIO_MAGIC = 0x000, VIO_VERSION = 0x004, VIO_DEVICE = 0x008, VIO_DRVFEAT = 0x020,
        VIO_DRVFEATSEL = 0x024, VIO_QSEL = 0x030, VIO_QNUMMAX = 0x034, VIO_QNUM = 0x038,
        VIO_QREADY = 0x044, VIO_QNOTIFY = 0x050, VIO_INTSTATUS = 0x060, VIO_INTACK = 0x064,
        VIO_STATUS = 0x070, VIO_QDESC = 0x080, VIO_QDRIVER = 0x090, VIO_QDEVICE = 0x0a0,
        VIO_CAPACITY = 0x100 };
+/* A disk's queue has room for a request of 64 KB in pages, each a
+ * descriptor: the header, 17 pages, the padding and the status. The
+ * entropy device's queue is smaller: QEMU's has 8 entries. */
 enum { VIO_ACK = 1, VIO_DRIVER = 2, VIO_DRIVER_OK = 4, VIO_FEATURES_OK = 8, VIO_NET = 1, VIO_BLK = 2, VIO_RNG = 4,
-       VIO_QSIZE = 4, VIOD_NEXT = 1, VIOD_WRITE = 2 };
+       VIO_QMAX = 32, VIO_QRNG = 4, VIOD_NEXT = 1, VIOD_WRITE = 2 };
 struct vio_queue {
 	struct {
 		uint64_t addr;
 		uint32_t len;
 		uint16_t flags, next;
-	} desc[VIO_QSIZE];
+	} desc[VIO_QMAX];
 	struct {
-		uint16_t flags, idx, ring[VIO_QSIZE];
+		uint16_t flags, idx, ring[VIO_QMAX];
 	} avail __attribute__((aligned(64)));
 	struct {
 		uint16_t flags, idx;
 		struct {
 			uint32_t id, len;
-		} ring[VIO_QSIZE];
+		} ring[VIO_QMAX];
 	} used __attribute__((aligned(64)));
 	struct {
 		uint32_t type, reserved;
 		uint64_t sector;
 	} req __attribute__((aligned(64)));
 	uint8_t status;
+	/* A last block in part: what a read doesn't want, zeros to write. */
+	uint8_t pad[DISK_BLOCK] __attribute__((aligned(64)));
 };
+_Static_assert(sizeof(struct vio_queue) <= 4096, "a queue is a page");
 static struct disk {
 	volatile uint32_t *vio; /* 0: no such unit */
 	uint64_t blocks;
 	struct vio_queue *vq;
+	uint64_t q;	/* the queue's physical address */
+	unsigned qsize; /* its entries */
+	seL4_CPtr irq;	/* its interrupt's handler */
+	int busy;	/* DISKSTART's request is the device's */
+	uint16_t idx;	/* the used ring's index once it is done */
+	seL4_Word done; /* its status once done, until DISKDONE takes it, else 0 */
 } disks[DISK_UNITS], rng; /* rng: the entropy device, its queue */
 static uint8_t *vio_data; /* a page: 8 blocks */
+static uint64_t vio_data_pa;
 static seL4_CPtr vio_frame[VIRTIO_SLOTS * 0x200 / 4096]; /* the transports' pages */
 static int net_slot = -1; /* the virtio-net device's transport, or -1 */
 #define VQ_VA 0xfffe0000UL /* a page per unit, then the entropy device's */
@@ -588,20 +609,21 @@ static void wr64(volatile uint32_t *vio, unsigned reg, uint64_t v)
 }
 
 /* Negotiates virtio 1 with the device at vio and gives it queue 0, of
- * VIO_QSIZE descriptors, in a page of the PAL's at va. Returns the queue
- * and its physical address in *q, or 0 if the device won't. */
-static struct vio_queue *vio_setup(volatile uint32_t *vio, seL4_Word va, uint64_t *q)
+ * size descriptors, in a page of the PAL's at va. Returns the queue and
+ * its physical address in *q, or 0 if the device won't. */
+static struct vio_queue *vio_setup(volatile uint32_t *vio, seL4_Word va, uint64_t *q,
+				   unsigned size)
 {
 	vio[VIO_STATUS / 4] = 0;
 	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER;
 	vio[VIO_DRVFEATSEL / 4] = 1; /* VIRTIO_F_VERSION_1, and nothing else */
 	vio[VIO_DRVFEAT / 4] = 1;
 	vio[VIO_STATUS / 4] = VIO_ACK | VIO_DRIVER | VIO_FEATURES_OK;
-	if (!(vio[VIO_STATUS / 4] & VIO_FEATURES_OK) || vio[VIO_QNUMMAX / 4] < VIO_QSIZE)
+	if (!(vio[VIO_STATUS / 4] & VIO_FEATURES_OK) || vio[VIO_QNUMMAX / 4] < size)
 		return 0;
 	*q = dma_page(va);
 	vio[VIO_QSEL / 4] = 0;
-	vio[VIO_QNUM / 4] = VIO_QSIZE;
+	vio[VIO_QNUM / 4] = size;
 	wr64(vio, VIO_QDESC, *q + __builtin_offsetof(struct vio_queue, desc));
 	wr64(vio, VIO_QDRIVER, *q + __builtin_offsetof(struct vio_queue, avail));
 	wr64(vio, VIO_QDEVICE, *q + __builtin_offsetof(struct vio_queue, used));
@@ -610,39 +632,56 @@ static struct vio_queue *vio_setup(volatile uint32_t *vio, seL4_Word va, uint64_
 	return (struct vio_queue *)va;
 }
 
-/* Makes descriptor chain 0 of vq available to the device at vio and waits
- * until it is used. Returns the bytes the device wrote. */
-static uint32_t vio_kick(volatile uint32_t *vio, struct vio_queue *vq)
+/* Makes descriptor chain 0 of d's queue available to its device. Returns
+ * the used ring's index once the device is done with it. */
+static uint16_t vio_avail(struct disk *d)
 {
+	struct vio_queue *vq = d->vq;
 	uint16_t idx = vq->avail.idx;
-	vq->avail.ring[idx % VIO_QSIZE] = 0;
+	vq->avail.ring[idx % d->qsize] = 0;
 	__asm__ volatile("dmb sy" ::: "memory");
 	vq->avail.idx = idx + 1;
 	__asm__ volatile("dmb sy" ::: "memory");
-	vio[VIO_QNOTIFY / 4] = 0;
-	while (*(volatile uint16_t *)&vq->used.idx != (uint16_t)(idx + 1))
-		;
-	__asm__ volatile("dmb sy" ::: "memory");
-	vio[VIO_INTACK / 4] = vio[VIO_INTSTATUS / 4];
-	return vq->used.ring[idx % VIO_QSIZE].len;
+	d->vio[VIO_QNOTIFY / 4] = 0;
+	return idx + 1;
 }
 
-/* Sets up the block device at vio as unit u, whose data goes through the
- * page at data. */
-static void disk_setup(unsigned u, volatile uint32_t *vio, uint64_t data)
+/* Makes descriptor chain 0 of d's queue available to its device and waits
+ * until it is used. Returns the bytes the device wrote. */
+static uint32_t vio_kick(struct disk *d)
+{
+	struct vio_queue *vq = d->vq;
+	uint16_t idx = vio_avail(d);
+	while (*(volatile uint16_t *)&vq->used.idx != idx)
+		;
+	__asm__ volatile("dmb sy" ::: "memory");
+	d->vio[VIO_INTACK / 4] = d->vio[VIO_INTSTATUS / 4];
+	return vq->used.ring[(uint16_t)(idx - 1) % d->qsize].len;
+}
+
+/* Sets up the block device at vio, transport s, as unit u: its queue, and
+ * its interrupt, which signals the PAL with u's badge. */
+static void disk_setup(unsigned u, volatile uint32_t *vio, unsigned s)
 {
 	uint64_t q;
-	struct vio_queue *vq = vio_setup(vio, VQ_VA + u * PAGE_SIZE, &q);
+	struct vio_queue *vq = vio_setup(vio, VQ_VA + u * PAGE_SIZE, &q, VIO_QMAX);
 	if (!vq)
 		return;
-	/* The request: its header, the data and the status, a chain of three. */
-	vq->desc[0] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, req), 16,
-					     VIOD_NEXT, 1 };
-	vq->desc[1] = (typeof(vq->desc[0])){ data, 0, VIOD_NEXT, 2 };
-	vq->desc[2] = (typeof(vq->desc[0])){ q + __builtin_offsetof(struct vio_queue, status), 1,
-					     VIOD_WRITE, 0 };
-	disks[u] = (struct disk){ vio, vio[VIO_CAPACITY / 4] | (uint64_t)vio[VIO_CAPACITY / 4 + 1] << 32,
-				  vq };
+	/* QEMU virt's virtio-mmio transport s interrupts on SPI 16 + s. */
+	seL4_CPtr irq = slot();
+	seL4_Error err =
+		seL4_IRQControl_Get(seL4_CapIRQControl, 32 + 16 + s, cspace, irq, seL4_WordBits);
+	if (!err)
+		err = seL4_IRQHandler_SetNotification(irq, mint(pal_ntfn, DISK_BADGE << u));
+	if (err)
+		die("a disk's interrupt", err);
+	disks[u] = (struct disk){ .vio = vio,
+				  .blocks = vio[VIO_CAPACITY / 4] |
+					    (uint64_t)vio[VIO_CAPACITY / 4 + 1] << 32,
+				  .vq = vq,
+				  .q = q,
+				  .qsize = VIO_QMAX,
+				  .irq = irq };
 	print("disk %u: virtio-blk, %lu blocks\n", u, (seL4_Word)disks[u].blocks);
 }
 
@@ -651,11 +690,11 @@ static void disk_setup(unsigned u, volatile uint32_t *vio, uint64_t data)
 static void rng_setup(volatile uint32_t *vio, uint64_t data)
 {
 	uint64_t q;
-	struct vio_queue *vq = vio_setup(vio, VQ_VA + DISK_UNITS * PAGE_SIZE, &q);
+	struct vio_queue *vq = vio_setup(vio, VQ_VA + DISK_UNITS * PAGE_SIZE, &q, VIO_QRNG);
 	if (!vq)
 		return;
 	vq->desc[0] = (typeof(vq->desc[0])){ data, 0, VIOD_WRITE, 0 };
-	rng = (struct disk){ vio, 0, vq };
+	rng = (struct disk){ .vio = vio, .vq = vq, .q = q, .qsize = VIO_QRNG };
 	print("entropy: virtio-rng\n");
 }
 
@@ -670,7 +709,7 @@ static void disk_init(seL4_BootInfo *bi)
 		map(frame, seL4_CapInitThreadVSpace, VIRTIO_VA + p * PAGE_SIZE, seL4_ReadWrite,
 		    seL4_ARM_ExecuteNever);
 	}
-	uint64_t data = dma_page(VIO_DATA_VA);
+	vio_data_pa = dma_page(VIO_DATA_VA);
 	vio_data = (uint8_t *)VIO_DATA_VA;
 	unsigned u = 0;
 	for (unsigned s = VIRTIO_SLOTS; s--;) {
@@ -678,25 +717,63 @@ static void disk_init(seL4_BootInfo *bi)
 		if (r[VIO_MAGIC / 4] != 0x74726976 || r[VIO_VERSION / 4] != 2)
 			continue;
 		if (r[VIO_DEVICE / 4] == VIO_BLK && u < DISK_UNITS)
-			disk_setup(u++, r, data);
+			disk_setup(u++, r, s);
 		else if (r[VIO_DEVICE / 4] == VIO_NET && net_slot < 0)
 			net_slot = s;
 		else if (r[VIO_DEVICE / 4] == VIO_RNG && !rng.vio)
-			rng_setup(r, data);
+			rng_setup(r, vio_data_pa);
 	}
 }
 
+enum { SS_NORMAL = 1, SS_ACCVIO = 12, SS_BADPARAM = 20, SS_DRVERR = 140, SS_ILLBLKNUM = 220,
+       SS_NOSUCHDEV = 2312 };
+
+/* How long DISKSTART looks for a request the device ends at once, in reads
+ * of the used ring: some tens of microseconds. */
+enum { DISK_SPIN = 20000 };
+
+static void disk_interrupt(void); /* *Interrupts and exceptions* */
+
+/* Ends d's request from DISKSTART if the device is done with it: keeps its
+ * status for DISKDONE and requests the disks' interrupt. */
+static void disk_poll(struct disk *d)
+{
+	if (!d->busy || *(volatile uint16_t *)&d->vq->used.idx != d->idx)
+		return;
+	__asm__ volatile("dmb sy" ::: "memory");
+	d->busy = 0;
+	d->done = d->vq->status ? SS_DRVERR : SS_NORMAL;
+	disk_interrupt();
+}
+
+/* Unit u's interrupt, through seL4's IRQ handler. */
+static void disk_irq(unsigned u)
+{
+	struct disk *d = &disks[u];
+	d->vio[VIO_INTACK / 4] = d->vio[VIO_INTSTATUS / 4];
+	disk_poll(d);
+	seL4_IRQHandler_Ack(d->irq);
+}
+
 /* Reads (write 0) or writes (1) n blocks, at most 8, of unit d at lbn,
- * from or to vio_data. Returns 0 on an error. */
+ * from or to vio_data, and waits for the device, after the request
+ * DISKSTART gave it, if it has one. Returns 0 on an error. */
 static int disk_io8(struct disk *d, uint64_t lbn, unsigned n, int write)
 {
+	while (d->busy)
+		disk_poll(d);
 	struct vio_queue *vq = d->vq;
 	vq->req.type = write; /* VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT */
 	vq->req.sector = lbn;
-	vq->desc[1].len = n * DISK_BLOCK;
-	vq->desc[1].flags = write ? VIOD_NEXT : VIOD_NEXT | VIOD_WRITE;
+	/* The request: its header, the data and the status, a chain of three. */
+	vq->desc[0] = (typeof(vq->desc[0])){ d->q + __builtin_offsetof(struct vio_queue, req), 16,
+					     VIOD_NEXT, 1 };
+	vq->desc[1] = (typeof(vq->desc[0])){ vio_data_pa, n * DISK_BLOCK,
+					     write ? VIOD_NEXT : VIOD_NEXT | VIOD_WRITE, 2 };
+	vq->desc[2] = (typeof(vq->desc[0])){ d->q + __builtin_offsetof(struct vio_queue, status), 1,
+					     VIOD_WRITE, 0 };
 	vq->status = 0xff;
-	vio_kick(d->vio, vq);
+	vio_kick(d);
 	return vq->status == 0;
 }
 
@@ -1027,18 +1104,6 @@ static uint64_t *quad(seL4_Word va)
 	return (uint64_t *)(PHYS + (seL4_Word)pte_pfn(*pte) * PAGE_SIZE + va % PAGE_SIZE);
 }
 
-/*
- * READLBLK and WRITELBLK: read the blocks of unit u from lbn into the len
- * bytes at va, or write those bytes there, as Alpha's console READ and
- * WRITE callbacks did for VMS's bootstrap. Kernel mode must be able to
- * write (read) the buffer. Return an SS$ status: NORMAL, ACCVIO for a
- * buffer kernel mode can't, ILLBLKNUM past the disk's end, NOSUCHDEV
- * without the disk, DRVERR if the device fails, as it does for a write to
- * the system disk, which QEMU attaches read only.
- */
-enum { SS_NORMAL = 1, SS_ACCVIO = 12, SS_BADPARAM = 20, SS_DRVERR = 140, SS_ILLBLKNUM = 220,
-       SS_NOSUCHDEV = 2312 };
-
 /* The PAL's view of each page of the len bytes at va, in at, if kernel
  * mode may read them, and write them unless out is 0. */
 static int kbuf(seL4_Word va, seL4_Word len, int out, uint8_t **at)
@@ -1052,6 +1117,16 @@ static int kbuf(seL4_Word va, seL4_Word len, int out, uint8_t **at)
 	return 1;
 }
 
+/*
+ * READLBLK and WRITELBLK: read the blocks of unit u from lbn into the len
+ * bytes at va, or write those bytes there, as Alpha's console READ and
+ * WRITE callbacks did for VMS's bootstrap, polled: the executive uses them
+ * until its scheduler runs. Kernel mode must be able to write (read) the
+ * buffer. Return an SS$ status: NORMAL, ACCVIO for a
+ * buffer kernel mode can't, ILLBLKNUM past the disk's end, NOSUCHDEV
+ * without the disk, DRVERR if the device fails, as it does for a write to
+ * the system disk, which QEMU attaches read only.
+ */
 static seL4_Word lblk(seL4_Word va, seL4_Word len, seL4_Word lbn, seL4_Word u, int write)
 {
 	uint8_t *at[2 + 0xffff / PAGE_SIZE]; /* the PAL's view of each page */
@@ -1084,6 +1159,86 @@ static seL4_Word lblk(seL4_Word va, seL4_Word len, seL4_Word lbn, seL4_Word u, i
 	return SS_NORMAL;
 }
 
+/* The executive's longword at va, which must be 4-byte aligned and mapped. */
+static uint32_t *lword(seL4_Word va)
+{
+	uint64_t *pte = va % 4 || va >= SPACE_END ? 0 : pte_at(va, 0);
+	if (!pte || !mapped(*pte))
+		return 0;
+	return (uint32_t *)(PHYS + (seL4_Word)pte_pfn(*pte) * PAGE_SIZE + va % PAGE_SIZE);
+}
+
+/*
+ * DISKSTART: starts a read (write 0) of unit u's blocks from lbn into len
+ * bytes of the executive's memory, at most 65,535, or a write of those
+ * bytes there: the bytes from offset off of the first page of those whose
+ * PFNs are the longwords at list, on through the next ones, which the
+ * executive has locked for the I/O (MMG$IOLOCK). The device reads or
+ * writes the pages itself, and its interrupt ends the request
+ * (disk_poll). A last block in part is read only as far as len, and
+ * written padded with zeros. Returns 0 once the request is the device's,
+ * else its status, done or refused at once: the device's, if it was done
+ * within DISK_SPIN looks, with no interrupt to come; NORMAL for no bytes,
+ * NOSUCHDEV without the disk, ILLBLKNUM past its end, BADPARAM for an
+ * offset past a page, a list the PAL can't read or a PFN past the last,
+ * or a unit that has a request already.
+ */
+static seL4_Word disk_start(seL4_Word list, seL4_Word len, seL4_Word lbn, seL4_Word u,
+			    seL4_Word off, int write)
+{
+	if (u >= DISK_UNITS || !disks[u].vio)
+		return SS_NOSUCHDEV;
+	struct disk *d = &disks[u];
+	if (len > 0xffff || off >= PAGE_SIZE || d->busy)
+		return SS_BADPARAM;
+	seL4_Word blocks = (len + DISK_BLOCK - 1) / DISK_BLOCK;
+	if (lbn > d->blocks || blocks > d->blocks - lbn)
+		return SS_ILLBLKNUM;
+	if (!len)
+		return SS_NORMAL;
+	struct vio_queue *vq = d->vq;
+	unsigned flags = write ? VIOD_NEXT : VIOD_NEXT | VIOD_WRITE, n = 0;
+	vq->desc[n] = (typeof(vq->desc[0])){ d->q + __builtin_offsetof(struct vio_queue, req), 16,
+					     VIOD_NEXT, n + 1 };
+	n++;
+	for (seL4_Word i = 0, done = 0; done < len; i++) {
+		uint32_t *pfn = lword(list + 4 * i);
+		if (!pfn || *pfn >= pfn_count)
+			return SS_BADPARAM;
+		pfn_ptr(*pfn);
+		seL4_ARM_Page_GetAddress_t a = seL4_ARM_Page_GetAddress(frame_cap(*pfn));
+		if (a.error)
+			die("seL4_ARM_Page_GetAddress failed", a.error);
+		seL4_Word from = i ? 0 : off, k = PAGE_SIZE - from;
+		if (k > len - done)
+			k = len - done;
+		vq->desc[n] = (typeof(vq->desc[0])){ a.paddr + from, k, flags, n + 1 };
+		n++;
+		done += k;
+	}
+	if (len % DISK_BLOCK) {
+		memset(vq->pad, 0, sizeof vq->pad);
+		vq->desc[n] = (typeof(vq->desc[0])){ d->q + __builtin_offsetof(struct vio_queue, pad),
+						     DISK_BLOCK - len % DISK_BLOCK, flags, n + 1 };
+		n++;
+	}
+	vq->desc[n] = (typeof(vq->desc[0])){ d->q + __builtin_offsetof(struct vio_queue, status), 1,
+					     VIOD_WRITE, 0 };
+	vq->req.type = write;
+	vq->req.sector = lbn;
+	vq->status = 0xff;
+	d->idx = vio_avail(d);
+	d->busy = 1;
+	for (unsigned spin = 0; spin < DISK_SPIN; spin++) /* QEMU's often done by now */
+		if (*(volatile uint16_t *)&vq->used.idx == d->idx) {
+			__asm__ volatile("dmb sy" ::: "memory");
+			d->busy = 0;
+			d->vio[VIO_INTACK / 4] = d->vio[VIO_INTSTATUS / 4];
+			return vq->status ? SS_DRVERR : SS_NORMAL;
+		}
+	return 0;
+}
+
 /*
  * GETENTROPY: fills the len bytes at va, at most 256, with bytes from the
  * entropy device, virtio-rng, which QEMU takes from the host's generator.
@@ -1103,7 +1258,7 @@ static seL4_Word getentropy(seL4_Word va, seL4_Word len)
 	seL4_Word first = va & ~(PAGE_SIZE - 1);
 	for (seL4_Word done = 0; done < len;) {
 		rng.vq->desc[0].len = len - done;
-		uint32_t n = vio_kick(rng.vio, rng.vq); /* it may write fewer */
+		uint32_t n = vio_kick(&rng); /* it may write fewer */
 		if (!n)
 			return SS_DRVERR;
 		for (uint32_t i = 0; i < n && done < len; i++, done++) {
@@ -1354,7 +1509,8 @@ static seL4_CPtr idle_reply;
 #define TICK_US 10000
 #define CLOCK_BADGE (1UL << 32)
 /* The TCP/IP component signals the PAL's notification with PORT_BADGE,
- * and faults to its endpoint with TCPIP_BADGE. */
+ * and faults to its endpoint with TCPIP_BADGE. The disks' interrupts
+ * signal it with DISK_BADGE and above. */
 #define PORT_BADGE (1UL << 33)
 #define TCPIP_BADGE (1UL << 34)
 
@@ -1451,7 +1607,8 @@ enum {
 	MFPR_SCBB = 0x16, MTPR_SCBB = 0x17, MTPR_SIRR = 0x18, MFPR_SISR = 0x19, WTINT = 0x3e,
 	MFPR_WHAMI = 0x3f, MTPR_TXDB = 0x40, WRPTE = 0x41, DELCTX = 0x42, MTPR_RXCS = 0x43,
 	MFPR_RXCS = 0x44, MFPR_RXDB = 0x45, READLBLK = 0x46, WRITELBLK = 0x47,
-	MTPR_DOORBELL = 0x48, GETENTROPY = 0x49, GETMAXBLOCK = 0x4a, CHME = 0x82, CHMU = 0x85,
+	MTPR_DOORBELL = 0x48, GETENTROPY = 0x49, GETMAXBLOCK = 0x4a, RDPTE = 0x4b, DISKSTART = 0x4c,
+	DISKDONE = 0x4d, CHME = 0x82, CHMU = 0x85,
 	INSQHIL = 0x87, INSQTIQ = 0x8a, INSQUEL = 0x8b, INSQUEQ_D = 0x8e, PROBER = 0x8f,
 	PROBEW = 0x90, RD_PS = 0x91, REI = 0x92, REMQHIL = 0x93, REMQTIQ = 0x96, REMQUEL = 0x97,
 	REMQUEQ_D = 0x9a, INSQHILR = 0xa2, INSQTIQR = 0xa5, REMQHILR = 0xa6, REMQTIQR = 0xa9,
@@ -1612,10 +1769,11 @@ static int queue(seL4_Word code, seL4_Word a0, seL4_Word a1, seL4_Word *v0, seL4
 
 /* The system control block's vectors the PAL delivers through, and the
  * interval timer's and console's IPLs, the VAX's. CHMx's is SCB_CHMK + 4 * x,
- * x the mode. */
+ * x the mode. The port's completion and the disks' share IPL_PORT, each
+ * through its own vector. */
 enum { SCB_OPCDEC = 0x10, SCB_ACCVIO = 0x20, SCB_CHMK = 0x40, SCB_SOFTINT = 0x80,
-       SCB_TIMER = 0xc0, SCB_CONSRCV = 0xf8, SCB_PORT = 0x100, IPL_ASTDEL = 2, IPL_CONSOLE = 20,
-       IPL_PORT = 21, IPL_HWCLK = 24 };
+       SCB_TIMER = 0xc0, SCB_CONSRCV = 0xf8, SCB_PORT = 0x100, SCB_DISK = 0x104, IPL_ASTDEL = 2,
+       IPL_CONSOLE = 20, IPL_PORT = 21, IPL_HWCLK = 24 };
 
 /* The HWPCB's AST enable and summary bytes, Alpha's ASTEN and ASTSR
  * ($HWPCBDEF): bit n of each is access mode n's. */
@@ -1629,10 +1787,19 @@ enum { RXCS_DONE = 0x80, RXCS_IE = 0x40 };
  * The processor state the PAL keeps for the executive's one CPU. A VAX
  * starts at IPL 31. pending has a bit per IPL with an interrupt requested
  * and not yet delivered: software interrupts at 1-15, SISR, the console at
- * IPL_CONSOLE, the port's completion at IPL_PORT and the interval timer at
- * IPL_HWCLK. rxcs holds RXCS_IE.
+ * IPL_CONSOLE, the port's completion and the disks' at IPL_PORT, and the
+ * interval timer at IPL_HWCLK. devint has a bit for each of those at
+ * IPL_PORT that is requested, DEV_PORT and DEV_DISK. rxcs holds RXCS_IE.
  */
-static seL4_Word ipl = 31, pending, scbb, rxcs;
+static seL4_Word ipl = 31, pending, devint, scbb, rxcs;
+enum { DEV_PORT = 1, DEV_DISK = 2 };
+
+/* Requests the disks' interrupt: a request DISKSTART gave a disk is done. */
+static void disk_interrupt(void)
+{
+	pending |= 1UL << IPL_PORT;
+	devint |= DEV_DISK;
+}
 
 /* The TCP/IP component's notification, badged for a tick and for the
  * doorbell; 0 without the component. */
@@ -1756,8 +1923,13 @@ static int deliver(seL4_UserContext *r)
 			pending &= ~(1UL << level);
 			seL4_Word off = level == IPL_HWCLK     ? SCB_TIMER :
 					level == IPL_CONSOLE ? SCB_CONSRCV :
-					level == IPL_PORT    ? SCB_PORT :
+					level == IPL_PORT    ? (devint & DEV_PORT ? SCB_PORT : SCB_DISK) :
 							       SCB_SOFTINT + 4 * level;
+			if (level == IPL_PORT) { /* the other one once IPL drops below */
+				devint &= devint & DEV_PORT ? ~(seL4_Word)DEV_PORT : ~(seL4_Word)DEV_DISK;
+				if (devint)
+					pending |= 1UL << level;
+			}
 			if (!vector(r, off, level, 0, 0, 0, 0)) {
 				print("%%PAL-F-NOVEC, no handler for interrupt at IPL %lu\n", level);
 				return 0;
@@ -2102,6 +2274,22 @@ static int serve_one(seL4_MessageInfo_t msg)
 		return ret(getentropy(a0 & 0xffffffff, a1 & 0xffffffff));
 	case GETMAXBLOCK: /* a disk's blocks, as READ CAPACITY gave a driver */
 		return ret(a0 < DISK_UNITS && disks[a0].vio ? disks[a0].blocks : 0);
+	case DISKSTART:
+		return ret(disk_start(a0 & 0xffffffff, a1 & 0xffffffff,
+				      mr[seL4_UnknownSyscall_X2] & 0xffffffff,
+				      mr[seL4_UnknownSyscall_X3] & 0xffffffff,
+				      mr[seL4_UnknownSyscall_X4] & 0xffffffff,
+				      mr[seL4_UnknownSyscall_X5] & 1));
+	case DISKDONE: /* unit a0's request's status, once its interrupt ended it, or 0 */
+		if (a0 >= DISK_UNITS)
+			return ret(0);
+		v0 = disks[a0].done;
+		disks[a0].done = 0;
+		return ret(v0);
+	case RDPTE: { /* the PTE of a0's page, as WRPTE left it, or 0 */
+		uint64_t *pte = (a0 & 0xffffffff) < SPACE_END ? pte_at(a0 & 0xffffffff, 0) : 0;
+		return ret(pte ? *pte : 0);
+	}
 	case WRPTE: {
 		uint64_t old = ~0UL; /* -1: no room */
 		if (!wrpte(a0 & 0xffffffff, a1, &old))
@@ -2160,9 +2348,10 @@ static int serve_one(seL4_MessageInfo_t msg)
 }
 
 /*
- * A tick of the clock, or the port's completion, or both, by the bits of
- * badge: requests the interval timer interrupt, and the console's if a
- * character waits and RXCS asks for it, or the port's, and, if IPL lets
+ * A tick of the clock, the port's completion or a disk's interrupt, or
+ * more than one, by the bits of badge: requests the interval timer
+ * interrupt, and the console's if a character waits and RXCS asks for it,
+ * the port's, or the disks' if a disk's request is done, and, if IPL lets
  * them through, delivers them. The current context is running, since the
  * PAL outranks it and serves each of its PAL calls at once, or waits in
  * WTINT. A running one is stopped wherever it is, and resumes at the
@@ -2170,8 +2359,13 @@ static int serve_one(seL4_MessageInfo_t msg)
  */
 static int tick(seL4_Word badge)
 {
-	if (badge & PORT_BADGE)
+	if (badge & PORT_BADGE) {
 		pending |= 1UL << IPL_PORT;
+		devint |= DEV_PORT;
+	}
+	for (unsigned u = 0; u < DISK_UNITS; u++)
+		if (badge & DISK_BADGE << u)
+			disk_irq(u);
 	if (badge & CLOCK_BADGE)
 		pending |= 1UL << IPL_HWCLK;
 	if (rxcs && uart_rx_ready())
@@ -2198,7 +2392,7 @@ static void serve(void)
 		seL4_Word badge;
 		seL4_MessageInfo_t msg = seL4_Recv(fault_ep, &badge,
 						   idle ? idle_reply : cur->reply);
-		if (badge & (CLOCK_BADGE | PORT_BADGE)) {
+		if (badge & (CLOCK_BADGE | PORT_BADGE | DISK_BADGES)) {
 			if (!tick(badge))
 				return;
 			continue;
@@ -2225,7 +2419,7 @@ static void serve(void)
  * ponytail: the PAL's notification and seL4_Yield, no IPC buffer or TLS;
  * a timer device driver when the PAL has one.
  */
-static seL4_CPtr clock_cap, pal_ntfn;
+static seL4_CPtr clock_cap;
 static uint64_t clock_stack[256] __attribute__((aligned(16)));
 
 static void clock_thread(void)

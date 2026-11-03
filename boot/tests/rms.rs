@@ -119,14 +119,15 @@ impl Vax {
     }
 
     /// Types a command and waits for `done` after it: the text from the
-    /// command's echo to `done`.
+    /// command's echo to `done`. RMSRAND's thousands of operations take
+    /// minutes on a CI runner that boots the other tests' VMs at once.
     fn command(&mut self, line: &str, done: &str) -> String {
         let from = self.text().len();
         self.console
             .write_all(format!("{line}\r").as_bytes())
             .unwrap();
         let echo = self.wait_for(line, from, 20);
-        let end = self.wait_for(done, echo, 120);
+        let end = self.wait_for(done, echo, 300);
         self.text()[echo..end].to_string()
     }
 }

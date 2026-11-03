@@ -45,7 +45,13 @@ note = "stubs in syssrv.mar"
 id = "lock-pages"
 title = "$LCKPAG, $ULKPAG, $LKWSET and $ULWSET"
 status = "todo"
-note = "stubs; PRD-0003 tier 2 #10 could lock a pending read's pages with $LCKPAG"
+note = "stubs: they lock pages in the working set, which matters once there is paging; a device's pages are locked by #io-lock"
+
+[[feature]]
+id = "io-lock"
+title = "A direct I/O's pages locked by PFN while the device has them; a locked page's deletion deferred"
+status = "done"
+note = "ADR-0047: MMG$IOLOCK, MMG$UNLOCK, EXE$READLOCK, EXE$WRITELOCK, MMG$GL_PFNREFCNT and its DELCON bit, RDPTE"
 
 [[feature]]
 id = "p1-expreg"

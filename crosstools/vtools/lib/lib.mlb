@@ -49,6 +49,9 @@ PAL$_WRITELBLK = ^X47                   ; the same, writing the buffer there
 PAL$_DOORBELL = ^X48                    ; R0 = a port: MTPR #n, #PR$_DOORBELL
 PAL$_GETENTROPY = ^X49                  ; R0 = buffer, R1 = byte count, at most 256; R0 = status
 PAL$_GETMAXBLOCK = ^X4A                 ; R0 = unit; R0 = the disk's blocks, 0 without it
+PAL$_RDPTE = ^X4B                       ; R0 = address; R0 = its page's PTE, as WRPTE left it, or 0
+PAL$_DISKSTART = ^X4C                   ; R0 = PFN list, R1 = byte count, R2 = LBN, R3 = unit, R4 = offset, R5 = 1 to write; R0 = 0 or a status
+PAL$_DISKDONE = ^X4D                    ; R0 = unit; R0 = its request's status once done, else 0
 PAL$_RD_PS = ^X91                       ; R0 = the PSL: the modes and IPL
         .ENDM   $PALDEF
 
@@ -122,7 +125,8 @@ SCB$L_SOFTINT = ^X80                    ; software interrupt level n at +4*n
 SCB$L_INTTIM = ^XC0                     ; interval timer, at IPL$_HWCLK
 SCB$L_CONSRCV = ^XF8                    ; console receive, at IPL$_CONSOLE
 SCB$L_PORT = ^X100                      ; port 0's completion, at IPL$_PORT
-SCB$K_LENGTH = ^X104
+SCB$L_DISK = ^X104                      ; vaxpunk: a disk request's completion, DISKSTART's, at IPL$_PORT too
+SCB$K_LENGTH = ^X108
         .ENDM   $SCBDEF
 
 ; $FDSCDEF: a frame descriptor (DESIGN-0004), which a frame's 24(FP)
@@ -271,6 +275,17 @@ SCH$C_COM = 12                          ; computable
 SCH$C_CUR = 14                          ; current
         .ENDM   $STATEDEF
 
+; $PRIDEF: priority increment classes: the boost an event that ends a
+; process's wait gives it, below priority 16 (SCH$BOOST), by VMS's table.
+        .MACRO  $PRIDEF
+PRI$_NULL = 0                           ; none
+PRI$_IOCOM = 1                          ; a disk's request is done: 2 more
+PRI$_RESAVL = 2                         ; a resource it waited for is available: 3 more
+PRI$_TOCOM = 3                          ; terminal output is done: 4 more
+PRI$_TICOM = 4                          ; terminal input is done: 6 more
+PRI$_TIMER = 2                          ; a timer is due: 3 more
+        .ENDM   $PRIDEF
+
 ; $PCBDEF: the software process control block.
         .MACRO  $PCBDEF
 PCB$L_SQFL = 0                          ; state queue: COM queue or a wait queue
@@ -340,7 +355,8 @@ PCB$W_RMSEXTEND = 704                   ; blocks a file is extended by, 0 for th
 PCB$W_RMSPATHTMO = 706                  ; PATH_TIMEOUT, seconds, 0 for the system's
 PCB$B_RMSQUERY = 708                    ; QUERY_LOCK: 0 the system's, 1 enabled, 2 disabled
 PCB$B_RMSCONTEND = 709                  ; CONTENTION_POLICY: 0 the system's, 1 never, 2 sometimes, 3 always
-PCB$K_LENGTH = 712
+PCB$L_WAITIME = 712                     ; the second, EXE$GL_ABSTIM, it last became computable (SCH$INSCOM), for SCH$PIXSCAN
+PCB$K_LENGTH = 720
 PCB$K_RMSMBF_SDK = 0                    ; in PCB$AB_RMSDFMBF and SGN$AB_RMSDFMBF: sequential files on disks,
 PCB$K_RMSMBF_SMT = 1                    ; magnetic tapes,
 PCB$K_RMSMBF_SUR = 2                    ; and unit record devices,
@@ -592,6 +608,8 @@ UCB$W_DEVSTS = 64                       ; device dependent status: a mailbox's U
 UCB$W_ERRCNT = 66                       ; the errors the device reported, SS$_DRVERR
 UCB$W_UNIT_SEED = 68                    ; a template's: the unit last cloned from it
 UCB$K_LENGTH = 72
+UCB$L_IRP = 72                          ; a disk's: the request the device has, which EXE$INSIOQ started, or 0
+UCB$K_DKLENGTH = 76                     ; a disk
 UCB$L_CONN = 72                         ; a network unit's or a TELNET terminal's connection on the port, 0 none
 UCB$L_PROTO = 76                        ; a network unit's socket's protocol, TCPIP$C_, or 0 before it has one
 UCB$K_NETLENGTH = 80                    ; a network unit, cloned from BG0:
@@ -644,6 +662,8 @@ UCB$V_TT_FT = 7                         ; a pseudo terminal, FTAn, which a progr
 UCB$V_TT_VT = 8                         ; a virtual terminal, VTAn: a session that outlives its line
 UCB$V_ONLINE = 4                        ; UCB$L_STS: the device is online
 UCB$M_ONLINE = ^X10
+UCB$V_BSY = 8                           ; the device has a request, UCB$L_IRP, and the others wait on UCB$L_IOQFL (EXE$INSIOQ)
+UCB$M_BSY = ^X100
 UCB$V_TEMPLATE = 13                     ; a template: $ASSIGN clones a unit of its own from it
 UCB$M_TEMPLATE = ^X2000
 UCB$V_DELETEUCB = 16                    ; delete it once no channel has it (IOC$DELETE_UCB)
@@ -658,14 +678,14 @@ DYN$C_UCB = 16                          ; UCB$B_TYPE
 ; $IRPDEF: an I/O request packet, from pool, which a driver makes for a
 ; $QIO, or the file system's own, with no process. Its head is an ACB's: IOC$REQCOM queues it to its process as a
 ; kernel mode AST, IOC$POST, and that may queue it again as the caller's
-; AST. A buffered read's prompt and data follow it.
+; AST. A buffered read's prompt and data follow it, a direct I/O's PFNs.
         .MACRO  $IRPDEF
 IRP$L_IOQFL = 0                         ; the UCB's queue, then the AST queue
 IRP$L_IOQBL = 4
 IRP$W_SIZE = 8                          ; with the prompt and data
 IRP$B_TYPE = 10
 IRP$B_RMOD = 11                         ; the AST's mode: kernel, then the caller's
-IRP$L_PID = 12                          ; the process it is for
+IRP$L_PID = 12                          ; the process it is for, 0 for the file system's
 IRP$L_AST = 16                          ; the caller's AST routine, or 0
 IRP$L_ASTPRM = 20                       ; its parameter
 IRP$L_KAST = 24                         ; IOC$POST once done, then 0
@@ -683,7 +703,7 @@ IRP$L_BCNT = 64                         ; its size, p2
 IRP$L_PROMPT = 68                       ; a read's prompt's size: it is past IRP$K_LENGTH, and the data past it
 IRP$L_MEDIA = 72                        ; a disk's LBN, p3
 IRP$L_POST = 76                         ; a routine IOC$POST JSBs, R6 the IRP, in its process, or 0
-IRP$L_BOFF = 80                         ; the bytes charged to its process's BYTCNT
+IRP$L_BOFF = 80                         ; a buffered I/O's: the bytes charged to its process's BYTCNT; a direct I/O's: its buffer's offset in its first page
 IRP$B_QUOTA = 84                        ; what it is charged to: IRP$K_BIO, IRP$K_DIO, or 0 for nothing
 IRP$K_LENGTH = 88
 IRP$K_BIO = 1                           ; a buffered I/O: BIOCNT, and BYTCNT
@@ -691,6 +711,9 @@ IRP$K_DIO = 2                           ; a direct I/O, a disk's: DIOCNT
 IRP$V_BUFIO = 0                         ; a read whose data IOC$POST copies to the caller's buffer
 IRP$M_BUFIO = 1
 IRP$V_STARTED = 1                       ; the terminal has written its prompt
+IRP$V_LOCKED = 2                        ; vaxpunk: its buffer's pages are locked (EXE$READLOCK), their PFNs past the packet, until IOC$REQCOM
+IRP$M_LOCKED = 4
+IRP$K_MAXPFN = 17                       ; vaxpunk: PFNs past a direct I/O's packet, at most: 64 KB's pages, where VMS's IRP$L_SVAPTE points at their PTEs
 DYN$C_IRP = 10                          ; IRP$B_TYPE
         .ENDM   $IRPDEF
 

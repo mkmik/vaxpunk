@@ -30,9 +30,11 @@
         $SSDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SCH$QEND, SCH$WAKE, SCH$GETEFC, SCH$POSTEF, SCH$QAST
+        .EXTERNAL SCH$PIXSCAN
         .EXTERNAL EXE$NAMPID, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$GL_RPB
 
 TICK = 100000                           ; 10 ms, the PAL's TICK_US, in 100 ns units
+TICKS_SEC = 100
 UNIX_HI = ^X007C9567                    ; 1-Jan-1970 in VMS time
 UNIX_LO = ^X4BEB4000
 
@@ -46,6 +48,12 @@ EXE$GQ_1ST_TIME::                       ; when the first entry is due
         .LONG   -1, -1
 EXE$GQ_TQFL::                           ; the timer queue
         .BLKQ   1
+EXE$GL_ABSTIM::                         ; seconds since boot
+        .LONG   0
+SECTICKS:                               ; ticks left in this second
+        .LONG   TICKS_SEC
+SCANNED:                                ; the second SCH$PIXSCAN last ran in
+        .LONG   0
 
         .PSECT  $CODE$
 
@@ -68,14 +76,20 @@ EXE$INITTIM::
         RSB
 
 ; EXE$HWCLKINT: the interval timer interrupt, at IPL$_HWCLK. Advances the
-; system time, and requests the software timer interrupt if the first
-; timer queue entry is due, or if the current process's quantum is up: it
-; counts up from -SGN$GW_QUANTUM to 0. A tick before SCH$INIT, or while
-; the CPU is idle in SCH$SCHED, has no process to charge.
+; system time and the seconds since boot, and requests the
+; software timer interrupt each second, if the first timer queue entry is
+; due, or if the current process's quantum is up: it counts up from
+; -SGN$GW_QUANTUM to 0. A tick before SCH$INIT, or while the CPU is idle
+; in SCH$SCHED, has no process to charge.
 EXE$HWCLKINT::
         .EXCEPTION_ENTRY
         PUSHR   #^M<R0>
-        ADDL2   #TICK, EXE$GQ_SYSTIME
+        DECL    SECTICKS
+        BGTR    5$
+        MOVL    #TICKS_SEC, SECTICKS
+        INCL    EXE$GL_ABSTIM
+        SOFTINT #IPL$_TIMER
+5$:     ADDL2   #TICK, EXE$GQ_SYSTIME
         BCC     10$
         INCL    EXE$GQ_SYSTIME+4
 10$:    CMPL    EXE$GQ_SYSTIME+4, EXE$GQ_1ST_TIME+4
@@ -95,19 +109,25 @@ EXE$HWCLKINT::
         REI
 
 ; EXE$SWTIMINT: the software timer interrupt, at IPL$_TIMER. Ends the
-; current process's quantum if it is up, and serves the timer queue
-; entries that are due.
+; current process's quantum if it is up, once a second gives the processes
+; that have waited that long to run a boost (SCH$PIXSCAN), and serves the
+; timer queue entries that are due.
 EXE$SWTIMINT::
         .EXCEPTION_ENTRY
         SETIPL  #IPL$_SYNCH
         PUSHR   #^M<R0, R1, R2, R3, R4, R5, R6>
         MOVL    SCH$GL_CURPCB, R4
+        BEQL    15$                     ; before SCH$INIT: no process yet
         CMPL    PCB$L_STATE(R4), #SCH$C_CUR
         BNEQ    10$
         TSTW    PCB$W_QUANT(R4)
         BLSS    10$
         JSB     G^SCH$QEND
-10$:    DSBINT  #IPL$_HWCLK
+10$:    CMPL    EXE$GL_ABSTIM, SCANNED
+        BEQL    15$
+        MOVL    EXE$GL_ABSTIM, SCANNED
+        JSB     G^SCH$PIXSCAN
+15$:    DSBINT  #IPL$_HWCLK
         MOVQ    EXE$GQ_SYSTIME, R0
         ENBINT
 20$:    MOVL    EXE$GQ_TQFL, R6
