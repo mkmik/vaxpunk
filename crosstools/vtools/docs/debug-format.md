@@ -21,9 +21,12 @@ and there is no traceback or DEBUG on vaxpunk to read one
 - GNU binutils: the record layouts in `include/vms/dst.h`, `dmt.h` and
   `eihs.h`, and how `bfd/vms-alpha.c` reads them and builds an image's DST
   and DMT. GPL-3: facts only, never code.
-- VAX/VMS V4.3's DEBUG and TRACE sources, `DEBUG/SRC/DSTRECRDS.REQ` and
-  `TRACE/SRC/TBKDPC.B32`: the meaning of every record and of each
-  PC-correlation command. DEC's: read for facts, never copied.
+- DEC's own definition of the Alpha DST, `debug/alpha_dstrecrds.sdl` on the
+  OpenVMS Freeware V5.0 CD
+  (<https://www.digiater.nl/openvms/freeware/v50/debug/alpha_dstrecrds.sdl>),
+  and VAX/VMS V4.3's `DEBUG/SRC/DSTRECRDS.REQ` and `TRACE/SRC/TBKDPC.B32`:
+  the meaning of every record and of each PC-correlation command. DEC's:
+  read for facts, never copied.
 - OpenVMS Alpha V8.4 itself (the AXPbox oracle, `t8y:/host/axpbox-oracle`):
   objects from `MACRO/MIGRATION/DEBUG` and `BLISS/A64`, and images from
   `LINK/DEBUG`, `LINK` and `LINK/NOTRACEBACK`. Where the others don't say,
@@ -96,11 +99,12 @@ lowest routine), and whether a line is open (no).
 | 14, 15, 21 | `TERM`, `_W`, `_L` | byte, word, longword | the open line has this many bytes; no line is open |
 
 A line ends where the next Delta-PC starts one, or at a `TERM`. The commands
-that set the line number or the PC come only while no line is open. Those
-that add to the line number or set the increment set the statement number
-back to 1 in statement mode; the `SET_LINUM` ones don't, in TRACE
-(`TBKDPC.B32`). `dst::lines` runs the commands and returns each
-line's number, statement, address and size, as TRACE reads them.
+that set the PC come only while no line is open. Those that add to the line
+number or set the increment set the statement number back to 1 in statement
+mode; the `SET_LINUM` ones don't. (VAX/VMS V4.3's TRACE also refused
+`SET_LINUM` in an open line; the Alpha definition allows it.) `dst::lines`
+runs the commands and returns each line's number, statement, address and
+size.
 
 This is what AMACRO wrote for a routine at 0x30040 whose `.ENTRY` is on line
 10 and whose four instructions are on lines 11 to 14, the last ending at

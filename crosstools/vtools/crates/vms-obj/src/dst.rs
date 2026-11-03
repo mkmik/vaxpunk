@@ -396,13 +396,13 @@ pub struct Line {
 }
 
 /// The lines that a module's PC-correlation commands, all of its
-/// `LINE_NUM` records' in order, define, as TRACE reads them. `start_pc` is
+/// `LINE_NUM` records' in order, define. `start_pc` is
 /// the address of the module's lowest routine, which `SetPc` counts from.
 ///
 /// A Delta-PC adds the increment (1 at first) to the line number, or 1 to
 /// the statement number in statement mode, moves the PC on and starts that
-/// line there; the next Delta-PC or a `Term` ends it. The line number and PC
-/// may be set only between a `Term` and the next Delta-PC.
+/// line there; the next Delta-PC or a `Term` ends it. The PC may be set only
+/// between a `Term` and the next Delta-PC.
 pub fn lines<'a>(
     cmds: impl IntoIterator<Item = &'a Pc>,
     start_pc: u32,
@@ -446,14 +446,13 @@ pub fn lines<'a>(
                 }
                 continue;
             }
-            // The rest come only between lines.
-            _ if open => return Err(BAD),
-            // Unlike INCR_LINUM, this keeps the statement number, as TRACE
-            // does.
+            // Unlike INCR_LINUM, this keeps the statement number.
             Pc::SetLinumB(_) | Pc::SetLinum(_) | Pc::SetLinumL(_) => {
                 line = arg(cmd);
                 continue;
             }
+            // The rest come only between lines.
+            _ if open => return Err(BAD),
             Pc::SetPc(_) | Pc::SetPcW(_) | Pc::SetPcL(_) => {
                 pc = start_pc.checked_add(arg(cmd)).ok_or(BAD)?;
                 continue;
@@ -727,6 +726,29 @@ mod tests {
         );
     }
 
+    /// A line number set inside a line, for code that goes back to an
+    /// earlier line.
+    #[test]
+    fn earlier_lines() {
+        let cmds = [
+            Pc::SetLinumB(9),
+            Pc::DeltaPc(0),
+            Pc::SetLinumB(4),
+            Pc::DeltaPc(4),
+            Pc::Term(4),
+        ];
+        let line = |line, pc| Line {
+            line,
+            stmt: 1,
+            pc,
+            size: 4,
+        };
+        assert_eq!(
+            lines(&cmds, 0x100),
+            Ok(vec![line(10, 0x100), line(5, 0x104)])
+        );
+    }
+
     #[test]
     fn rejects_bad_commands() {
         let bad = Err(Error::Invalid("PC-correlation commands"));
@@ -737,7 +759,7 @@ mod tests {
             bad,
             "statements outside a line"
         );
-        for set in [Pc::SetLinum(1), Pc::SetPc(1), Pc::SetAbsPc(1)] {
+        for set in [Pc::SetPc(1), Pc::SetPcW(1), Pc::SetPcL(1), Pc::SetAbsPc(1)] {
             assert_eq!(lines(&[Pc::DeltaPc(0), set, Pc::Term(0)], 0), bad);
         }
         assert_eq!(
