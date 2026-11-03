@@ -45,7 +45,7 @@
         $PRCDEF
 
         .EXTERNAL SCH$GL_CURPCB, SCH$GL_SWPPCB, SCH$GL_PCBVEC, SCH$GL_MAXPIX, SCH$GL_SEQ
-        .EXTERNAL SCH$GQ_HIBWQ, SCH$GQ_SUSPWQ, SCH$GQ_DELQ
+        .EXTERNAL SCH$GQ_HIBWQ, SCH$GQ_SUSPWQ, SCH$GQ_DELQ, RMS$FINISH
         .EXTERNAL SCH$REMCOM, SCH$MAKECOM, SCH$WAKEPCB, SCH$WAKE, SCH$WAIT
         .EXTERNAL SCH$SCHED, SCH$DACEFC_ALL, SGN$GW_QUANTUM
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
@@ -1166,8 +1166,9 @@ EXHLIST:
         MOVAL   PCB$AL_EXH(R1)[R0], R0
         RSB
 
-; EXE$IMGRUNDOWN: R4 = the current PCB. Gives back what the image that ran
-; in it holds: its user mode locks, its timer queue entries, its user
+; EXE$IMGRUNDOWN: R4 = the current PCB. Ends its RMS service stalled at a
+; disk wait, if it has one (RMS$FINISH), then gives back what the image
+; that ran in it holds: its user mode locks, its timer queue entries, its user
 ; mode ASTs, its pages in P0 and those it made in P1, below the part
 ; of P1 that outlives it, its common event flag clusters, its user
 ; mode exit handlers, and its channels and files, all but the command interpreter's, PCB$L_CLICHANS
@@ -1180,6 +1181,7 @@ EXHLIST:
 ; uses nothing else yet.
 EXE$IMGRUNDOWN::
         .JSB_ENTRY  SCRATCH=<R2, R3>
+        BSBW    RMS$FINISH
         DSBINT  #IPL$_SYNCH
         BICL3   PCB$L_CLICHANS(R4), PCB$L_CHANS(R4), R0
         CLRL    R1

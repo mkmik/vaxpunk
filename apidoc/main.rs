@@ -320,7 +320,7 @@ fn parse_mar(
     let (mut block, mut cur, mut in_code, mut in_macro) =
         (Vec::<String>::new(), None::<usize>, true, false);
     // the module's macros that make an entry point, `.ENTRY PREFIX'NAME`,
-    // by name: their prefix
+    // by name: their prefix, the first one's if they make more
     let (mut makers, mut macro_name) = (HashMap::<String, String>::new(), String::new());
     // the routine whose instruction came last, and that instruction, if
     // the next label follows it in the same psect
@@ -346,7 +346,9 @@ fn parse_mar(
         }
         if in_macro {
             if let Some(c) = re!(r"(?i)^\s+\.ENTRY\s+([\w$]+)'NAME\b").captures(line) {
-                makers.insert(macro_name.clone(), c[1].to_uppercase());
+                makers
+                    .entry(macro_name.clone())
+                    .or_insert_with(|| c[1].to_uppercase());
             }
             in_macro = !up.starts_with(".ENDM");
             block.clear();

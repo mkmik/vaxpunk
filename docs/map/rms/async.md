@@ -31,9 +31,9 @@ note = "rms.mar EXE$WAIT; what VMS's RMS does when the operation needn't wait"
 [[feature]]
 id = "asynchronous"
 title = "RAB$V_ASY: a service returns RMS$_PENDING, $WAIT or an event flag ends it"
-status = "todo"
+status = "done"
 needs = ["#asy", "/exec/event-flags", "/drivers/interrupt-io"]
-note = "RMS must stall at a disk wait and go on from its completion, holding FIL$LOCK for the process meanwhile (PRD-0003 tier 3 #23)"
+note = "ADR-0048: rms.mar RECSVC runs it on a stack of its own, RMS$STALL at FIL$READLBLK's wait returns RMS$_PENDING holding FIL$LOCK, RMS$STALLAST goes on; $WAIT ends it in place (RMS$FINISH); ASYTEST"
 
 [[needs]]
 on = "/rms/core"
@@ -53,11 +53,13 @@ file with computing on the last record, and servers to keep many streams
 going in one process.
 
 vaxpunk's RMS takes the completion routines and calls them as ASTs, as
-VMS's does (`RMS$CMPL` in `rms.mar`), but each service still finishes
-before it returns, `RAB$V_ASY` or not, which VMS's RMS also does when the
-record is in its buffers: `$WAIT` gives the status the service left in
-the RAB. The disks end requests by interrupt now
-([ADR-0047](../../adr/0047-interrupt-driven-disk-io-and-locked-pages.md)),
-so what is left is the overlap: RMS stalling at a disk wait, returning
-`RMS$_PENDING`, and going on from the disk's completion, as VMS's
-`RM$STALL` does (PRD-0003 tier 3 #23).
+VMS's does (`RMS$CMPL` in `rms.mar`). A record or block I/O service with
+`RAB$V_ASY` runs on a stack of its own; when it has to wait for the disk
+it stalls, as VMS's `RM$STALL` does, and returns `RMS$_PENDING`, its
+process still holding `FIL$LOCK`; the disk's completion queues a kernel
+mode AST that goes on with it, as `RM$STALLAST`
+([ADR-0048](../../adr/0048-asynchronous-rms-stalls-on-a-stack-of-its-own.md)).
+`$WAIT`, or any file system work of the same process, ends it in place
+first. A service that needn't wait ends before it returns, as on VMS.
+Left: letting go of `FIL$LOCK` at the stall, which wants the file
+system's buffers per volume, and stalls for record locks.
