@@ -3109,15 +3109,18 @@ L2:     RABDONE
 RECSVC:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    R1, R6
+        DSBINT  #IPL$_ASTDEL            ; so that its AST doesn't end it meanwhile
         MOVL    STALL, R0
-        BEQL    10$
+        BEQL    5$
         CMPL    ASB$L_PCB(R0), SCH$GL_CURPCB
-        BNEQ    10$
+        BNEQ    5$
         CMPL    ASB$L_ARGS+4(R0), 4(AP)
-        BNEQ    10$
+        BNEQ    5$
+        ENBINT
         MOVL    #RMS$_RSA, R0
         RSB
-10$:    BSBW    FIL$LOCK
+5$:     ENBINT
+        BSBW    FIL$LOCK
         BSBW    RABIFAB
         BLBC    R0, 20$
         BBC     #RAB$V_ASY, RAB$L_ROP(R10), 20$
@@ -3217,7 +3220,9 @@ THREAD:
 
 ; SWITCH: R1 = an ASB, R0 = a value. Goes from the asynchronous service's
 ; stack to its runner's, or back: keeps x18-x30 on this stack, leaves its
-; sp in ASB$Q_SP and takes the other's, whose registers it loads. Returns
+; sp in ASB$Q_SP and takes the other's, whose registers it loads. VAX SP
+; is never above either frame meanwhile, so an interrupt, which the PAL
+; delivers below both stack pointers, writes neither. Returns
 ; there, with R0 and R1 as they are, to the SWITCH that left it, or the
 ; first time to THREAD. Keeps every register.
 SWITCH:
@@ -3231,6 +3236,7 @@ SWITCH:
         stp     x26, x27, [sp, #64]
         stp     x28, x29, [sp, #80]
         str     x30, [sp, #96]
+        mov     x18, sp                 ; an interrupt now goes below the frame
         ldr     x16, [x1, #ASB$Q_SP]
         mov     x17, sp
         str     x17, [x1, #ASB$Q_SP]
