@@ -1742,8 +1742,9 @@ L:      BSBW    FIL$UNLOCK
 ; caller an AST to err if the status is an error, to suc if not, in the
 ; caller's mode, with the FAB or RAB as its parameter, as VMS's RMS calls
 ; its completion routines; none if that argument is 0 or not given. If
-; the AST can't be queued, STS is RMS$_CDA and STV the status. R0 = the
-; status STS holds. Uses R1.
+; the AST can't be queued, STS is RMS$_CDA and STV the service's own
+; status, not $DCLAST's, as VMS's RM$EXRMS keeps it. R0 = the status STS
+; holds. Uses R1.
 RMS$CMPL:
         .JSB_ENTRY
         MOVZBL  (AP), R1
@@ -1763,7 +1764,7 @@ RMS$CMPL:
         CALLS   #3, G^EXE$DCLAST
         MOVL    (SP)+, R1
         BLBS    R0, 80$
-        MOVL    R1, FAB$L_STV(R10)      ; a RAB's STS and STV are there too
+        MOVL    R1, FAB$L_STV(R10)      ; the service's; a RAB's STS and STV are there too
         MOVL    #RMS$_CDA, R1
         MOVL    R1, FAB$L_STS(R10)
 80$:    MOVL    R1, R0
