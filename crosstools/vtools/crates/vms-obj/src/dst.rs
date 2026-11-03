@@ -448,6 +448,8 @@ pub fn lines<'a>(
             }
             // The rest come only between lines.
             _ if open => return Err(BAD),
+            // Unlike INCR_LINUM, this keeps the statement number, as TRACE
+            // does.
             Pc::SetLinumB(_) | Pc::SetLinum(_) | Pc::SetLinumL(_) => {
                 line = arg(cmd);
                 continue;

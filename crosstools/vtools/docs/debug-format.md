@@ -97,8 +97,9 @@ lowest routine), and whether a line is open (no).
 
 A line ends where the next Delta-PC starts one, or at a `TERM`. The commands
 that set the line number or the PC come only while no line is open. Those
-that change the line number or the increment set the statement number back
-to 1 in statement mode. `dst::lines` runs the commands and returns each
+that add to the line number or set the increment set the statement number
+back to 1 in statement mode; the `SET_LINUM` ones don't, in TRACE
+(`TBKDPC.B32`). `dst::lines` runs the commands and returns each
 line's number, statement, address and size, as TRACE reads them.
 
 This is what AMACRO wrote for a routine at 0x30040 whose `.ENTRY` is on line
