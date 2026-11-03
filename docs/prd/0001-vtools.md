@@ -204,7 +204,7 @@ Because the MMU is on, virtual addresses are free: an image linked at 0x10000 ru
 - **Linkage sections.** Alpha code reaches data and other routines through a per-procedure linkage section pointed to by the procedure descriptor. ARM64 has `ADRP`+`ADD` PC-relative addressing that makes this less necessary. Keep linkage sections for fidelity with the Alpha calling standard, or drop them? Decide together with the calling standard; the object format should support both.
 - **Assembler name and source suffix.** `.MAR` suggests MACRO-32, which this is not. Pick a name (and suffix) for the ARM64 MACRO-style assembler.
 - **Position-independent images.** Needed later for shareable images and possibly for address-space randomisation. The first version links at a fixed base.
-- **Debug symbol table.** Emit VMS-style DST records (so a future VMS-native debugger can use them) or just the link map for now. Leaning map only.
+- **Debug symbol table.** Emit VMS-style DST records (so a future VMS-native debugger can use them) or just the link map for now. Leaning map only. Since then `vms-obj` reads and writes Alpha's DST records and an image's DST and DMT (`crosstools/vtools/docs/debug-format.md`); the tools still emit none.
 - **Page size and image base** for the eventual seL4 target — affects section alignment and default base. 64 KB alignment chosen as the safe choice meanwhile.
 - **Relation to the MACRO-32 cross-compiler.** Does it emit this assembler's source text (simple, debuggable) or call `vms-obj` directly (faster, no second parse)? Probably source text first.
 

@@ -6,13 +6,15 @@ the modules. Nothing in it is specific to the instruction set, so nothing
 changed: the modules are object modules (`docs/object-format.md`), and each
 says its own architecture. The code is `vms-obj/src/olb.rs`. `vlib` writes
 libraries, `vlink` searches them (`docs/linker.md`), and `vdump` shows them.
-`vlib /HELP` writes help libraries (HLB) too, from `.HLP` text, as
-`LIBRARY/HELP` does: each topic, a line `1 NAME` and the lines up to the
-next, is a module whose records are those lines, keyed by NAME in capitals.
-On vaxpunk itself the `LBR$` routines (`vms/sysexe/lbrshr/`) read and write
-the same format, and its other library types too: help, text and macro
-libraries have one index, module names, and as many bytes past a module
-header's first 16 as `LHD$B_MHDUSZ` says, which the creator chooses.
+Macro, help and text libraries (MLB, HLB, TLB) are laid out the same, with
+one index, of module names, and lines of text for a module's records:
+`TextLibrary` in the same file. `vlib /HELP` writes help libraries from
+`.HLP` text, as `LIBRARY/HELP` does: each topic, a line `1 NAME` and the
+lines up to the next, is a module whose records are those lines, keyed by
+NAME in capitals. On vaxpunk itself the `LBR$` routines
+(`vms/sysexe/lbrshr/`) read and write the same format, all these types:
+a module header has as many bytes past its first 16 as `LHD$B_MHDUSZ` says,
+which the creator chooses.
 An index descriptor's flags say how its keys are cased: `LBR$OPEN`'s create
 option `CRE$L_IDXOPT` shifted left 3 and or'ed with 5, an object library's
 0x1D, keys compared as they are, and a help library's 0x35, keys upper-cased
@@ -21,8 +23,34 @@ it changed anew from the first block not used (`NEXTVBN`), so its index blocks
 may follow its modules, and blocks no index reaches; readers go by the index
 descriptors' roots and the RFAs, as vlink does, so neither matters.
 
-Status: work order step 9. Only object libraries, and only what the librarian
-and the linker need: no update history, no free block lists, no compression.
+Status: work order step 9. Object, macro, help and text libraries, with only
+what the librarian, the linker and `LBR$` need: no update history, no free
+block lists, no compression. Libraries that `LIBRARY` made on OpenVMS Alpha
+V8.4 read, unless their modules are compressed (`/DATA=REDUCE`), as DEC's
+`STARLET.MLB` and `HELPLIB.HLB` are: those have another `SANEID`,
+319232342, which a reader rejects.
+
+## Text libraries
+
+What `LIBRARY/CREATE` writes on OpenVMS Alpha V8.4 for each kind, and what
+`vms-obj` writes:
+
+| Kind | `LHD$B_TYPE` | Longest key | IDD flags | IDD key length | `MHDUSZ` |
+| --- | --- | --- | --- | --- | --- |
+| macro (MLB) | 2 | 31 | 5 | 32 | 0 |
+| help (HLB) | 3 | 15; vaxpunk 31 | 0x35 | 16; vaxpunk 31 | 0; vaxpunk 33 |
+| text (TLB) | 4 | 39 | 5 | 40 | 0 |
+
+An index descriptor's key length is one more than the longest key (the
+librarian counts the key's length byte), and flags 5 compare keys in
+capitals but keep them as they went in. A macro library's module is a
+macro, from its `.MACRO` line to its `.ENDM`, nested macros included, keyed
+by its name in capitals; a text library's is a text, keyed by its file name.
+The records are the lines as they were, an empty line an empty record.
+
+**Change:** vaxpunk's help libraries keep the layout `vlib` first gave them:
+keys up to 31 characters, the IDD's key length the longest key itself, and
+49-byte module headers with an empty ident. `LBR$` reads either.
 
 ## Sources
 

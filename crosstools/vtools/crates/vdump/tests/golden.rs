@@ -132,6 +132,7 @@ fn hello_exe() {
         fixups: None,
         shareables: Vec::new(),
         vector: None,
+        debug: None,
         sections: vec![
             Section {
                 vaddr: 0x10000,
@@ -189,6 +190,7 @@ fn movable_exe() {
         }),
         shareables: Vec::new(),
         vector: None,
+        debug: None,
     };
     let map = "\
 Program Section Synopsis

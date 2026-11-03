@@ -16,7 +16,7 @@ plan.
 | `crates/vlink` | Links object modules into an executable image ([docs/linker.md](docs/linker.md)) |
 | `crates/vlib` | Puts object modules into object libraries, like LIBRARY/OBJECT, and help text into help libraries, like LIBRARY/HELP |
 | `crates/vdump` | Decoded dump of objects, libraries and images, like ANALYZE/OBJECT and ANALYZE/IMAGE |
-| `crates/vms-obj` | The object, library and image formats ([docs/object-format.md](docs/object-format.md), [docs/library-format.md](docs/library-format.md), [docs/image-format.md](docs/image-format.md)); `no_std` with `alloc` |
+| `crates/vms-obj` | The object, library and image formats ([docs/object-format.md](docs/object-format.md), [docs/library-format.md](docs/library-format.md), [docs/image-format.md](docs/image-format.md), [docs/debug-format.md](docs/debug-format.md)); `no_std` with `alloc` |
 | `crates/vrun` | Runs an image at EL0 in a bare-metal QEMU machine, for quick checks of compiler output without booting vaxpunk ([docs/runner-abi.md](docs/runner-abi.md)) |
 | `crates/vdefs` | Generates BLISS require files (`lib/*.r64`, `*.req`) from the macro libraries: `just defs` |
 

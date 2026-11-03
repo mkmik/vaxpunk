@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::dst;
 use crate::obj::{self, Gsd, Record};
 use crate::record::{Field, Reader, ascic, from_ascic, record};
 use crate::{ARCH_ARM64, Error};
@@ -58,26 +59,46 @@ impl Eihd {
     pub const K_EXE: u32 = 1;
     /// `imgtype` of a shareable image, which others link against.
     pub const K_LIM: u32 = 2;
+    /// `lnkflags`: linked /DEBUG, so the debugger starts with the image.
+    pub const M_LNKDEBUG: u32 = 0x1;
     /// `lnkflags`: the image has no transfer address.
     pub const M_LNKNOTFR: u32 = 0x2;
     /// `lnkflags`: the image may move; its fixup section says how.
     pub const M_PICIMG: u32 = 0x8;
+    /// `lnkflags`: the image has a debug module table.
+    pub const M_DBGDMT: u32 = 0x20;
 }
 
 record! {
-    /// Image symbol table header (`EIHS$`): where the global symbol table
-    /// is, for a shareable image. vaxpunk has no debugger tables.
+    /// Image symbol table header (`EIHS$`): where the debug symbol table
+    /// and its module table are, and the global symbol table of a
+    /// shareable image.
     pub struct Eihs {
         pub majorid: u32,
         pub minorid: u32,
+        /// The first block of the DST, counting from 1, and its size in
+        /// bytes, whole blocks.
         pub dstvbn: u32,
         pub dstsize: u32,
         /// The first block of the GST, counting from 1.
         pub gstvbn: u32,
         /// How many records the GST has.
         pub gstsize: u32,
+        /// The first block of the debug module table, and its size in bytes.
         pub dmtvbn: u32,
         pub dmtbytes: u32,
+    }
+}
+
+record! {
+    /// A debug module table entry (`DMT$`), followed by its psects.
+    pub struct Dmt {
+        /// Where the module's DST records start, from the DST's start.
+        pub modbeg: u32,
+        /// Their size in bytes.
+        pub size: u32,
+        pub psect_count: u16,
+        pub mbz: u16,
     }
 }
 
@@ -260,6 +281,29 @@ pub struct SymbolVector {
     /// Each entry: its name, its address as linked, and whether it is
     /// DATA rather than a PROCEDURE.
     pub entries: Vec<(String, u64, bool)>,
+}
+
+/// An image's debug symbol table: the DST records of its modules' EDBG and
+/// ETBT records (only the ETBT records' if linked /TRACEBACK), one module's
+/// after another, and where each module is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Debug {
+    /// Linked /DEBUG: the debugger starts with the image.
+    pub full: bool,
+    /// The DST records ([`dst`](crate::dst)).
+    pub dst: Vec<u8>,
+    /// The debug module table: a module per entry.
+    pub modules: Vec<DmtModule>,
+}
+
+/// A module of an image's debug module table.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DmtModule {
+    /// Where its DST records are in the image's DST: offset and size.
+    pub modbeg: u32,
+    pub size: u32,
+    /// Its contributions to the image's psects: address and length of each.
+    pub psects: Vec<(u32, u32)>,
 }
 
 /// A relocation record's bitmap skips at most this many slots; past that, a
@@ -547,19 +591,24 @@ pub struct Image {
     pub shareables: Vec<ShlRef>,
     /// For a shareable image, its symbol vector.
     pub vector: Option<SymbolVector>,
+    /// Its debug symbol table, if linked /DEBUG or /TRACEBACK with modules
+    /// that have DST records.
+    pub debug: Option<Debug>,
 }
 
 impl Image {
     /// Serializes the image. The fixup section, if any, goes after the other
     /// sections.
     ///
-    /// Panics if a name is too long, or a section's `data` isn't `size` bytes
-    /// (empty for demand-zero sections).
+    /// Panics if a name is too long, a section's `data` isn't `size` bytes
+    /// (empty for demand-zero sections), or a debug module's records aren't
+    /// in the DST.
     pub fn write(&self) -> Vec<u8> {
         let activoff = Eihd::SIZE.next_multiple_of(8);
         let imgidoff = activoff + Eiha::SIZE;
         let symdbgoff = imgidoff + Eihi::SIZE;
-        let isdoff = symdbgoff + if self.vector.is_some() { Eihs::SIZE } else { 0 };
+        let eihs = self.vector.is_some() || self.debug.is_some();
+        let isdoff = symdbgoff + if eihs { Eihs::SIZE } else { 0 };
 
         let eiaf = self.fixups.is_some() || !self.shareables.is_empty();
         let fixups = eiaf.then(|| {
@@ -599,11 +648,7 @@ impl Image {
             size: hdr_size as u32,
             isdoff: isdoff as u32,
             activoff: activoff as u32,
-            symdbgoff: if self.vector.is_some() {
-                symdbgoff as u32
-            } else {
-                0
-            },
+            symdbgoff: if eihs { symdbgoff as u32 } else { 0 },
             imgidoff: imgidoff as u32,
             patchoff: 0,
             iafva: fixups.as_ref().map_or(0, |s| s.vaddr),
@@ -627,6 +672,11 @@ impl Image {
                 Eihd::M_PICIMG
             } else {
                 0
+            } | match &self.debug {
+                Some(d) if d.full && !d.modules.is_empty() => Eihd::M_LNKDEBUG | Eihd::M_DBGDMT,
+                Some(d) if d.full => Eihd::M_LNKDEBUG,
+                Some(d) if !d.modules.is_empty() => Eihd::M_DBGDMT,
+                _ => 0,
             },
             ident: 0,
             sysver: 0,
@@ -687,22 +737,61 @@ impl Image {
             };
             put(&mut file, at, |v| eisd.write(v));
         }
+        if !eihs {
+            return file;
+        }
+        // The DST, the DMT and the GST follow, each from a block, as the
+        // Alpha linker writes them.
+        let mut eihs = Eihs {
+            majorid: Eihs::K_MAJORID,
+            minorid: Eihs::K_MINORID,
+            dstvbn: 0,
+            dstsize: 0,
+            gstvbn: 0,
+            gstsize: 0,
+            dmtvbn: 0,
+            dmtbytes: 0,
+        };
+        let append = |file: &mut Vec<u8>, data: &[u8]| {
+            let vbn = file.len() / BLOCK + 1;
+            file.extend_from_slice(data);
+            file.resize(file.len().next_multiple_of(BLOCK), 0);
+            vbn as u32
+        };
+        let debug = self.debug.as_ref();
+        if let Some(dst) = debug.map(|d| &d.dst).filter(|d| !d.is_empty()) {
+            eihs.dstvbn = append(&mut file, dst);
+            eihs.dstsize = dst.len().next_multiple_of(BLOCK) as u32;
+        }
+        if let Some(modules) = debug.map(|d| &d.modules).filter(|m| !m.is_empty()) {
+            let mut dmt = Vec::new();
+            for m in modules {
+                let end = m.modbeg.checked_add(m.size);
+                assert!(
+                    end.is_some_and(|end| end as usize <= debug.unwrap().dst.len()),
+                    "debug module outside the DST"
+                );
+                let entry = Dmt {
+                    modbeg: m.modbeg,
+                    size: m.size,
+                    psect_count: m.psects.len().try_into().expect("psects of a module"),
+                    mbz: 0,
+                };
+                entry.write(&mut dmt);
+                for &(start, length) in &m.psects {
+                    start.put(&mut dmt);
+                    length.put(&mut dmt);
+                }
+            }
+            eihs.dmtvbn = append(&mut file, &dmt);
+            eihs.dmtbytes = dmt.len() as u32;
+        }
         if let Some(vector) = &self.vector {
             let gst = gst(&self.name, &self.ident, vector);
-            let eihs = Eihs {
-                majorid: Eihs::K_MAJORID,
-                minorid: Eihs::K_MINORID,
-                dstvbn: 0,
-                dstsize: 0,
-                gstvbn: (file.len() / BLOCK + 1) as u32,
-                gstsize: gst.len() as u32,
-                dmtvbn: 0,
-                dmtbytes: 0,
-            };
-            put(&mut file, symdbgoff, |v| eihs.write(v));
-            file.extend(obj::write(&gst));
-            file.resize(file.len().next_multiple_of(BLOCK), 0);
+            eihs.gstvbn = append(&mut file, &obj::write(&gst));
+            eihs.gstsize = gst.len() as u32;
         }
+        put(&mut file, symdbgoff, |v| eihs.write(v));
         file
     }
 
@@ -785,10 +874,14 @@ impl Image {
                 (f, shl)
             }
         };
+        let eihs = match eihd.symdbgoff {
+            0 => None,
+            off => Some(Eihs::parse(from(hdr, off as usize)?)?),
+        };
         let vector = match eihd.imgtype {
             Eihd::K_EXE => None,
             Eihd::K_LIM => {
-                let eihs = Eihs::parse(from(hdr, eihd.symdbgoff as usize)?)?;
+                let eihs = eihs.as_ref().ok_or(Error::Invalid("GST block number"))?;
                 let block = (eihs.gstvbn as usize)
                     .checked_sub(1)
                     .ok_or(Error::Invalid("GST block number"))?;
@@ -803,6 +896,7 @@ impl Image {
             }
             _ => return Err(Error::Invalid("image type")),
         };
+        let debug = parse_debug(file, eihd.lnkflags, eihs.as_ref())?;
 
         Ok(Image {
             name: from_ascic(&eihi.imgnam),
@@ -813,8 +907,53 @@ impl Image {
             fixups,
             shareables,
             vector,
+            debug,
         })
     }
+}
+
+/// The image's debug symbol table, if it was linked /DEBUG or has DST
+/// records.
+fn parse_debug(file: &[u8], lnkflags: u32, eihs: Option<&Eihs>) -> Result<Option<Debug>, Error> {
+    let full = lnkflags & Eihd::M_LNKDEBUG != 0;
+    let at = |vbn: u32, size: u32, what| {
+        let start = (vbn as usize).checked_sub(1).ok_or(Error::Invalid(what))? * BLOCK;
+        file.get(start..start + size as usize)
+            .ok_or(Error::Truncated)
+    };
+    let (dst, mut dmt) = match eihs {
+        Some(e) if e.dstvbn != 0 => {
+            let dst = at(e.dstvbn, e.dstsize, "DST block number")?;
+            let dmt = match e.dmtvbn {
+                0 => &[][..],
+                vbn => at(vbn, e.dmtbytes, "DMT block number")?,
+            };
+            (&dst[..dst::size(dst)?], Reader(dmt))
+        }
+        _ if full => (&[][..], Reader(&[])),
+        _ => return Ok(None),
+    };
+    let mut modules = Vec::new();
+    while !dmt.0.is_empty() {
+        let entry = Dmt::read(&mut dmt)?;
+        let end = entry.modbeg.checked_add(entry.size);
+        if end.is_none_or(|end| end as usize > dst.len()) {
+            return Err(Error::Invalid("DMT entry"));
+        }
+        let psects = (0..entry.psect_count)
+            .map(|_| Ok((u32::read(&mut dmt)?, u32::read(&mut dmt)?)))
+            .collect::<Result<_, Error>>()?;
+        modules.push(DmtModule {
+            modbeg: entry.modbeg,
+            size: entry.size,
+            psects,
+        });
+    }
+    Ok(Some(Debug {
+        full,
+        dst: dst.to_vec(),
+        modules,
+    }))
 }
 
 /// A shareable image's GST: a module whose global symbol directory has an
@@ -1120,6 +1259,74 @@ mod tests {
             err,
             Err(Error::Invalid("fixup outside the image's contents"))
         );
+    }
+
+    /// The DST and DMT as LINK/DEBUG writes them on OpenVMS Alpha V8.4: the
+    /// DST in whole blocks, then the DMT, which the GST follows.
+    #[test]
+    fn debug_tables() {
+        let dst = crate::dst::write(&[crate::dst::Record::Other {
+            kind: 1,
+            body: vec![7; 0x23b - 4],
+        }]);
+        let debug = Debug {
+            full: true,
+            dst,
+            modules: vec![DmtModule {
+                modbeg: 0,
+                size: 0x23b,
+                psects: vec![(0x20000, 4), (0x30000, 0x94), (0x10000, 0x48)],
+            }],
+        };
+        let mut shr = movable();
+        shr.vector = Some(SymbolVector {
+            addr: 0x10000,
+            entries: vec![("LIB$ONE".into(), 0x10000, false)],
+        });
+        shr.debug = Some(debug.clone());
+        let bytes = shr.write();
+        let word = |at: usize| u32_at(&bytes, at).unwrap();
+        assert_eq!(word(80), Eihd::M_PICIMG | 0x21, "LNKDEBUG, DBGDMT");
+        let eihs = word(20) as usize;
+        let at = |field: usize| (word(eihs + field) as usize - 1) * BLOCK;
+        assert_eq!(word(eihs + 12), 1024, "EIHS$L_DSTSIZE");
+        assert_eq!(at(24), at(8) + 1024, "the DMT after the DST");
+        assert_eq!(at(16), at(24) + BLOCK, "the GST after the DMT");
+        assert_eq!(word(eihs + 28), 36, "EIHS$L_DMTBYTES");
+        let dmt = concat!(
+            "000000003b02000003000000000002000400000000000300",
+            "940000000000010048000000"
+        );
+        let hex: String = bytes[at(24)..at(24) + 36]
+            .iter()
+            .map(|b| alloc::format!("{b:02x}"))
+            .collect();
+        assert_eq!(hex, dmt);
+        assert_eq!(Image::parse(&bytes), Ok(shr.clone()));
+        let mut bad = bytes.clone();
+        bad[at(24) + 4] = 0x3c;
+        assert_eq!(
+            Image::parse(&bad),
+            Err(Error::Invalid("DMT entry")),
+            "past the DST"
+        );
+
+        // /TRACEBACK: no LNKDEBUG. /DEBUG without DST records: no tables.
+        let mut image = sample(2);
+        image.debug = Some(Debug {
+            full: false,
+            ..debug
+        });
+        let bytes = image.write();
+        assert_eq!(u32_at(&bytes, 80).unwrap(), Eihd::M_DBGDMT);
+        assert_eq!(Image::parse(&bytes), Ok(image.clone()));
+        image.debug = Some(Debug {
+            full: true,
+            ..Debug::default()
+        });
+        let bytes = image.write();
+        assert_eq!(u32_at(&bytes, 80).unwrap(), Eihd::M_LNKDEBUG);
+        assert_eq!(Image::parse(&bytes), Ok(image));
     }
 
     #[test]

@@ -642,6 +642,7 @@ mod tests {
             fixups: None,
             shareables: Vec::new(),
             vector: None,
+            debug: None,
         }
     }
 

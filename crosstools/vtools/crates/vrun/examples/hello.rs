@@ -27,6 +27,7 @@ fn main() {
         fixups: None,
         shareables: Vec::new(),
         vector: None,
+        debug: None,
         sections: vec![Section {
             vaddr: 0x10000,
             size: data.len() as u32,

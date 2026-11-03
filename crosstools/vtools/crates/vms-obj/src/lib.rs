@@ -2,8 +2,8 @@
 //! transliterated from the OpenVMS Alpha formats. Works on byte buffers only, so
 //! the OS image loader can reuse it.
 //!
-//! The formats are defined in `docs/object-format.md`, `docs/library-format.md`
-//! and `docs/image-format.md`.
+//! The formats are defined in `docs/object-format.md`, `docs/library-format.md`,
+//! `docs/image-format.md` and `docs/debug-format.md`.
 
 #![no_std]
 
@@ -11,6 +11,7 @@ extern crate alloc;
 
 mod record;
 
+pub mod dst;
 pub mod exe;
 pub mod obj;
 pub mod olb;

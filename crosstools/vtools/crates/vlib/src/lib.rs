@@ -3,7 +3,7 @@
 //! text into help libraries, as `LIBRARY/HELP/REPLACE` does.
 
 use vms_obj::obj::{self, Gsd, Record, sym};
-use vms_obj::olb::{HelpLibrary, Library, MAX_HELP_KEY, MAX_KEY, Module, Topic};
+use vms_obj::olb::{Library, MAX_KEY, Module, TextKind, TextLibrary, TextModule};
 
 const CREATOR: &str = concat!("vlib ", env!("CARGO_PKG_VERSION"));
 
@@ -18,13 +18,8 @@ pub fn new(time: u64) -> Library {
 }
 
 /// An empty help library, created at `time` (VMS format).
-pub fn new_help(time: u64) -> HelpLibrary {
-    HelpLibrary {
-        creator: CREATOR.into(),
-        created: time,
-        updated: time,
-        topics: Vec::new(),
-    }
+pub fn new_help(time: u64) -> TextLibrary {
+    TextLibrary::new(TextKind::Help, CREATOR, time)
 }
 
 /// Puts the topics of help file `file`, its text `text`, into `lib`,
@@ -32,12 +27,12 @@ pub fn new_help(time: u64) -> HelpLibrary {
 /// NAME in capitals; its lines, that one first, go up to the next. The
 /// error, if any, is a VMS message.
 pub fn replace_help(
-    lib: &mut HelpLibrary,
+    lib: &mut TextLibrary,
     file: &str,
     text: &str,
     time: u64,
 ) -> Result<(), String> {
-    let mut topics: Vec<Topic> = Vec::new();
+    let mut topics: Vec<TextModule> = Vec::new();
     for (n, line) in text.lines().enumerate() {
         let bad = |msg: &str| format!("%VLIB-F-BADHLP, {file}:{}: {msg}", n + 1);
         let line = line.trim_end();
@@ -46,10 +41,10 @@ pub fn replace_help(
         }
         if let Some(name) = line.strip_prefix("1 ").or_else(|| line.strip_prefix("1\t")) {
             let name = name.trim().to_ascii_uppercase();
-            if name.is_empty() || name.len() > MAX_HELP_KEY || !name.is_ascii() {
+            if name.is_empty() || name.len() > TextKind::Help.max_key() || !name.is_ascii() {
                 return Err(bad("a topic needs an ASCII name of 1 to 31 characters"));
             }
-            topics.push(Topic {
+            topics.push(TextModule {
                 name,
                 inserted: time,
                 lines: Vec::new(),
@@ -62,8 +57,8 @@ pub fn replace_help(
         }
     }
     for t in topics {
-        lib.topics.retain(|o| o.name != t.name);
-        lib.topics.push(t);
+        lib.modules.retain(|o| o.name != t.name);
+        lib.modules.push(t);
     }
     Ok(())
 }

@@ -282,6 +282,7 @@ mod tests {
             fixups: None,
             shareables: Vec::new(),
             vector: None,
+            debug: None,
             sections: vec![
                 Section {
                     vaddr: 0x10000,
