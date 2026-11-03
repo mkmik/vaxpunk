@@ -1176,16 +1176,18 @@ static uint32_t *lword(seL4_Word va)
  * executive has locked for the I/O (MMG$IOLOCK). The device reads or
  * writes the pages itself, and its interrupt ends the request
  * (disk_poll). A last block in part is read only as far as len, and
- * written padded with zeros. Returns 0 once the request is the device's,
- * else its status, done or refused at once: the device's, if it was done
- * within DISK_SPIN looks, with no interrupt to come; NORMAL for no bytes,
+ * written padded with zeros. how is 1 to write, plus 2 not to look.
+ * Returns 0 once the request is the device's, else its status, done or
+ * refused at once: the device's, if it was done within DISK_SPIN looks,
+ * which 2 skips, with no interrupt to come; NORMAL for no bytes,
  * NOSUCHDEV without the disk, ILLBLKNUM past its end, BADPARAM for an
  * offset past a page, a list the PAL can't read or a PFN past the last,
  * or a unit that has a request already.
  */
 static seL4_Word disk_start(seL4_Word list, seL4_Word len, seL4_Word lbn, seL4_Word u,
-			    seL4_Word off, int write)
+			    seL4_Word off, int how)
 {
+	int write = how & 1;
 	if (u >= DISK_UNITS || !disks[u].vio)
 		return SS_NOSUCHDEV;
 	struct disk *d = &disks[u];
@@ -1229,7 +1231,7 @@ static seL4_Word disk_start(seL4_Word list, seL4_Word len, seL4_Word lbn, seL4_W
 	vq->status = 0xff;
 	d->idx = vio_avail(d);
 	d->busy = 1;
-	for (unsigned spin = 0; spin < DISK_SPIN; spin++) /* QEMU's often done by now */
+	for (unsigned spin = 0; !(how & 2) && spin < DISK_SPIN; spin++) /* QEMU's often done by now */
 		if (*(volatile uint16_t *)&vq->used.idx == d->idx) {
 			__asm__ volatile("dmb sy" ::: "memory");
 			d->busy = 0;
@@ -2279,7 +2281,7 @@ static int serve_one(seL4_MessageInfo_t msg)
 				      mr[seL4_UnknownSyscall_X2] & 0xffffffff,
 				      mr[seL4_UnknownSyscall_X3] & 0xffffffff,
 				      mr[seL4_UnknownSyscall_X4] & 0xffffffff,
-				      mr[seL4_UnknownSyscall_X5] & 1));
+				      mr[seL4_UnknownSyscall_X5] & 3));
 	case DISKDONE: /* unit a0's request's status, once its interrupt ended it, or 0 */
 		if (a0 >= DISK_UNITS)
 			return ret(0);

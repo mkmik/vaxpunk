@@ -219,14 +219,16 @@ FIL$LOCK::
 ; I/O boosts would otherwise take it back each time before the others
 ; ran, and the next holder waits for no one computing at its priority.
 ; Those ahead of it that $SUSPND suspended are suspended now, and ask
-; again once resumed. Puts back the IPL FIL$LOCK's caller had. Keeps
-; every register.
+; again once resumed. An asynchronous RMS service that gives it back runs
+; no more as one (RMS$GL_THREAD), before another process can take it.
+; Puts back the IPL FIL$LOCK's caller had. Keeps every register.
 FIL$UNLOCK::
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R4>
         MOVL    F11$GL_LOCKIPL, R1
         SETIPL  #IPL$_SYNCH
         CLRL    OWNER
+        CLRL    RMS$GL_THREAD
 10$:    MOVAQ   LOCKWQ, R0
         MOVL    (R0), R4
         CMPL    R4, R0
@@ -247,7 +249,8 @@ FIL$UNLOCK::
 ; blocks from F11$GL_VCB's disk, with an IO$_READLBLK in F11$AB_IRP to its
 ; driver, the buffer's pages locked, and waits for it while other
 ; processes run (FIL$IOWAIT), unless it ended at once; an asynchronous RMS
-; service, on a stack of its own, stalls there instead (RMS$STALL). Above
+; service, on a stack of its own, stalls there instead (RMS$STALL), its
+; request started without the PAL's look (IRP$M_NOLOOK). Above
 ; IPL$_ASTDEL, at boot, the PAL reads them at once (DISKIO). R0 = SS$_NORMAL, or the device's error. Holding
 ; FIL$LOCK. Uses R1.
 FIL$READLBLK::
@@ -274,7 +277,10 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
         MOVL    R5, IRP$L_UCB(R3)
         CLRQ    IRP$L_IOST1(R3)
         CLRL    IRP$L_STS(R3)
-        MFPR    #PR$_IPL, R0
+        TSTL    RMS$GL_THREAD
+        BEQL    5$
+        MOVL    #IRP$M_NOLOOK, IRP$L_STS(R3)    ; it stalls instead
+5$:     MFPR    #PR$_IPL, R0
         CMPL    R0, #IPL$_ASTDEL
         BGTR    50$                     ; at boot: polled
         PUSHL   R0                      ; the IPL to go back to
@@ -289,9 +295,11 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
         MOVAB   F11$AB_IRP, R3
         TSTL    IRP$L_IOST1(R3)
         BNEQ    30$                     ; done at once
+        MOVL    SCH$GL_CURPCB, R4
+        TSTL    RMS$GL_THREAD
+        BNEQ    20$                     ; it stalls, as VMS's RMS after its $QIO
         MTPR    (SP), #PR$_IPL          ; one done meanwhile ends now, unwaited for, as after VMS's $QIO
         SETIPL  #IPL$_SYNCH
-        MOVL    SCH$GL_CURPCB, R4
 20$:    TSTL    IRP$L_IOST1(R3)
         BNEQ    30$
         TSTL    RMS$GL_THREAD
@@ -432,7 +440,8 @@ DK$FDT::
 ; R5 = the disk's UCB, whose device it now has. Starts the IRP's read or
 ; write of IRP$L_BCNT bytes at IRP$L_BUFADR, from or to LBN IRP$L_MEDIA:
 ; on one of the PAL's disks with DISKSTART, of the pages EXE$READLOCK or
-; EXE$WRITELOCK locked, which its interrupt ends (DK$INTERRUPT); on the
+; EXE$WRITELOCK locked, which its interrupt ends (DK$INTERRUPT), the PAL
+; not looking whether it is done at once for IRP$M_NOLOOK; on the
 ; ramdisk at once (MD$IO). One done at once, or that can't start, is
 ; completed now (DKDONE): a write to a disk that is read only with
 ; SS$_WRITLCK. IPL$_SYNCH. Uses R0-R3.
@@ -450,7 +459,9 @@ DK$STARTIO::
         MOVL    #SS$_WRITLCK, R0
         BBC     #VCB$V_WRITE, VCB$L_STATUS(R4), 80$
 10$:    BBS     #VCB$V_RAMDISK, VCB$L_STATUS(R4), 50$
-        PUSHL   R3
+        BBC     #IRP$V_NOLOOK, IRP$L_STS(R3), 20$
+        BISL2   #2, R5                  ; not to look
+20$:    PUSHL   R3
         MOVAB   IRP$K_LENGTH(R3), R0    ; its pages' PFNs
         MOVL    IRP$L_BCNT(R3), R1
         MOVL    IRP$L_MEDIA(R3), R2

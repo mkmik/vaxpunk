@@ -58,8 +58,11 @@ is in the middle of using them.
    didn't end at once stalls it (`RMS$STALL`) instead of waiting
    (`FIL$IOWAIT`): it switches back, and the service returns
    `RMS$_PENDING`, `RAB$L_STS` 0, at the IPL its caller had. Its process
-   keeps `FIL$LOCK`. A second service on the stream gets `RMS$_RSA`, as on
-   VMS.
+   keeps `FIL$LOCK`. Its request has `IRP$M_NOLOOK`, which `DK$STARTIO`
+   passes to `DISKSTART` as a5's 2: the PAL hands the device the request
+   without looking a moment whether it is done (ADR-0047 decision 4), so
+   the program, not a spin in the PAL, has the CPU meanwhile. A second
+   service on the stream gets `RMS$_RSA`, as on VMS.
 3. **A kernel mode AST goes on with it.** When `F11$AB_IRP` ends,
    `RMS$IODONE` queues the process the ASB's own ACB, a kernel mode AST,
    `RMS$STALLAST`, with a boost, `PRI$_IOCOM`; the AST switches to the
@@ -100,7 +103,10 @@ is in the middle of using them.
   request ends and the AST runs; a process `$SUSPND` suspended then holds
   it until `$RESUME`.
 - An asynchronous service takes 16 KB of pool while it runs.
-- Going on after a stall costs two `REI`s, for the previous mode.
+- Going on after a stall costs two `REI`s, for the previous mode, and an
+  interrupt and a kernel mode AST even when QEMU finished at once, as it
+  usually does: an asynchronous read of a few blocks is slower than a
+  synchronous one.
 - The RAB and the buffers aren't probed again when the service goes on;
   VMS's RMS probes them.
 - A stream that locks records runs synchronously.

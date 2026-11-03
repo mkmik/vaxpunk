@@ -166,7 +166,7 @@ SWFRAME = 112                           ; SWITCH's frame: x18-x30
 PAL_REI = ^X92                          ; the PAL's REI, which vmacro's REI calls
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
-RMS$GL_THREAD::                         ; the ASB of the asynchronous service running on its own stack, or 0
+RMS$GL_THREAD::                         ; the ASB of the asynchronous service running on its own stack, holding FIL$LOCK, or 0
         .LONG   0
 STALL:  .LONG   0                       ; the ASB of the one stalled at a disk wait, its process holding FIL$LOCK, or 0
 ; A specification split into its five parts, device, directory, name,
@@ -3210,9 +3210,8 @@ THREAD:
         .EXCEPTION_ENTRY
         MOVL    R1, R2
         CALLG   ASB$L_ARGS(R2), @ASB$L_ROUTINE(R2)
-        MOVL    R2, R1
+        MOVL    R2, R1                  ; FIL$UNLOCK cleared RMS$GL_THREAD
         CLRL    ASB$L_ROUTINE(R1)
-        CLRL    RMS$GL_THREAD
         BSBW    SWITCH
         HALT                            ; never comes back
 

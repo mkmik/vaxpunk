@@ -569,7 +569,7 @@ unused.
 | 0x49 | `GETENTROPY` | vaxpunk | a0 = buffer, a1 = byte count | v0 = status | fills the buffer, at most 256 bytes, which kernel mode must be able to write, from the entropy device |
 | 0x4A | `GETMAXBLOCK` | vaxpunk | a0 = unit | v0 = blocks | a disk's size in blocks, the device's capacity, or 0 without the disk |
 | 0x4B | `RDPTE` | vaxpunk | a0 = address | v0 = PTE | the PTE of the address's page as `WRPTE` left it, the current process's in P0 and P1, or 0 if there is none |
-| 0x4C | `DISKSTART` | vaxpunk | a0 = PFN list, a1 = byte count, a2 = LBN, a3 = unit, a4 = offset, a5 = 1 to write | v0 = 0, or status | hands a disk a read or write of the pages whose PFNs the list holds and returns: 0 once the device has it |
+| 0x4C | `DISKSTART` | vaxpunk | a0 = PFN list, a1 = byte count, a2 = LBN, a3 = unit, a4 = offset, a5 = 1 to write, + 2 not to look | v0 = 0, or status | hands a disk a read or write of the pages whose PFNs the list holds and returns: 0 once the device has it |
 | 0x4D | `DISKDONE` | vaxpunk | a0 = unit | v0 = status, or 0 | the status of the disk's request from `DISKSTART` once its interrupt ended it, which it takes, else 0 |
 | 0x82 | `CHME` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to executive mode |
 | 0x83 | `CHMK` | Alpha | the code in x7's bits 31:16 | | delivers through the SCB, to kernel mode |
@@ -635,7 +635,8 @@ as far as a1 and written padded with zeros. It returns 0 once the device
 has the request; else the request is done, or refused, at once, and v0
 is its status: the device's, if it finished the request while the PAL
 looked a moment longer, as QEMU's often does, and then no interrupt
-ends it; `SS$_NORMAL` for no bytes, `SS$_NOSUCHDEV` without the
+ends it, unless a5 has 2, which an asynchronous RMS service's request
+has, whose process goes on meanwhile; `SS$_NORMAL` for no bytes, `SS$_NOSUCHDEV` without the
 disk, `SS$_ILLBLKNUM` past its end, and `SS$_BADPARAM` for more than
 65,535 bytes, an offset past a page, a list the PAL can't read, a PFN
 past the executive's last, or a disk that has a request already. Its
