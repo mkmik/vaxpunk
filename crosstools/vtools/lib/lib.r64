@@ -45,7 +45,7 @@ LITERAL
     PAL$_GETENTROPY = 73,  ! R0 = buffer, R1 = byte count, at most 256; R0 = status
     PAL$_GETMAXBLOCK = 74,  ! R0 = unit; R0 = the disk's blocks, 0 without it
     PAL$_RDPTE = 75,  ! R0 = address; R0 = its page's PTE, as WRPTE left it, or 0
-    PAL$_DISKSTART = 76,  ! R0 = PFN list, R1 = byte count, R2 = LBN, R3 = unit, R4 = offset, R5 = 1 to write; R0 = 0 or a status
+    PAL$_DISKSTART = 76,  ! R0 = PFN list, R1 = byte count, R2 = LBN, R3 = unit, R4 = offset, R5 = 1 to write, + 2 not to look; R0 = 0 or a status
     PAL$_DISKDONE = 77,  ! R0 = unit; R0 = its request's status once done, else 0
     PAL$_RD_PS = 145;  ! R0 = the PSL: the modes and IPL
 
@@ -538,6 +538,8 @@ LITERAL
     IRP$V_STARTED = 1,  ! the terminal has written its prompt
     IRP$V_LOCKED = 2,  ! vaxpunk: its buffer's pages are locked (EXE$READLOCK), their PFNs past the packet, until IOC$REQCOM
     IRP$M_LOCKED = 4,
+    IRP$V_NOLOOK = 3,  ! vaxpunk: the device's interrupt ends it, without the PAL's look at it in DISKSTART: an asynchronous RMS service's
+    IRP$M_NOLOOK = 8,
     IRP$K_MAXPFN = 17,  ! vaxpunk: PFNs past a direct I/O's packet, at most: 64 KB's pages, where VMS's IRP$L_SVAPTE points at their PTEs
     DYN$C_IRP = 10;  ! IRP$B_TYPE
 MACRO
