@@ -728,6 +728,10 @@ static void disk_init(seL4_BootInfo *bi)
 enum { SS_NORMAL = 1, SS_ACCVIO = 12, SS_BADPARAM = 20, SS_DRVERR = 140, SS_ILLBLKNUM = 220,
        SS_NOSUCHDEV = 2312 };
 
+/* How long DISKSTART looks for a request the device ends at once, in reads
+ * of the used ring: some tens of microseconds. */
+enum { DISK_SPIN = 20000 };
+
 static void disk_interrupt(void); /* *Interrupts and exceptions* */
 
 /* Ends d's request from DISKSTART if the device is done with it: keeps its
@@ -1173,7 +1177,8 @@ static uint32_t *lword(seL4_Word va)
  * writes the pages itself, and its interrupt ends the request
  * (disk_poll). A last block in part is read only as far as len, and
  * written padded with zeros. Returns 0 once the request is the device's,
- * else its status, done or refused at once: NORMAL for no bytes,
+ * else its status, done or refused at once: the device's, if it was done
+ * within DISK_SPIN looks, with no interrupt to come; NORMAL for no bytes,
  * NOSUCHDEV without the disk, ILLBLKNUM past its end, BADPARAM for an
  * offset past a page, a list the PAL can't read or a PFN past the last,
  * or a unit that has a request already.
@@ -1224,6 +1229,13 @@ static seL4_Word disk_start(seL4_Word list, seL4_Word len, seL4_Word lbn, seL4_W
 	vq->status = 0xff;
 	d->idx = vio_avail(d);
 	d->busy = 1;
+	for (unsigned spin = 0; spin < DISK_SPIN; spin++) /* QEMU's often done by now */
+		if (*(volatile uint16_t *)&vq->used.idx == d->idx) {
+			__asm__ volatile("dmb sy" ::: "memory");
+			d->busy = 0;
+			d->vio[VIO_INTACK / 4] = d->vio[VIO_INTSTATUS / 4];
+			return vq->status ? SS_DRVERR : SS_NORMAL;
+		}
 	return 0;
 }
 

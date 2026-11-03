@@ -797,7 +797,7 @@ IOC$INITIATE::
 ; them (MMG$IOLOCK), their PFNs past the packet, IRP$L_BOFF the offset in
 ; the first, until IOC$REQCOM unlocks them. R0 = SS$_NORMAL, or, with
 ; none locked, SS$_ACCVIO, or SS$_EXQUOTA for a page locked too many
-; times. IPL$_SYNCH or below. Uses R0-R2.
+; times. IPL$_SYNCH. Uses R0-R2.
 ; vaxpunk: it returns the status, where VMS's ends the request.
 EXE$READLOCK::
         .JSB_ENTRY  SCRATCH=<R2>
@@ -808,8 +808,8 @@ EXE$READLOCK::
 ; at IRP$L_BUFADR, with IRP$K_MAXPFN longwords past it. Checks that the
 ; caller's mode, IRP$B_PMOD, may read each page of the buffer, and locks
 ; them as EXE$READLOCK does. R0 = SS$_NORMAL, or, with none locked,
-; SS$_ACCVIO, or SS$_EXQUOTA for a page locked too many times. IPL$_SYNCH
-; or below. Uses R0-R2.
+; SS$_ACCVIO, or SS$_EXQUOTA for a page locked too many times. IPL$_SYNCH.
+; Uses R0-R2.
 ; vaxpunk: it returns the status, where VMS's ends the request.
 EXE$WRITELOCK::
         .JSB_ENTRY  SCRATCH=<R2>

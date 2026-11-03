@@ -332,14 +332,13 @@ FREEPFN:
 ; list, for the device. R0 = SS$_NORMAL and R1 = the pages locked, or,
 ; with none locked, SS$_ACCVIO if a page isn't there or the mode may not
 ; read (write) it, or SS$_EXQUOTA if a page has as many locks as its
-; count holds, 32,767. Uses R0-R3.
+; count holds, 32,767. IPL$_SYNCH. Uses R0-R3.
 ; vaxpunk: it lists the PFNs, where VMS's returns the address of the
 ; first page's PTE, SVAPTE, and it faults no page in, as there is no
 ; paging.
 MMG$IOLOCK::
         .JSB_ENTRY  OUTPUT=<R1>, SCRATCH=<R2, R3>
         PUSHR   #^M<R4, R5, R6, R7>
-        DSBINT  #IPL$_SYNCH
         CLRL    R4                      ; the pages: none for no bytes
         TSTL    R1
         BEQL    5$
@@ -384,17 +383,16 @@ MMG$IOLOCK::
         BRB     90$
 80$:    MOVL    R4, R1
         MOVL    #SS$_NORMAL, R0
-90$:    ENBINT
-        POPR    #^M<R4, R5, R6, R7>
+90$:    POPR    #^M<R4, R5, R6, R7>
         RSB
 
 ; MMG$UNLOCK: R0 = the PFNs of pages MMG$IOLOCK locked, a longword each,
 ; R1 = how many. Gives back a lock on each; a page deleted while it was
-; locked is freed with its last lock, its delete contingency. Uses R0-R1.
+; locked is freed with its last lock, its delete contingency. IPL$_SYNCH.
+; Uses R0-R1.
 MMG$UNLOCK::
         .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4>
-        DSBINT  #IPL$_SYNCH
         MOVL    R0, R2
         MOVL    R1, R3
         BEQL    20$
@@ -407,8 +405,7 @@ MMG$UNLOCK::
         CLRW    (R4)[R0]
         BSBW    MMG$DEALLOCPFN
 15$:    SOBGTR  R3, 10$
-20$:    ENBINT
-        POPR    #^M<R2, R3, R4>
+20$:    POPR    #^M<R2, R3, R4>
         RSB
 
 ; ZEROPFN: R0 = a PFN no PTE maps. Zeroes its page, through ZEROVA.

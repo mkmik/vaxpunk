@@ -85,7 +85,9 @@ wait, in `RWAST`, until the requests the device has are done.
    list, the byte count, the LBN, the unit, the offset and read or
    write, gives the device a descriptor per page, the frame's physical
    address from seL4, and returns 0; or a status at once, for a bad
-   argument or no bytes. A last block in part goes through a block of
+   argument or no bytes, or the device's if it was done within a short
+   look at the used ring, as QEMU's often is, which saves the interrupt
+   and a process switch. A last block in part goes through a block of
    padding in the PAL's queue page. Each disk's queue has 32
    descriptors, the entropy device's still 4.
 5. **The device's interrupt is the executive's at IPL 21.** The PAL

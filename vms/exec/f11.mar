@@ -270,24 +270,27 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
         MFPR    #PR$_IPL, R0
         CMPL    R0, #IPL$_ASTDEL
         BGTR    50$                     ; at boot: polled
-        CMPL    16(SP), #IO$_READLBLK
+        PUSHL   R0                      ; the IPL to go back to
+        SETIPL  #IPL$_SYNCH
+        CMPL    20(SP), #IO$_READLBLK
         BNEQ    10$
         BSBW    EXE$READLOCK
         BRB     15$
 10$:    BSBW    EXE$WRITELOCK
-15$:    BLBC    R0, 80$
-        DSBINT  #IPL$_SYNCH
+15$:    BLBC    R0, 40$
         BSBW    EXE$INSIOQ
-        ENBINT                          ; one done already ends now, unwaited for, as after VMS's $QIO
-        DSBINT  #IPL$_SYNCH
-        MOVL    SCH$GL_CURPCB, R4
         MOVAB   F11$AB_IRP, R3
+        TSTL    IRP$L_IOST1(R3)
+        BNEQ    30$                     ; done at once
+        MTPR    (SP), #PR$_IPL          ; one done meanwhile ends now, unwaited for, as after VMS's $QIO
+        SETIPL  #IPL$_SYNCH
+        MOVL    SCH$GL_CURPCB, R4
 20$:    TSTL    IRP$L_IOST1(R3)
         BNEQ    30$
         BSBW    IOWAIT
         BRB     20$
-30$:    ENBINT
-        MOVZWL  IRP$L_IOST1(R3), R0
+30$:    MOVZWL  IRP$L_IOST1(R3), R0
+40$:    ENBINT
         BRB     80$
 50$:    CLRL    R0                      ; 0: a read
         CMPL    16(SP), #IO$_READLBLK

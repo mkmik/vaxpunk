@@ -633,7 +633,9 @@ executive locks the pages first (`MMG$IOLOCK`), so the PFNs stay its own
 while the device reads or writes them. A last block in part is read only
 as far as a1 and written padded with zeros. It returns 0 once the device
 has the request; else the request is done, or refused, at once, and v0
-is its status: `SS$_NORMAL` for no bytes, `SS$_NOSUCHDEV` without the
+is its status: the device's, if it finished the request while the PAL
+looked a moment longer, as QEMU's often does, and then no interrupt
+ends it; `SS$_NORMAL` for no bytes, `SS$_NOSUCHDEV` without the
 disk, `SS$_ILLBLKNUM` past its end, and `SS$_BADPARAM` for more than
 65,535 bytes, an offset past a page, a list the PAL can't read, a PFN
 past the executive's last, or a disk that has a request already. Its
