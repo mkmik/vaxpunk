@@ -1,8 +1,9 @@
 //! Object libraries (OLB), laid out as OpenVMS Alpha object libraries, library
 //! format 3.0: a header block, two index B-trees (module names and global
 //! symbols), then each module's records in a chain of data blocks. See
-//! `docs/library-format.md`. Help libraries (HLB) are the same with one
-//! index, of topics, and lines of text for records.
+//! `docs/library-format.md`. Macro, help and text libraries (MLB, HLB,
+//! TLB) are the same with one index, of module names, and lines of text
+//! for records.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
@@ -287,7 +288,7 @@ impl Module {
             rest = &rest[size..];
         }
         let mhd = header(1 + self.symbols.len() as u32, self.inserted, &self.ident);
-        write_data(&mhd, &records, vbn, out);
+        write_data(&mhd, Mhd::SIZE, &records, vbn, out);
     }
 }
 
@@ -305,9 +306,10 @@ fn header(refcnt: u32, datim: u64, ident: &str) -> Mhd {
 }
 
 /// Appends a module's data blocks, the first being block `vbn`: its header,
-/// `records`, then the end marker. Each is a record: a length word, the
-/// bytes, and a pad byte if the length is odd.
-fn write_data(mhd: &Mhd, records: &[&[u8]], vbn: usize, out: &mut Vec<u8>) {
+/// the first `mhd_size` bytes of `mhd`, `records`, then the end marker. Each
+/// is a record: a length word, the bytes, and a pad byte if the length is
+/// odd.
+fn write_data(mhd: &Mhd, mhd_size: usize, records: &[&[u8]], vbn: usize, out: &mut Vec<u8>) {
     let mut stream = Vec::new();
     let mut starts = Vec::new();
     let mut record = |bytes: &[u8]| {
@@ -318,7 +320,7 @@ fn write_data(mhd: &Mhd, records: &[&[u8]], vbn: usize, out: &mut Vec<u8>) {
     };
     let mut header = Vec::new();
     mhd.write(&mut header);
-    record(&header);
+    record(&header[..mhd_size]);
     for r in records {
         record(r);
     }
@@ -337,23 +339,24 @@ fn write_data(mhd: &Mhd, records: &[&[u8]], vbn: usize, out: &mut Vec<u8>) {
     }
 }
 
-/// A help library (HLB): one index, of topics, each a module whose records
-/// are the lines of a `.HLP` file's topic, its `1 NAME` line first, as
-/// `LIBRARY/HELP` makes it. `LBR$OUTPUT_HELP` reads it.
+/// A library of text modules: macros, help topics or text. It has one
+/// index, of module names, and each module's records are its lines.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HelpLibrary {
+pub struct TextLibrary {
+    pub kind: TextKind,
     /// The librarian that created it, up to 31 characters.
     pub creator: String,
     /// Creation and last update times, in VMS format.
     pub created: u64,
     pub updated: u64,
-    pub topics: Vec<Topic>,
+    pub modules: Vec<TextModule>,
 }
 
-/// A help library's topic.
+/// A module of a text library.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Topic {
-    /// Its key: the name on its `1` line, in capitals.
+pub struct TextModule {
+    /// Its key, in capitals: the macro's name, the name on the topic's `1`
+    /// line, or the text's name.
     pub name: String,
     /// Insertion time, in VMS format.
     pub inserted: u64,
@@ -361,55 +364,121 @@ pub struct Topic {
     pub lines: Vec<String>,
 }
 
-/// `LHD$B_TYPE` of a help library (`LBR$C_TYP_HLP`).
-pub const TYP_HLP: u8 = 3;
-/// The longest topic name.
-pub const MAX_HELP_KEY: usize = 31;
-/// A help library's index: ASCII keys of variable length, in capitals and
-/// compared so (`CRE$C_HLPCASING`, 3 bits up).
-const HLP_IDD_FLAGS: u16 = 1 | 4 | (6 << 3);
+/// What a text library holds (`LHD$B_TYPE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextKind {
+    /// A macro library (MLB): a module per macro, from its `.MACRO` line to
+    /// its `.ENDM`, as `LIBRARY/MACRO` makes it, for MACRO's `.LIBRARY`.
+    Macro,
+    /// A help library (HLB): a module per topic of a `.HLP` file, from its
+    /// `1 NAME` line to the next, as `LIBRARY/HELP` makes it, for
+    /// `LBR$OUTPUT_HELP`.
+    Help,
+    /// A text library (TLB): a module per text, as `LIBRARY/TEXT` makes it.
+    Text,
+}
 
-impl HelpLibrary {
-    /// Serializes the library, with the topics in name order.
+impl TextKind {
+    /// `LBR$C_TYP_MLB`, `HLP` and `TXT`.
+    pub const fn lbr_type(self) -> u8 {
+        match self {
+            TextKind::Macro => 2,
+            TextKind::Help => 3,
+            TextKind::Text => 4,
+        }
+    }
+
+    /// The longest module name: `LIBRARY`'s default key size.
+    pub const fn max_key(self) -> usize {
+        match self {
+            TextKind::Macro | TextKind::Help => 31,
+            TextKind::Text => 39,
+        }
+    }
+
+    /// The index descriptor's flags and key length. On VMS the key length
+    /// is one more than the longest key, and a macro or text library's
+    /// keys are upper-cased when compared (`CRE$C_MACTXTCAS`, 0). vaxpunk's
+    /// help libraries say the longest key itself, and their keys are
+    /// upper-cased as they go in (`CRE$C_HLPCASING`, 6).
+    const fn idd(self) -> (u16, u16) {
+        match self {
+            TextKind::Help => (1 | 4 | (6 << 3), 31),
+            _ => (1 | 4, self.max_key() as u16 + 1),
+        }
+    }
+
+    /// `LHD$B_MHDUSZ`: module headers past their first 16 bytes. VMS's are
+    /// 0; vaxpunk's help libraries have the 33 bytes of an object
+    /// library's, for an ident they leave empty.
+    const fn mhdusz(self) -> usize {
+        match self {
+            TextKind::Help => Mhd::SIZE - 16,
+            _ => 0,
+        }
+    }
+
+    fn from_lbr_type(t: u8) -> Option<TextKind> {
+        [TextKind::Macro, TextKind::Help, TextKind::Text]
+            .into_iter()
+            .find(|k| k.lbr_type() == t)
+    }
+}
+
+impl TextLibrary {
+    /// An empty library of `kind`.
+    pub fn new(kind: TextKind, creator: &str, time: u64) -> TextLibrary {
+        TextLibrary {
+            kind,
+            creator: creator.into(),
+            created: time,
+            updated: time,
+            modules: Vec::new(),
+        }
+    }
+
+    /// Serializes the library, with the modules in name order.
     ///
-    /// Panics if a name is longer than [`MAX_HELP_KEY`], not ASCII
-    /// capitals, or appears twice, or a line is longer than 255 bytes.
+    /// Panics if a name is longer than the kind's
+    /// [`max_key`](TextKind::max_key), not ASCII capitals, or appears
+    /// twice, or a line is longer than 255 bytes.
     pub fn write(&self) -> Vec<u8> {
-        let mut topics: Vec<&Topic> = self.topics.iter().collect();
-        topics.sort_by(|a, b| a.name.cmp(&b.name));
-        let names: Vec<(&str, usize)> = topics
+        let mut modules: Vec<&TextModule> = self.modules.iter().collect();
+        modules.sort_by(|a, b| a.name.cmp(&b.name));
+        let names: Vec<(&str, usize)> = modules
             .iter()
             .enumerate()
-            .map(|(i, t)| (t.name.as_str(), i))
+            .map(|(i, m)| (m.name.as_str(), i))
             .collect();
         if let Some(w) = names.windows(2).find(|w| w[0].0 == w[1].0) {
             panic!("{} is in the library twice", w[0].0);
         }
-        for t in &topics {
+        for m in &modules {
             assert!(
-                t.name.len() <= MAX_HELP_KEY && t.name == t.name.to_ascii_uppercase(),
-                "bad topic name {}",
-                t.name
+                m.name.len() <= self.kind.max_key() && m.name == m.name.to_ascii_uppercase(),
+                "bad module name {}",
+                m.name
             );
-            if let Some(l) = t.lines.iter().find(|l| l.len() > 255) {
-                panic!("topic {}: line too long: {l}", t.name);
+            if let Some(l) = m.lines.iter().find(|l| l.len() > 255) {
+                panic!("module {}: line too long: {l}", m.name);
             }
         }
-        let nowhere = [(0, 0)].repeat(topics.len());
+        let nowhere = [(0, 0)].repeat(modules.len());
         let name_blocks = index(&names, &nowhere, 0).0.len() / BLOCK;
         let first_data = 2 + name_blocks;
         let mut data = Vec::new();
         let mut rfas = Vec::new();
-        for t in &topics {
+        for m in &modules {
             let vbn = first_data + data.len() / BLOCK;
             rfas.push((vbn as u32, DATA_DATA as u16));
-            let lines: Vec<&[u8]> = t.lines.iter().map(|l| l.as_bytes()).collect();
-            write_data(&header(1, t.inserted, ""), &lines, vbn, &mut data);
+            let lines: Vec<&[u8]> = m.lines.iter().map(|l| l.as_bytes()).collect();
+            let mhd = header(1, m.inserted, "");
+            write_data(&mhd, 16 + self.kind.mhdusz(), &lines, vbn, &mut data);
         }
         let (name_index, root) = index(&names, &rfas, 2);
         let next = (first_data + data.len() / BLOCK) as u32;
         let lhd = Lhd {
-            kind: TYP_HLP,
+            kind: self.kind.lbr_type(),
             nindex: 1,
             fill_1: [0; 2],
             sanity: SANEID3,
@@ -418,7 +487,7 @@ impl HelpLibrary {
             lbrver: ascic(&self.creator),
             credat: self.created,
             updtim: self.updated,
-            mhdusz: (Mhd::SIZE - 16) as u8,
+            mhdusz: self.kind.mhdusz() as u8,
             fill_2: [0; 15],
             nextrfa_vbn: next,
             nextrfa_offset: 0,
@@ -428,16 +497,17 @@ impl HelpLibrary {
             hiprusd: (first_data - 1) as u32,
             idxblks: name_blocks as u32,
             idxcnt: names.len() as u32,
-            modcnt: topics.len() as u32,
+            modcnt: modules.len() as u32,
             fill_4: [0; 2],
-            modhdrs: topics.len() as u32,
+            modhdrs: modules.len() as u32,
             fill_5: [0; 76],
         };
         let mut file = Vec::new();
         lhd.write(&mut file);
+        let (flags, keylen) = self.kind.idd();
         let idd = Idd {
-            flags: HLP_IDD_FLAGS,
-            keylen: MAX_HELP_KEY as u16,
+            flags,
+            keylen,
             vbn: root,
         };
         idd.write(&mut file);
@@ -447,35 +517,37 @@ impl HelpLibrary {
         file
     }
 
-    /// Parses a help library. Topics come in name order.
-    pub fn parse(file: &[u8]) -> Result<HelpLibrary, Error> {
+    /// Parses a macro, help or text library. Modules come in name order.
+    pub fn parse(file: &[u8]) -> Result<TextLibrary, Error> {
         let lhd = Lhd::parse(file)?;
-        if lhd.kind != TYP_HLP || lhd.nindex != 1 || lhd.sanity != SANEID3 {
+        let kind = TextKind::from_lbr_type(lhd.kind);
+        let Some(kind) = kind.filter(|_| lhd.nindex == 1 && lhd.sanity == SANEID3) else {
             return Err(Error::Invalid("library type"));
-        }
+        };
         if lhd.majorid != MAJORID {
             return Err(Error::Invalid("library format"));
         }
         let mut r = Reader(file.get(Lhd::SIZE..).ok_or(Error::Truncated)?);
         let idd = Idd::read(&mut r)?;
-        let mut topics = Vec::new();
+        let mut modules = Vec::new();
         for (name, rfa) in entries(file, idd.vbn, &mut BTreeSet::new())? {
             let (mhd, records) = module_records(file, rfa, 16 + usize::from(lhd.mhdusz))?;
             let lines = records
                 .into_iter()
-                .map(|r| String::from_utf8(r).map_err(|_| Error::Invalid("help text")))
+                .map(|r| String::from_utf8(r).map_err(|_| Error::Invalid("library text")))
                 .collect::<Result<_, _>>()?;
-            topics.push(Topic {
+            modules.push(TextModule {
                 name,
                 inserted: mhd.datim,
                 lines,
             });
         }
-        Ok(HelpLibrary {
+        Ok(TextLibrary {
+            kind,
             creator: from_ascic(&lhd.lbrver),
             created: lhd.credat,
             updated: lhd.updtim,
-            topics,
+            modules,
         })
     }
 }
@@ -756,29 +828,58 @@ mod tests {
     }
 
     #[test]
-    fn help_round_trip() {
-        let topic = |name: &str, n| Topic {
+    fn text_round_trip() {
+        let module = |name: &str, n| TextModule {
             name: name.into(),
             inserted: 7,
             lines: (0..n).map(|i| format!("{i} {name} line")).collect(),
         };
-        let lib = HelpLibrary {
-            creator: "vlib test".into(),
-            created: 1,
-            updated: 2,
-            // Enough lines to span data blocks, and an empty one.
-            topics: vec![topic("COPY", 300), topic("DIAL", 1), topic("E", 0)],
-        };
-        let bytes = lib.write();
-        assert_eq!((bytes[0], bytes[1]), (TYP_HLP, 1), "LHD$B_TYPE, NINDEX");
+        for kind in [TextKind::Macro, TextKind::Help, TextKind::Text] {
+            let lib = TextLibrary {
+                // Enough lines to span data blocks, and an empty one.
+                modules: vec![module("COPY", 300), module("DIAL", 1), module("E", 0)],
+                ..TextLibrary::new(kind, "vlib test", 1)
+            };
+            let bytes = lib.write();
+            assert_eq!(
+                (bytes[0], bytes[1]),
+                (kind.lbr_type(), 1),
+                "LHD$B_TYPE, NINDEX"
+            );
+            assert_eq!(TextLibrary::parse(&bytes).unwrap(), lib);
+            assert!(!is_library(&bytes));
+            assert_eq!(Library::parse(&bytes), Err(Error::Invalid("library type")));
+        }
+        let object = sample().write();
         assert_eq!(
-            &bytes[196..200],
-            &[0x35, 0, 31, 0],
-            "IDD flags and key length"
+            TextLibrary::parse(&object),
+            Err(Error::Invalid("library type"))
         );
-        assert_eq!(HelpLibrary::parse(&bytes).unwrap(), lib);
-        assert!(!is_library(&bytes));
-        assert_eq!(Library::parse(&bytes), Err(Error::Invalid("library type")));
+    }
+
+    /// The fields LIBRARY/CREATE/MACRO and /TEXT set on OpenVMS Alpha V8.4,
+    /// and how they keep a module.
+    #[test]
+    fn alpha_text_layout() {
+        let word = |b: &[u8], at: usize| u16::from_le_bytes([b[at], b[at + 1]]);
+        for (kind, keylen) in [(TextKind::Macro, 32), (TextKind::Text, 40)] {
+            let lib = TextLibrary {
+                modules: vec![TextModule {
+                    name: "FIRST".into(),
+                    inserted: 7,
+                    lines: vec!["\t.MACRO\tFIRST".into(), "".into()],
+                }],
+                ..TextLibrary::new(kind, "vlib test", 1)
+            };
+            let bytes = lib.write();
+            assert_eq!(bytes[60], 0, "LHD$B_MHDUSZ");
+            assert_eq!((word(&bytes, 196), word(&bytes, 198)), (5, keylen), "IDD");
+            let data = 2 * BLOCK + DATA_DATA;
+            assert_eq!(word(&bytes, data), 16, "MHD length");
+            assert_eq!(bytes[data + 3], MHD_ID);
+            assert_eq!(&bytes[data + 18..data + 20], &[13, 0], "first line");
+            assert_eq!(&bytes[data + 34..data + 41], &[0, 0, 3, 0, 0x77, 0, 0x77]);
+        }
     }
 
     #[test]

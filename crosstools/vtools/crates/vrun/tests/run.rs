@@ -18,6 +18,7 @@ fn image(code: &[u32]) -> Image {
         fixups: None,
         shareables: Vec::new(),
         vector: None,
+        debug: None,
     }
 }
 

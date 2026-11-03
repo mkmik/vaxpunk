@@ -1,12 +1,12 @@
 +++
 title = "vms-obj (object, library and image formats)"
 summary = "OpenVMS Alpha's object language, OLB and EXE formats, transliterated to ARM64"
-aka = ["vms-obj", "EOBJ", "EGSD", "ETIR", "EEOM", "EIHD", "EISD", "EIAF", "OLB", "LHD", "object-format.md", "image-format.md", "library-format.md"]
+aka = ["vms-obj", "EOBJ", "EGSD", "ETIR", "EEOM", "EIHD", "EISD", "EIAF", "EIHS", "OLB", "MLB", "TLB", "HLB", "LHD", "DST", "DMT", "object-format.md", "image-format.md", "library-format.md", "debug-format.md"]
 kind = "tool"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/prd/0001-vtools.md", "crosstools/vtools/crates/vms-obj", "crosstools/vtools/docs/object-format.md", "crosstools/vtools/docs/library-format.md", "crosstools/vtools/docs/image-format.md", "docs/adr/0028-shareable-images.md"]
+refs = ["docs/prd/0001-vtools.md", "crosstools/vtools/crates/vms-obj", "crosstools/vtools/docs/object-format.md", "crosstools/vtools/docs/library-format.md", "crosstools/vtools/docs/image-format.md", "crosstools/vtools/docs/debug-format.md", "docs/adr/0028-shareable-images.md"]
 
 [[feature]]
 id = "obj"
@@ -44,14 +44,14 @@ note = "ADR-0028"
 [[feature]]
 id = "other-libraries"
 title = "Macro, help and text libraries"
-status = "todo"
-note = "library-format.md: only object libraries"
+status = "done"
+note = "olb.rs TextLibrary, library-format.md; checked against LIBRARY/CREATE on the oracle. No DCX compression"
 
 [[feature]]
 id = "debug-symbols"
 title = "Debug symbol table (DST) records and the image's debug section"
-status = "todo"
-note = "PRD-0001 non-goal and open question; image-format.md keeps the Alpha slots unused"
+status = "done"
+note = "dst.rs: the records, PC-correlation and source commands, dst::lines; exe.rs: the image's DST and DMT. debug-format.md, checked against MACRO/DEBUG, BLISS and LINK on the oracle. Nothing writes them yet"
 +++
 
 Not a VMS piece but the definition of VMS ones: the object module, object
@@ -65,5 +65,8 @@ the only place the ARM64 VMS object format is defined.
 
 The crate is `no_std` with `alloc`, and CI builds it for
 `aarch64-unknown-none` so a loader could use it. Parsing and writing come
-from one definition per record, with round-trip tests. Debug symbol
-tables, and libraries other than object libraries, are missing.
+from one definition per record, with round-trip tests. It also has macro,
+help and text libraries, and the debug symbol table: the DST records a
+compiler puts in EDBG and ETBT records, and the DST and debug module table
+the linker writes in an image (`debug-format.md`). No compiler or linker
+writes those yet: that is `vmacro`, `vbliss` and `vlink`'s part.

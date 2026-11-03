@@ -182,6 +182,7 @@ pub fn link(inputs: &[(String, Vec<u8>)], opts: &Options) -> Result<Linked, Vec<
                 .map(|(n, data)| (n.clone(), l.value(n).unwrap(), *data))
                 .collect(),
         }),
+        debug: None,
     };
     let map = map::map(&l, &image);
     Ok(Linked {

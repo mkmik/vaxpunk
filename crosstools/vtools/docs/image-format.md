@@ -8,8 +8,8 @@ code is `vms-obj/src/exe.rs`.
 Status: executables, with a fixup section when the image is linked
 `/RELOCATABLE`, so that a loader can move it, or when it calls a shareable
 image; and shareable images, which always move, with their symbol vector
-and global symbol table. Debug symbol tables keep their Alpha slots,
-unused.
+and global symbol table; and the debug symbol table and its module table,
+which `vlink` doesn't write yet (`docs/debug-format.md`).
 
 ## Sources
 
@@ -36,7 +36,7 @@ All header bytes that aren't part of a structure are 0xFF.
 | 8 | `SIZE` | header bytes used, up to the end of the EISD list |
 | 12 | `ISDOFF` | offset of the first EISD |
 | 16 | `ACTIVOFF` | offset of the EIHA |
-| 20 | `SYMDBGOFF` | offset of the EIHS, in a shareable image; else 0 |
+| 20 | `SYMDBGOFF` | offset of the EIHS, in a shareable image or one with debug symbols; else 0 |
 | 24 | `IMGIDOFF` | offset of the EIHI |
 | 28 | `PATCHOFF` | 0 |
 | 32 | `IAFVA` | address of the fixup section; 0: none |
@@ -47,7 +47,7 @@ All header bytes that aren't part of a structure are 0xFF.
 | 60 | `IMGIOCNT`, `IOCHANCNT` | 0 |
 | 68 | `PRIVREQS` | all ones |
 | 76 | `HDRBLKCNT` | number of header blocks |
-| 80 | `LNKFLAGS` | `LNKNOTFR` (2) if there is no transfer address; `PICIMG` (8) if the image may move |
+| 80 | `LNKFLAGS` | `LNKDEBUG` (1) if linked /DEBUG; `LNKNOTFR` (2) if there is no transfer address; `PICIMG` (8) if the image may move; `DBGDMT` (0x20) if it has a debug module table |
 | 84 | `IDENT`, `SYSVER` | 0 |
 | 92 | `MATCHCTL` | 0 |
 | 96 | `SYMVECT_SIZE` | the symbol vector's entries, in a shareable image; else 0 |
@@ -241,17 +241,22 @@ is one quadword, a procedure's as a data entry's.
 ### Global symbol table (`EIHS$`, GST)
 
 The image symbol table header, 32 bytes at `EIHD$L_SYMDBGOFF`, says where
-the GST is:
+the GST is, and the debug symbol table (DST) and debug module table (DMT)
+if the image has them:
 
 | Offset | Field | vaxpunk value |
 | --- | --- | --- |
 | 0 | `MAJORID`, `MINORID` | 1, 1 |
-| 8 | `DSTVBN`, `DSTSIZE` | 0: no debug symbol table |
+| 8 | `DSTVBN` | the DST's first block, counting from 1; 0: none |
+| 12 | `DSTSIZE` | its size in bytes, whole blocks |
 | 16 | `GSTVBN` | the GST's first block, counting from 1 |
 | 20 | `GSTSIZE` | how many records it has |
-| 24 | `DMTVBN`, `DMTBYTES` | 0 |
+| 24 | `DMTVBN` | the DMT's first block; 0: none |
+| 28 | `DMTBYTES` | its size in bytes |
 
-The GST comes after the section contents, from a block boundary: an object
+The DST, the DMT and the GST come after the section contents, in that
+order, each from a block boundary. `docs/debug-format.md` says what the DST
+and the DMT hold. The GST is an object
 module (`docs/object-format.md`), as the Alpha linker writes it. Its module
 header has the image's name and ident; a GSD record defines the absolute
 psect, `.$$ABS$$.` (`PIC`, `LIB`, `RD`, empty); further GSD records have an

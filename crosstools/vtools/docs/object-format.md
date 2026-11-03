@@ -61,8 +61,8 @@ Unchanged:
 | 9 | `EOBJ$C_EEOM` | end of module |
 | 10 | `EOBJ$C_EGSD` | global symbol directory |
 | 11 | `EOBJ$C_ETIR` | text, information and relocation |
-| 12 | `EOBJ$C_EDBG` | debugger information (not produced yet) |
-| 13 | `EOBJ$C_ETBT` | traceback information (not produced yet) |
+| 12 | `EOBJ$C_EDBG` | debugger information (`docs/debug-format.md`; not produced yet) |
+| 13 | `EOBJ$C_ETBT` | traceback information (`docs/debug-format.md`; not produced yet) |
 
 The ordering rules are the Alpha ones: MHD header first, LNM header second, at
 least one GSD record, EEOM last.

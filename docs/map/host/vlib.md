@@ -18,16 +18,16 @@ note = "PRD-0001 step 9; vms/c.rs builds DECC$CRTL.OLB and SSL3$LIBSSL.OLB with 
 [[feature]]
 id = "help"
 title = "Help libraries (.HLB) from .HLP text, for HELP"
-status = "todo"
+status = "done"
 needs = ["/host/vms-obj#other-libraries"]
-note = "t8y:/dcl/help wants HELPLIB.HLB built on the host"
+note = "vlib /HELP; vms/build.rs builds SYS$HELP's libraries with it"
 
 [[feature]]
 id = "macro-text"
 title = "Macro (.MLB) and text (.TLB) libraries in VMS's format"
 status = "todo"
 needs = ["/host/vms-obj#other-libraries"]
-note = "lib.mlb and starlet.mlb are plain text today"
+note = "vms-obj writes them (TextLibrary); vlib has no /MACRO or /TEXT, and lib.mlb and starlet.mlb are plain text vasm reads"
 
 [[needs]]
 on = "/host/vms-obj"
@@ -37,8 +37,8 @@ why = "The library format"
 VMS's librarian, `LIBRARY`, keeps modules in indexed library files:
 object libraries the linker searches, macro libraries MACRO reads with
 `.LIBRARY`, help libraries `HELP` reads, and text libraries. `vlib` does
-the object part on the host, with only what the linker needs: no update
-history, no free block lists, no compression. The macro libraries in
-`crosstools/vtools/lib` are text files that vasm reads directly. A
-native `LIBRARY` is `t8y:/utils/librarian`, over the `LBR$` routines
+the object and help parts on the host, with only what the linker and
+`HELP` need: no update history, no free block lists, no compression. The
+macro libraries in `crosstools/vtools/lib` are text files that vasm reads
+directly. A native `LIBRARY` is `t8y:/utils/librarian`, over the `LBR$` routines
 (`t8y:/rtl/lbr`).

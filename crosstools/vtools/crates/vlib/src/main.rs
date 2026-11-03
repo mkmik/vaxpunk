@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 
-use vms_obj::olb::{HelpLibrary, Library};
+use vms_obj::olb::{Library, TextKind, TextLibrary};
 
 const USAGE: &str = "usage: vlib [/CREATE] LIBRARY.OLB FILE.OBJ...
        vlib /HELP [/CREATE] LIBRARY.HLB FILE.HLP...
@@ -98,14 +98,18 @@ fn run_help(
 ) -> Result<(), String> {
     let usage = || format!("%VLIB-F-USAGE, {USAGE}");
     let parse = |p: &PathBuf| {
-        HelpLibrary::parse(&read(p)?)
-            .map_err(|e| format!("%VLIB-F-NOTLIB, {} is not a help library: {e}", p.display()))
+        let not = |e: String| format!("%VLIB-F-NOTLIB, {} is not a help library{e}", p.display());
+        match TextLibrary::parse(&read(p)?) {
+            Ok(lib) if lib.kind == TextKind::Help => Ok(lib),
+            Ok(_) => Err(not(String::new())),
+            Err(e) => Err(not(format!(": {e}"))),
+        }
     };
     if names || (list && (create || !files.is_empty())) || (!list && files.is_empty()) {
         return Err(usage());
     }
     if list {
-        for t in parse(path)?.topics {
+        for t in parse(path)?.modules {
             println!("{}", t.name);
         }
         return Ok(());
