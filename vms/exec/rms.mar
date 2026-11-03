@@ -58,17 +58,18 @@
 ; Each FAB and RAB service takes an error and a success completion
 ; routine after its block, err and suc, as VMS's do: the one its status
 ; calls for gets an AST in the caller's mode, with the block as its
-; parameter (RMS$CMPL). A service is done when it returns, RAB$M_ASY or
-; not, as VMS's is when it needn't wait, so $WAIT only gives its status.
+; parameter (RMS$CMPL). A record service with RAB$M_ASY that must wait
+; for the disk returns RMS$_PENDING, and a kernel mode AST goes on with
+; it when the disk's request ends, as VMS's RM$STALL and RM$STALLAST do
+; (RECSVC, docs/adr/0048-asynchronous-rms-stalls-on-a-stack-of-its-own.md);
+; $WAIT waits for it. Any other service is done when it returns.
 ;
 ; ponytail: the services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
 ; file; one writer of any other file; no bucket locks, which FIL$LOCK
-; makes needless; no concealed devices. RAB$M_ASY never gives
-; RMS$_PENDING: a service waits for its disk, holding FIL$LOCK, until
-; RMS can stall one and go on from the disk's completion, as VMS's does
-; (t8y:/rms/async#asynchronous). $SEARCH finds its place again from the
+; makes needless; no concealed devices. A stalled service keeps
+; FIL$LOCK until it ends (RECSVC). $SEARCH finds its place again from the
 ; resultant string it made last, as VMS's XQP does with FIB$L_WCC, so a
 ; wildcard $SEARCH needs one; VMS's RMS keeps its own copy.
 ;
@@ -94,12 +95,18 @@
         $LCKDEF
         $JPIDEF
         $PRVDEF
+        $PRDEF
+        $ACBDEF
+        $IRPDEF
+        $PRIDEF
+        $INTSTKDEF
 
         .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC, EXE$DCLAST
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$MATCH, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CHKALLOC, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
         .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO, FIL$ACLINHERIT
+        .EXTERNAL F11$GL_LOCKIPL, F11$AB_IRP, FIL$IOWAIT, SCH$QAST, SCH$ASTBITS, SCH$BOOST
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, LNM$EQUIV
         .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX, LCK$ENQ, LCK$DEQ, LCK$ENQWK
         .EXTERNAL EXE$GQ_SYSTIME, RMS$XABOUT, RMS$FINDXAB
@@ -144,8 +151,24 @@ FI2$W_REVISION = 20                     ; in the ident area
 FI2$Q_REVDATE = 30
 MAXXAB = 16                             ; XABs in a chain, at most
 RLKEFN = 30                             ; the event flag a wait for a record lock is on: one VMS keeps for itself
+; An ASB, as VMS's asynchronous save block: an asynchronous record
+; service's state, from pool, with the stack it runs on (RECSVC).
+ASB$Q_SP = 0                            ; the sp of the side that waits: the service's while it is stalled, else its runner's
+ASB$L_PCB = 8                           ; its process
+ASB$L_ROUTINE = 12                      ; its routine, REC$name, 0 once it has ended
+ASB$L_ARGS = 16                         ; its argument list: count, rab, err, suc
+ASB$B_MODE = 32                         ; its caller's mode
+ASB$B_QUEUED = 33                       ; 1 while ASB$L_ACB is queued
+ASB$L_ACB = 48                          ; the kernel mode AST that goes on with it, RMS$STALLAST
+ASB$K_STACK = 16384                     ; its stack's bytes, a kernel stack's
+ASB$K_LENGTH = 80+ASB$K_STACK           ; the stack is the rest
+SWFRAME = 112                           ; SWITCH's frame: x18-x30
+PAL_REI = ^X92                          ; the PAL's REI, which vmacro's REI calls
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
+RMS$GL_THREAD::                         ; the ASB of the asynchronous service running on its own stack, or 0
+        .LONG   0
+STALL:  .LONG   0                       ; the ASB of the one stalled at a disk wait, its process holding FIL$LOCK, or 0
 ; A specification split into its five parts, device, directory, name,
 ; type and version, each an address and a length, 0 if it is absent: the
 ; file's, its default's, and the system's, and a logical name's
@@ -2889,13 +2912,14 @@ RABCHK:
 
 ; RABIFAB: AP = a record service's arguments, a RAB first. R10 = the
 ; RAB, R7 = the IFAB of the file it is connected to, on whose volume the
-; file system works, and RAB$L_STV 0. R0 = RMS$_NORMAL, RMS$_RAB, or
+; file system works, and RAB$L_STS and RAB$L_STV 0, as VMS's RM$RSET
+; clears them. R0 = RMS$_NORMAL, RMS$_RAB, or
 ; RMS$_ISI if it isn't connected. Uses R8 and R9.
 RABIFAB:
         .JSB_ENTRY  OUTPUT=<R7, R10>, SCRATCH=<R8, R9>
         BSBW    RABCHK
         BLBC    R0, 90$
-        CLRL    RAB$L_STV(R10)
+        CLRQ    RAB$L_STS(R10)          ; and STV
         MOVZWL  RAB$W_ISI(R10), R8
         BSBW    GETIFAB
         BLBC    R0, 80$
@@ -2965,10 +2989,14 @@ RABIFAB:
 ; calls the routine for the file's organization with R7 = the IFAB and
 ; R10 = the RAB, or bio's for a file open for block I/O, RMS$_IOP by
 ; default, and returns its status in RAB$L_STS. Each may use R0-R6, R8,
-; R9 and R11.
+; R9 and R11. REC$name does that, holding FIL$LOCK, which RECSVC takes,
+; and gives it back.
         .MACRO  RECORD  NAME, SEQ, REL, IDX, BIO=IOP, ?L1, ?L2, ?L3, ?L4
         .ENTRY  EXE$'NAME, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        BSBW    FIL$LOCK
+        MOVAB   REC$'NAME, R1
+        BSBW    RECSVC
+        RET
+        .ENTRY  REC$'NAME, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    RABIFAB
         BLBC    R0, L4
         BBC     #IFB$V_BIO, IFB$L_FLAGS(R7), L1
@@ -2987,10 +3015,13 @@ L4:     RABDONE
 
 ; BLOCKIO name: the block I/O service $name, which calls BIO$name with
 ; R7 = the IFAB and R10 = the RAB, for a file opened with FAB$M_BIO or
-; FAB$M_BRO, else RMS$_IOP.
+; FAB$M_BRO, else RMS$_IOP; through RECSVC, as RECORD's.
         .MACRO  BLOCKIO NAME, ?L1, ?L2
         .ENTRY  EXE$'NAME, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
-        BSBW    FIL$LOCK
+        MOVAB   REC$'NAME, R1
+        BSBW    RECSVC
+        RET
+        .ENTRY  REC$'NAME, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    RABIFAB
         BLBC    R0, L2
         MOVL    #RMS$_IOP, R0
@@ -3041,10 +3072,13 @@ L2:     RABDONE
         RECORD  FREE, RNL, RNL, RECFREE, BIO=RNL
         RECORD  RELEASE, RNL, RNL, RECRELEASE, BIO=RNL
 
-; $WAIT rab, err, suc, err, suc: waits for the RAB's last service, which is done,
-; as every service is when it returns, RAB$M_ASY or not. R0 = its
-; status, which RAB$L_STS holds, or RMS$_NORMAL if that is 0, as VMS's
-; $WAIT does when its service ended at once.
+; $WAIT rab, err, suc: waits for the RAB's last service, which may have
+; returned RMS$_PENDING: FIL$LOCK ends one stalled at a disk wait
+; (RMS$FINISH). R0 = its status, which RAB$L_STS holds, or RMS$_NORMAL if
+; that is 0, as VMS's $WAIT does when its service ended at once.
+; vaxpunk: VMS's $WAIT waits for RMS's event flag, which the stalled
+; service's AST sets when it ends; here the process ends it itself, the
+; disk's request done, and takes its turn with FIL$LOCK.
         .ENTRY  EXE$WAIT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    RABCHK
@@ -3058,6 +3092,282 @@ L2:     RABDONE
         BLOCKIO READ
         BLOCKIO WRITE
         BLOCKIO SPACE
+
+; RECSVC: R1 = a record service's routine, REC$name, a CALL routine of
+; the service's arguments, rab, err and suc, that ends it and gives back
+; FIL$LOCK; AP = those arguments. Takes FIL$LOCK and calls it. With
+; RAB$M_ASY it runs on a stack of its own (RUNTHREAD), so that it can
+; stall at a disk wait, as VMS's RM$STALL stalls: R0 = RMS$_PENDING then,
+; RAB$L_STS 0, and it goes on when the request has ended, holding
+; FIL$LOCK meanwhile (RMS$STALL). A stream that locks records, whose waits
+; let go of FIL$LOCK, and one there is no pool for, run synchronously,
+; RAB$M_ASY or not. RMS$_RSA, and nothing else, if the RAB's stream has a
+; service stalled, as VMS's. R0 = the service's status. Uses R0-R11.
+; ponytail: one stalled service at a time, its process holding FIL$LOCK,
+; which every other process's file system work waits for; the RAB and its
+; buffers aren't probed again when it goes on, VMS's are.
+RECSVC:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    R1, R6
+        MOVL    STALL, R0
+        BEQL    10$
+        CMPL    ASB$L_PCB(R0), SCH$GL_CURPCB
+        BNEQ    10$
+        CMPL    ASB$L_ARGS+4(R0), 4(AP)
+        BNEQ    10$
+        MOVL    #RMS$_RSA, R0
+        RSB
+10$:    BSBW    FIL$LOCK
+        BSBW    RABIFAB
+        BLBC    R0, 20$
+        BBC     #RAB$V_ASY, RAB$L_ROP(R10), 20$
+        BBS     #IFB$V_RLK, IFB$L_FLAGS(R7), 20$
+        MOVL    #ASB$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBS    R0, 30$
+20$:    CALLG   (AP), (R6)
+        RSB
+30$:    MOVL    SCH$GL_CURPCB, R4
+        MOVL    R4, ASB$L_PCB(R2)
+        MOVL    R6, ASB$L_ROUTINE(R2)
+        MOVQ    (AP), ASB$L_ARGS(R2)
+        MOVQ    8(AP), ASB$L_ARGS+8(R2)
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R0
+        MOVB    R0, ASB$B_MODE(R2)
+        CLRB    ASB$B_QUEUED(R2)
+        MOVAB   ASB$L_ACB(R2), R5
+        MOVW    #ACB$K_LENGTH, ACB$W_SIZE(R5)
+        MOVB    #DYN$C_ACB, ACB$B_TYPE(R5)
+        CLRB    ACB$B_RMOD(R5)
+        MOVL    PCB$L_PID(R4), ACB$L_PID(R5)
+        MOVAB   RMS$STALLAST, ACB$L_KAST(R5)
+        MOVAB   ASB$K_LENGTH-SWFRAME(R2), R0    ; SWITCH's frame at the stack's top,
+        MOVL    R0, ASB$Q_SP(R2)                ; which goes to THREAD
+        CLRL    ASB$Q_SP+4(R2)
+        MOVL    R0, R1
+        MOVL    #SWFRAME/8, R3
+40$:    CLRQ    (R1)+
+        SOBGTR  R3, 40$
+        MOVAB   ASB$K_LENGTH(R2), (R0)          ; x18, its VAX SP
+        MOVAB   THREAD, SWFRAME-16(R0)          ; x30
+        PUSHL   F11$GL_LOCKIPL                  ; the caller's IPL
+        MOVL    R2, R1
+        BSBW    RUNTHREAD
+        MTPR    (SP)+, #PR$_IPL
+        RSB
+
+; RUNTHREAD: R1 = an ASB. Runs its service on its stack (SWITCH) until it
+; ends or stalls at a disk wait: in kernel mode at IPL$_ASTDEL, to which
+; FIL$UNLOCK goes back when it ends, and with its caller's mode as the
+; previous one once it goes on (RMS$STALL), so that RMS's probes are of
+; that mode's access, as in the service. Then puts back this IPL and
+; previous mode, and once it has ended frees the ASB. R0 = its status, or
+; RMS$_PENDING while it is stalled. Uses R0 and R1.
+RUNTHREAD:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R4>
+        MFPR    #PR$_IPL, R0
+        PUSHL   R0
+        CALL_PAL #PAL$_RD_PS
+        EXTZV   #PSL$V_PRVMOD, #2, R0, R0
+        PUSHL   R0
+        SETIPL  #IPL$_ASTDEL
+        MOVL    #IPL$_ASTDEL, F11$GL_LOCKIPL
+        CMPL    R1, STALL
+        BNEQ    10$
+        CLRL    STALL
+10$:    MOVL    R1, RMS$GL_THREAD
+        BSBW    SWITCH                  ; R0 = its status, R1 = the ASB
+        MOVL    R0, R2
+        MOVL    (SP)+, R0
+        BSBW    SETPRV
+        MTPR    (SP)+, #PR$_IPL
+        MOVL    R2, R0
+        TSTL    ASB$L_ROUTINE(R1)
+        BNEQ    90$                     ; stalled
+        PUSHL   R0
+        DSBINT  #IPL$_SYNCH
+        TSTB    ASB$B_QUEUED(R1)        ; its AST goes too
+        BEQL    20$
+        REMQUE  ASB$L_ACB(R1), R0
+        MOVL    ASB$L_PCB(R1), R4
+        PUSHL   R1
+        BSBW    SCH$ASTBITS
+        MOVL    (SP)+, R1
+20$:    ENBINT
+        MOVL    R1, R0
+        MOVL    #ASB$K_LENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+        MOVL    (SP)+, R0
+90$:    POPR    #^M<R2, R4>
+        RSB
+
+; THREAD: where an asynchronous service starts, on its own stack, from
+; SWITCH: R1 = its ASB. Calls its routine with its arguments, then goes
+; back for good to whoever ran it last, its ASB$L_ROUTINE clear.
+THREAD:
+        .EXCEPTION_ENTRY
+        MOVL    R1, R2
+        CALLG   ASB$L_ARGS(R2), @ASB$L_ROUTINE(R2)
+        MOVL    R2, R1
+        CLRL    ASB$L_ROUTINE(R1)
+        CLRL    RMS$GL_THREAD
+        BSBW    SWITCH
+        HALT                            ; never comes back
+
+; SWITCH: R1 = an ASB, R0 = a value. Goes from the asynchronous service's
+; stack to its runner's, or back: keeps x18-x30 on this stack, leaves its
+; sp in ASB$Q_SP and takes the other's, whose registers it loads. Returns
+; there, with R0 and R1 as they are, to the SWITCH that left it, or the
+; first time to THREAD. Keeps every register.
+SWITCH:
+        .EXCEPTION_ENTRY                ; its own frame, not vmacro's
+        .DISABLE FLAGGING               ; a stack's registers, by name
+        sub     sp, sp, #SWFRAME
+        stp     x18, x19, [sp]
+        stp     x20, x21, [sp, #16]
+        stp     x22, x23, [sp, #32]
+        stp     x24, x25, [sp, #48]
+        stp     x26, x27, [sp, #64]
+        stp     x28, x29, [sp, #80]
+        str     x30, [sp, #96]
+        ldr     x16, [x1, #ASB$Q_SP]
+        mov     x17, sp
+        str     x17, [x1, #ASB$Q_SP]
+        mov     sp, x16
+        ldp     x18, x19, [sp]
+        ldp     x20, x21, [sp, #16]
+        ldp     x22, x23, [sp, #32]
+        ldp     x24, x25, [sp, #48]
+        ldp     x26, x27, [sp, #64]
+        ldp     x28, x29, [sp, #80]
+        ldr     x30, [sp, #96]
+        add     sp, sp, #SWFRAME
+        br      x30                     ; RSB, which vmacro would take for RET
+        .ENABLE FLAGGING
+
+; SETPRV: R0 = an access mode. Makes it the previous mode, in kernel mode
+; at the IPL there is, as a VAX's REI sets it: REIs from a frame of every
+; register to the RSB after. Keeps every register.
+SETPRV:
+        .EXCEPTION_ENTRY                ; its own frame, not vmacro's
+        .DISABLE FLAGGING               ; the frame's registers, by name
+        mov     x17, sp
+        cmp     x17, x18
+        csel    x16, x17, x18, ls       ; below both stack pointers
+        and     x16, x16, #0xfffffffffffffff0
+        sub     x16, x16, #INTSTK$K_LENGTH
+        mov     sp, x16
+        stp     x0, x1, [x16, #16]
+        stp     x2, x3, [x16, #32]
+        stp     x4, x5, [x16, #48]
+        stp     x6, x7, [x16, #64]
+        stp     x8, x9, [x16, #80]
+        stp     x10, x11, [x16, #96]
+        stp     x12, x13, [x16, #112]
+        stp     x14, x15, [x16, #128]
+        stp     x16, x17, [x16, #144]
+        stp     x18, x19, [x16, #160]
+        stp     x20, x21, [x16, #176]
+        stp     x22, x23, [x16, #192]
+        stp     x24, x25, [x16, #208]
+        stp     x26, x27, [x16, #224]
+        stp     x28, x29, [x16, #240]
+        stp     x30, x17, [x16, #256]   ; and sp
+        adr     x17, SETPRV_DONE
+        str     x17, [x16]              ; the PC
+        mov     x17, x0
+        mov     x7, #PAL$_RD_PS
+        svc     #0
+        bfi     x0, x17, #PSL$V_PRVMOD, #2
+        str     x0, [x16, #8]           ; the PSL
+        mov     x18, x16
+        mov     x7, #PAL_REI
+        svc     #0
+SETPRV_DONE:
+        br      x30                     ; RSB, which vmacro would take for RET
+        .ENABLE FLAGGING
+
+; RMS$STALL: R4 = the current PCB, whose asynchronous RMS service,
+; RMS$GL_THREAD's, waits for F11$AB_IRP. Stalls it, as VMS's RM$STALL:
+; goes back to whoever ran it, which returns RMS$_PENDING if that is the
+; service, holding FIL$LOCK, until RMS$STALLAST or RMS$FINISH go on with
+; it once the request has ended. IPL$_SYNCH. Uses R0 and R1.
+RMS$STALL::
+        .JSB_ENTRY
+        MOVL    RMS$GL_THREAD, R1
+        CLRL    RMS$GL_THREAD
+        MOVL    R1, STALL
+        MOVL    #RMS$_PENDING, R0
+        BSBW    SWITCH                  ; back: R1 = the ASB
+        MOVZBL  ASB$B_MODE(R1), R0
+        BSBW    SETPRV
+        SETIPL  #IPL$_SYNCH
+        RSB
+
+; RMS$IODONE: F11$AB_IRP's request has ended. If an RMS service is
+; stalled for it, queues its process the kernel mode AST that goes on
+; with it, RMS$STALLAST, unless it is queued already, with a boost,
+; PRI$_IOCOM, as VMS's I/O completion gives. Not once $DELPRC has taken
+; the process out of its slot: its rundown ends the service (RMS$FINISH).
+; IPL$_SYNCH. Uses R0-R3.
+RMS$IODONE::
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        MOVL    STALL, R0
+        BEQL    90$
+        TSTB    ASB$B_QUEUED(R0)
+        BNEQ    90$
+        PUSHR   #^M<R4, R5>
+        MOVL    ASB$L_PCB(R0), R4
+        MOVZWL  PCB$L_PID(R4), R1
+        CMPL    @SCH$GL_PCBVEC[R1], R4
+        BNEQ    80$
+        MOVB    #1, ASB$B_QUEUED(R0)
+        MOVAB   ASB$L_ACB(R0), R5
+        MOVL    #PRI$_IOCOM, R2
+        BSBW    SCH$BOOST
+        BSBW    SCH$QAST
+80$:    POPR    #^M<R4, R5>
+90$:    RSB
+
+; RMS$STALLAST: the kernel mode AST of a stalled RMS service, its ASB's
+; ACB, as VMS's RM$STALLAST. R4 = the current PCB, R5 = the ACB. Goes on
+; with the service if its request has ended (RUNTHREAD); RMS$FINISH may
+; have gone on with it already. IPL$_SYNCH. Uses R0 and R1.
+RMS$STALLAST::
+        .JSB_ENTRY
+        MOVAB   -ASB$L_ACB(R5), R1
+        CLRB    ASB$B_QUEUED(R1)
+        CMPL    R1, STALL
+        BNEQ    90$
+        MOVAB   F11$AB_IRP, R0
+        TSTL    IRP$L_IOST1(R0)
+        BEQL    90$
+        BSBW    RUNTHREAD
+90$:    RSB
+
+; RMS$FINISH: R4 = the current PCB. Ends its RMS service stalled at a
+; disk wait, if it has one, waiting for each request (FIL$IOWAIT) and
+; going on with it (RUNTHREAD) until it is done: FIL$LOCK, before the
+; process takes the lock again, which it holds; and image rundown, before
+; the service's RAB and buffers go. Uses R0 and R1.
+RMS$FINISH::
+        .JSB_ENTRY
+        DSBINT  #IPL$_SYNCH
+10$:    MOVL    STALL, R1
+        BEQL    90$
+        CMPL    ASB$L_PCB(R1), R4
+        BNEQ    90$
+        MOVAB   F11$AB_IRP, R0
+        TSTL    IRP$L_IOST1(R0)
+        BNEQ    20$
+        BSBW    FIL$IOWAIT
+        BRB     10$
+20$:    BSBW    RUNTHREAD
+        BRB     10$
+90$:    ENBINT
+        RSB
 
 ; IOP, RNL, FLUSH, RECFREE, RECRELEASE: the record services' routines
 ; that only return RMS$_IOP or RMS$_RNL, or call

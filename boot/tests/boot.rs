@@ -1090,20 +1090,27 @@ const BACKUP: Phase = Phase {
 /// isn't one sets nothing; SHOW RMS_DEFAULT shows them as OpenVMS's does.
 /// A prologue default of 2 makes CONVERT/FDL's indexed file, whose FDL
 /// names none, prologue 1, as its key is a string.
+/// ASYTEST then reads a file with RAB$M_ASY $READs, which RMS stalls at
+/// their disk waits.
 const RMS: Phase = Phase {
     name: "rms",
-    secs: 90,
+    secs: 120,
     steps: &[
         (
             "NEW.TXT;2            [SYSTEM]                         (RWED,RWED,RE,RE)",
             1,
             concat!(
                 "@SYS$MANAGER:SPILLTEST\r",
-                "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\rSET DEFAULT DKB0:[000000]\r",
+                "CREATE/DIRECTORY DKB0:[RMS]\rSET DEFAULT DKB0:[RMS]\rRUN RMSTEST\r",
             ),
         ),
         (
             "RMSTEST done",
+            1,
+            "RUN ASYTEST\rSET DEFAULT DKB0:[000000]\r",
+        ),
+        (
+            "ASYTEST: ok",
             1,
             concat!(
                 "SET RMS_DEFAULT/BLOCK_COUNT=24/BUFFER_COUNT=-5/INDEXED\r",
@@ -2161,6 +2168,10 @@ fn boot() {
     assert!(
         !text.contains("SPIN: a register changed"),
         "SPIN's registers changed"
+    );
+    assert!(
+        !text.contains("ASYTEST: $READs pending 00000000"),
+        "ASYTEST: no RAB$M_ASY $READ returned RMS$_PENDING"
     );
 
     // RMSTEST's output must be OpenVMS's, and CDEMO's what vrun printed.

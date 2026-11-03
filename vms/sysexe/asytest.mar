@@ -1,0 +1,156 @@
+        .TITLE  ASYTEST Asynchronous RMS: services that return RMS$_PENDING
+        .IDENT  /V0.1/
+;
+; RUN ASYTEST writes ASY.DAT in the default directory, BLOCKS blocks of
+; block I/O, each block filled with its VBN's low byte, then reads it back
+; PASSES times with RAB$M_ASY $READs of CHUNK blocks. Each returns
+; RMS$_PENDING if RMS stalled it at a disk wait, else its status; while
+; one is pending, another $READ gets RMS$_RSA, unless the first ended
+; meanwhile. Half of them end with $WAIT; for the others the program
+; looks at RAB$L_STS until it isn't 0, which the stalled $READ's kernel
+; mode AST ends (RMS$STALLAST). The success routine runs once for each
+; $READ that started. Prints how many were pending, then "ASYTEST: ok";
+; an EXPECT that fails exits with 2 * N, which the executive reports.
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $RMSDEF
+        $FABDEF
+        $RABDEF
+
+BLOCKS = 512
+CHUNK = 32
+PASSES = 4
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+NAME:   .ASCII  "ASY.DAT"
+NAMELEN = .-NAME
+        .ALIGN  LONG
+FAB:    $FAB    FNA=NAME, FNS=NAMELEN, FAC=<BIO,GET,PUT>, ORG=SEQ, RFM=FIX, MRS=512, ALQ=BLOCKS
+RAB:    $RAB    FAB=FAB, RBF=BUF, UBF=BUF, USZ=CHUNK*512
+BUF:    .BLKB   CHUNK*512
+SUCS:   .LONG   0                       ; the success routine's calls
+ERRS:   .LONG   0                       ; the error routine's
+STARTED:                                ; the $READs that started
+        .LONG   0
+PENDING:                                ; those that returned RMS$_PENDING
+        .LONG   0
+RSAS:   .LONG   0                       ; the $READs RMS$_RSA refused
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5, R6>
+        $CREATE FAB=FAB
+        EXPECT  #RMS$_NORMAL, 1
+        $CONNECT RAB=RAB
+        EXPECT  #RMS$_NORMAL, 2
+        MOVL    #1, R6                  ; the VBN
+10$:    MOVAB   BUF, R1
+        MOVL    #CHUNK*512, R2
+        MOVL    R6, R3
+15$:    MOVB    R3, (R1)+               ; each block its VBN's byte
+        DECL    R2
+        BITL    #511, R2
+        BNEQ    17$
+        INCL    R3
+17$:    TSTL    R2
+        BGTR    15$
+        MOVL    R6, RAB+RAB$L_BKT
+        MOVW    #CHUNK*512, RAB+RAB$W_RSZ
+        $WRITE  RAB=RAB
+        EXPECT  #RMS$_NORMAL, 3
+        ADDL2   #CHUNK, R6
+        CMPL    R6, #BLOCKS
+        BLEQ    10$
+        $DISCONNECT RAB=RAB
+        EXPECT  #RMS$_NORMAL, 4
+        BISL2   #RAB$M_ASY, RAB+RAB$L_ROP
+        $CONNECT RAB=RAB
+        EXPECT  #RMS$_NORMAL, 5
+        MOVL    #PASSES, R5
+20$:    MOVL    #1, R6
+30$:    CALLS   #0, READ
+        BLBS    R0, 35$
+        RET
+35$:        ADDL2   #CHUNK, R6
+        CMPL    R6, #BLOCKS
+        BLEQ    30$
+        SOBGTR  R5, 20$
+        $DCLAST_S ASTADR=WAKEAST        ; after the last success routine's
+        $HIBER_S
+        MOVL    SUCS, R0
+        EXPECT  STARTED, 6
+        MOVL    ERRS, R0
+        EXPECT  #0, 7
+        $DISCONNECT RAB=RAB
+        EXPECT  #RMS$_NORMAL, 8
+        $CLOSE  FAB=FAB
+        EXPECT  #RMS$_NORMAL, 9
+        PRINTHEX "ASYTEST: $READs pending ", PENDING
+        PRINTHEX "ASYTEST: RMS$_RSA ", RSAS
+        PRINT   "ASYTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; READ: R6 = a VBN, R5 = the pass. $READs CHUNK blocks there, ending it
+; with $WAIT in odd passes and by looking at RAB$L_STS in even ones, and
+; checks every byte. R0 = SS$_NORMAL, or EXPECT's status.
+        .ENTRY  READ, ^M<R2, R3>
+        MOVL    R6, RAB+RAB$L_BKT
+        $READ   RAB=RAB, ERR=ERRAST, SUC=SUCAST
+        INCL    STARTED
+        CMPL    R0, #RMS$_PENDING
+        BNEQ    40$
+        INCL    PENDING
+        $READ   RAB=RAB, ERR=ERRAST, SUC=SUCAST ; while it is pending
+        CMPL    R0, #RMS$_RSA
+        BNEQ    20$
+        INCL    RSAS
+        BRB     30$
+20$:    INCL    STARTED                 ; the first ended meanwhile
+        CMPL    R0, #RMS$_PENDING
+        BEQL    30$
+        EXPECT  #RMS$_NORMAL, 10
+30$:    BLBS    R5, 35$
+33$:    TSTL    RAB+RAB$L_STS           ; until its AST ends it
+        BEQL    33$
+35$:    $WAIT   RAB=RAB
+        BRB     50$
+40$:    EXPECT  #RMS$_NORMAL, 11
+        $WAIT   RAB=RAB
+50$:    EXPECT  #RMS$_NORMAL, 12
+        MOVL    RAB+RAB$L_STS, R0
+        EXPECT  #RMS$_NORMAL, 13
+        MOVZWL  RAB+RAB$W_RSZ, R0
+        EXPECT  #CHUNK*512, 14
+        MOVAB   BUF, R1
+        MOVL    #CHUNK*512, R2
+        MOVL    R6, R3
+60$:    CMPB    R3, (R1)+
+        BEQL    65$
+        MOVL    #30, R0
+        RET
+65$:    DECL    R2
+        BITL    #511, R2
+        BNEQ    67$
+        INCL    R3
+67$:    TSTL    R2
+        BGTR    60$
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; SUCAST, ERRAST: the completion routines, called as ASTs with the RAB.
+        .ENTRY  SUCAST, ^M<>
+        INCL    SUCS
+        RET
+
+        .ENTRY  ERRAST, ^M<>
+        INCL    ERRS
+        RET
+
+; WAKEAST: wakes the process, after the ASTs queued before it.
+        .ENTRY  WAKEAST, ^M<>
+        $WAKE_S
+        RET
+
+        .END    START

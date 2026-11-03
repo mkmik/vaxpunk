@@ -79,6 +79,7 @@ same commit; `todography lint` checks it.
 | [ADR-0045](adr/0045-spawn-passes-its-context-as-vms-does.md) | SPAWN's subprocess runs LOGINOUT, a known image with CMKRNL, which copies its owner's process logical names, and DCL passes the rest of the context in a mailbox that is the subprocess's SYS$ERROR | Proposed |
 | [ADR-0046](adr/0046-shared-indexed-files-and-record-locks.md) | Writers share an indexed file in CW mode, each open keeps the file's header and prologue in step under FIL$LOCK, and record locks are sublocks of the access arbitration lock | Proposed |
 | [ADR-0047](adr/0047-interrupt-driven-disk-io-and-locked-pages.md) | A disk request ends by interrupt, the device reads and writes the requester's pages by PFN, and those pages stay locked until it is done | Proposed |
+| [ADR-0048](adr/0048-asynchronous-rms-stalls-on-a-stack-of-its-own.md) | An asynchronous RMS service runs on a stack of its own, stalls at its disk wait holding FIL$LOCK, and a kernel mode AST goes on with it | Proposed |
 
 ### PRDs
 

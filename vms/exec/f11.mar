@@ -33,7 +33,8 @@
 ; FIL$LOCK, as the XQP holds its volume's: it keeps their buffers,
 ; F11$AB_IRP, and F11$GL_VCB, the volume they work on, to one process at a
 ; time, at IPL$_ASTDEL, where the others still run. Only the driver runs at
-; IPL$_SYNCH.
+; IPL$_SYNCH. An asynchronous RMS service that must wait for its disk
+; keeps the lock while its process goes on (RMS$STALL).
 ; ponytail: no extension headers, so a file's map is what its one header
 ; holds; one lock for every volume, where the XQP $ENQs one per volume and
 ; one per file header (RMS takes the access arbitration lock, as the
@@ -62,6 +63,7 @@
 
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTCRLF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, RMS$LOCATE, MD$IO
+        .EXTERNAL RMS$GL_THREAD, RMS$STALL, RMS$IODONE, RMS$FINISH
         .EXTERNAL IOC$ALLOCIRP, IOC$REQCOM, IOC$AB_DKA0, IOC$AB_DKB0, IOC$AB_MDA0
         .EXTERNAL IOC$SEARCHDEV, IOC$RETURN, IOC$RETQUOTA, EXE$INSIOQ, EXE$READLOCK, EXE$WRITELOCK
         .EXTERNAL EXE$PROBER_DSC, RMS$VOLIDLE, SCH$GL_CURPCB, SCH$WAKEPCB, SCH$SCHED, SCH$BOOST
@@ -143,9 +145,9 @@ F11$GW_FID::                            ; the file ID FIL$SEARCHDIR found
         .ALIGN  LONG
 F11$AB_IRP::                            ; the IRP FIL$READLBLK and FIL$WRITELBLK hand the driver, with no process
         .BLKB   IRP$K_LENGTH+<4*IRP$K_MAXPFN>   ; and its pages' PFNs
-IOWQ:   .ADDRESS IOWQ, IOWQ             ; the processes waiting for a disk's request, SCH$C_MWAIT (IOWAIT)
+IOWQ:   .ADDRESS IOWQ, IOWQ             ; the processes waiting for a disk's request, SCH$C_MWAIT (FIL$IOWAIT)
 OWNER:  .LONG   0                       ; the PCB holding the file system's lock, or 0
-LOCKIPL:                                ; the IPL it had
+F11$GL_LOCKIPL::                        ; the IPL FIL$UNLOCK puts back
         .LONG   0
 LOCKWQ: .ADDRESS LOCKWQ, LOCKWQ         ; the processes waiting for it, SCH$C_MWAIT
 F11$T_FORMAT:
@@ -178,13 +180,18 @@ MNTPROT:
 ; gives it back. Not twice. The wait, in resource wait, delivers no AST,
 ; so the process takes the lock once it is its turn: an AST queued to it
 ; meanwhile ends the wait, and it waits again at the head of the line.
-; Keeps every register.
+; A process that holds it for an RMS service of its own, stalled at a
+; disk wait (RMS$STALL), ends that service first (RMS$FINISH). Keeps
+; every register.
 FIL$LOCK::
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R4>
-        MFPR    #PR$_IPL, R1
-        SETIPL  #IPL$_SYNCH
         MOVL    SCH$GL_CURPCB, R4
+        CMPL    OWNER, R4
+        BNEQ    5$
+        BSBW    RMS$FINISH
+5$:     MFPR    #PR$_IPL, R1
+        SETIPL  #IPL$_SYNCH
         MOVAQ   LOCKWQ, R0
         TSTL    OWNER
         BEQL    20$
@@ -198,7 +205,7 @@ FIL$LOCK::
         INSQUE  (R4), (R0)              ; an AST ended the wait: at the head
         BRB     10$
 20$:    MOVL    R4, OWNER
-30$:    MOVL    R1, LOCKIPL
+30$:    MOVL    R1, F11$GL_LOCKIPL
         CMPL    R1, #IPL$_ASTDEL
         BGEQ    40$
         MOVL    #IPL$_ASTDEL, R1
@@ -217,7 +224,7 @@ FIL$LOCK::
 FIL$UNLOCK::
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R4>
-        MOVL    LOCKIPL, R1
+        MOVL    F11$GL_LOCKIPL, R1
         SETIPL  #IPL$_SYNCH
         CLRL    OWNER
 10$:    MOVAQ   LOCKWQ, R0
@@ -239,9 +246,9 @@ FIL$UNLOCK::
 ; FIL$READLBLK: R0 = a buffer, R1 = a block count, R2 = an LBN. Reads the
 ; blocks from F11$GL_VCB's disk, with an IO$_READLBLK in F11$AB_IRP to its
 ; driver, the buffer's pages locked, and waits for it while other
-; processes run (IOWAIT), unless it ended at once; above IPL$_ASTDEL, at
-; boot, the PAL reads them
-; at once (DISKIO). R0 = SS$_NORMAL, or the device's error. Holding
+; processes run (FIL$IOWAIT), unless it ended at once; an asynchronous RMS
+; service, on a stack of its own, stalls there instead (RMS$STALL). Above
+; IPL$_ASTDEL, at boot, the PAL reads them at once (DISKIO). R0 = SS$_NORMAL, or the device's error. Holding
 ; FIL$LOCK. Uses R1.
 FIL$READLBLK::
         .JSB_ENTRY
@@ -287,7 +294,11 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
         MOVL    SCH$GL_CURPCB, R4
 20$:    TSTL    IRP$L_IOST1(R3)
         BNEQ    30$
-        BSBW    IOWAIT
+        TSTL    RMS$GL_THREAD
+        BEQL    25$
+        BSBW    RMS$STALL               ; its RMS service returns RMS$_PENDING meanwhile
+        BRB     20$
+25$:    BSBW    FIL$IOWAIT
         BRB     20$
 30$:    MOVZWL  IRP$L_IOST1(R3), R0
 40$:    ENBINT
@@ -309,12 +320,12 @@ LBLK:   .GLOBAL_LABEL                   ; FIL$READLBLK's too
         TSTL    (SP)+
         RSB
 
-; IOWAIT: R4 = the current PCB. Waits in resource wait, SCH$C_MWAIT,
+; FIL$IOWAIT: R4 = the current PCB. Waits in resource wait, SCH$C_MWAIT,
 ; until a disk's request ends (DKDONE), for the file system's request or
 ; one of the process's, without delivering the ASTs that may end it
 ; early: the caller looks again at what it waits for. IPL$_SYNCH. Keeps
 ; every register.
-IOWAIT:
+FIL$IOWAIT::
         .JSB_ENTRY
         PUSHL   R0
         MOVL    #SCH$C_MWAIT, PCB$L_STATE(R4)
@@ -466,7 +477,8 @@ DK$STARTIO::
 ; DKDONE: R3 = a disk's request, done, R5 = its UCB, R0 = its status.
 ; Completes it (IOC$REQCOM), with the byte count in the IOSB if it
 ; succeeded; the device's failure, SS$_DRVERR, counts in UCB$W_ERRCNT.
-; IPL$_SYNCH. Uses R0-R3.
+; The file system's, F11$AB_IRP, goes on with an RMS service stalled for
+; it (RMS$IODONE). IPL$_SYNCH. Uses R0-R3.
 DKDONE:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         BLBC    R0, 10$
@@ -476,11 +488,16 @@ DKDONE:
         BNEQ    20$
         INCW    UCB$W_ERRCNT(R5)
 20$:    CLRL    R1
+        PUSHL   R3
         BSBW    IOC$REQCOM
-        BSBB    IOWAKE
+        MOVAB   F11$AB_IRP, R0
+        CMPL    (SP)+, R0
+        BNEQ    30$
+        BSBW    RMS$IODONE
+30$:    BSBB    IOWAKE
         RSB
 
-; IOWAKE: ends the waits in IOWAIT, as a disk's request has ended, with a
+; IOWAKE: ends the waits in FIL$IOWAIT, as a disk's request has ended, with a
 ; boost, PRI$_IOCOM (SCH$BOOST): each process looks again at what it
 ; waits for, which may be that request. A process deleted meanwhile is
 ; woken too, though its PID finds it no more. IPL$_SYNCH. Keeps every
@@ -534,7 +551,7 @@ DK$FORK::
 ; PCB, R5 = the disk's UCB, R2 = a channel, R7 = a status, or 0 for
 ; rundown and $DASSGN. The device can't stop a request it has, which ends
 ; as it would have; for 0, waits while it has one of the process's on the
-; channel (IOWAIT), as VMS's rundown waits for a channel's I/O: its
+; channel (FIL$IOWAIT), as VMS's rundown waits for a channel's I/O: its
 ; buffer's pages and its IOSB go next. IPL$_SYNCH. Uses R0.
 DK$CANCEL::
         .JSB_ENTRY
@@ -546,7 +563,7 @@ DK$CANCEL::
         BNEQ    90$
         CMPW    IRP$W_CHAN(R0), R2
         BNEQ    90$
-        BSBW    IOWAIT
+        BSBW    FIL$IOWAIT
         BRB     10$
 90$:    RSB
 
