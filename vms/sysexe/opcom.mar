@@ -15,7 +15,9 @@
 ;
 ; The console, OPA0:, is enabled when OPCOM starts, for VMS's classes,
 ; every one but REPLY and SOFTWARE, and says so
-; (docs/adr/0042-opcom-reads-the-operators-mailbox.md).
+; (docs/adr/0042-opcom-reads-the-operators-mailbox.md), unless the
+; system logical name OPC$OPA0_ENABLE is FALSE, as on VMS, where
+; SYLOGICALS.COM defines it: then OPCOM writes nothing on it.
 ; ponytail: the console is the one operator terminal, for those classes;
 ; OPCOM takes OPC$_RQ_RQST's messages, and shows them as messages, not
 ; requests to answer; no REPLY/ENABLE, REPLY/TO, OPERATOR.LOG or node
@@ -28,6 +30,7 @@
         $OPCDEF
         $MSGDEF
         $JPIDEF
+        $LNMDEF
 
 HDR = 38                                ; $SNDOPR's header, before the sender's message
 HDR_USERNAME = 16                       ; its username, 12 characters padded with blanks
@@ -47,6 +50,13 @@ L:      .ASCIC  TEXT
         .PSECT  DATA, NOEXE, WRT, LONG
 MBX:    .ASCID  "_MBA2:"
 CONSOLE:.ASCID  "_OPA0:"
+SYSTAB: .ASCID  "LNM$SYSTEM"
+OPA0ENA:.ASCID  "OPC$OPA0_ENABLE"
+ENAITEM:.WORD   1, LNM$_STRING          ; $TRNLNM's item: its first character
+        .ADDRESS ENAVALUE, 0
+        .LONG   0
+ENAVALUE:                               ; F if OPC$OPA0_ENABLE is FALSE: the console is no operator's
+        .BLKB   1
 CHAN:   .LONG   0
 IOSB:   .BLKQ   1
 USERNAME:                               ; OPCOM's own, who enabled the console
@@ -67,6 +77,10 @@ BUF:    .BLKB   MAXMSG                  ; a message from MBA2:
         $ASSIGN_S DEVNAM=MBX, CHAN=CHAN
         BLBC    R0, 90$
         $GETJPIW_S ITMLST=USERITEM
+        $TRNLNM_S TABNAM=SYSTAB, LOGNAM=OPA0ENA, ITMLST=ENAITEM
+        BICB2   #^X20, ENAVALUE         ; upper case
+        CMPB    ENAVALUE, #^A/F/
+        BEQL    10$
         BSBW    ENABLE
 10$:    $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF, P2=#MAXMSG
         BLBC    R0, 90$
@@ -98,10 +112,12 @@ ENABLE:
         BRW     SEND
 
 ; MESSAGE: R6 = the size of the message in BUF. Writes it on the
-; console if it is $SNDOPR's, an OPC$_RQ_RQST for one of the console's
+; console, if OPC$OPA0_ENABLE isn't FALSE and it is $SNDOPR's, an OPC$_RQ_RQST for one of the console's
 ; classes: who sent it, then its text. Uses R0-R5.
 MESSAGE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        CMPB    ENAVALUE, #^A/F/
+        BEQL    90$
         CMPL    R6, #HDR+OPC$L_MS_TEXT
         BLSSU   90$
         CMPW    BUF, #MSG$_OPRQST

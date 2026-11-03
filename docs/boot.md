@@ -236,7 +236,11 @@ interpreter. It is linked high in P1, which tells the executive it is one
   operator terminal, `Operator _OPA0: has been enabled, username SYSTEM`,
   and for which classes of messages, each under OPCOM's banner,
   `%%%%%%%%%%%  OPCOM  21-OCT-2026 10:00:00.00  %%%%%%%%%%%`. Then it
-  waits for a message in its mailbox. The ramdisk also holds TCP/IP's two
+  waits for a message in its mailbox. If the system logical name
+  `OPC$OPA0_ENABLE` is `FALSE`, as VMS's `SYLOGICALS.COM` can define
+  it, OPCOM leaves the console alone: no banners at boot and no
+  messages later. A `DEFINE/SYSTEM/NOLOG OPC$OPA0_ENABLE FALSE` before
+  the `RUN` does it. The ramdisk also holds TCP/IP's two
   files: the hosts database, `TCPIP$HOST.DAT`, which the first `TCPIP
   SET HOST` or `SHOW HOST` makes, and the saved network configuration,
   `TCPIP$CONFIG.DAT`. So the only hosts a boot knows, and its fixed
@@ -262,8 +266,10 @@ interpreter. It is linked high in P1, which tells the executive it is one
   its label, `DISMOUNT DKB0:` dismounts it, and `MOUNT/SYSTEM DKB0:
   label`, which must be given the label, mounts it for every process.
   Each `MOUNT` prints `%MOUNT-I-MOUNTED, label mounted on _DKB0:`. On a
-  blank disk the first prints `%SYSTEM-W-NOHOMEBLK` instead, and the
-  disk stays unmounted. Its last
+  blank disk the first prints `%SYSTEM-W-NOHOMEBLK` instead, `IF .NOT.
+  $STATUS THEN GOTO READY` skips the rest, and the disk stays
+  unmounted. Last, it prints `  The system is up. Press RETURN to log
+  in.`, since the console shows `Username:` only after a key. Its last
   command is `LOGOUT`, which, with no terminal, prints
   `  SYSTEM       job terminated at  9-OCT-2026 10:00:00.00`, as VMS's STARTUP
   does, and deletes the process.

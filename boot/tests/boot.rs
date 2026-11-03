@@ -60,7 +60,7 @@ const BOOT: Phase = Phase {
         "\nOperator _OPA0: has been enabled, username SYSTEM\n",
         "Operator status for operator _OPA0:\nCENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,\n",
         "%SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume",
-        "  SYSTEM       job terminated at ",
+        "\n  The system is up. Press RETURN to log in.\n  SYSTEM       job terminated at ",
         "  vaxpunk, an OpenVMS clone for arm64. Log in as SYSTEM, password MANAGER\n\nUsername: NOBODY\nPassword: \nUser authorization failure\n",
         "\tWelcome to vaxpunk arm64 Operating System, Version V0.1\n\t1 failure since last successful login\n",
     ],
