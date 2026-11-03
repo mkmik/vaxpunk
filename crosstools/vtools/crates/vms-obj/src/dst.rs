@@ -275,8 +275,8 @@ impl Record {
 /// an image's DST.
 pub fn parse(dst: &[u8]) -> Result<Vec<Record>, Error> {
     let mut records = Vec::new();
-    let mut r = Reader(dst);
-    while r.0.len() >= 2 && r.0[..2] != [0, 0] {
+    let mut r = Reader(&dst[..size(dst)?]);
+    while !r.0.is_empty() {
         // DST$W_LENGTH counts the record's bytes but one, as VAX's
         // DST$B_LENGTH did: the bytes after a 1-byte length.
         let total = usize::from(u16::read(&mut r)?) + 1;
@@ -332,8 +332,14 @@ pub fn parse(dst: &[u8]) -> Result<Vec<Record>, Error> {
 /// length of 0.
 pub fn size(dst: &[u8]) -> Result<usize, Error> {
     let mut at = 0;
-    while let Some(len) = dst.get(at..at + 2) {
-        match usize::from(u16::from_le_bytes([len[0], len[1]])) {
+    while at < dst.len() {
+        // A last 0 byte is the end, as a zero length would be.
+        let len = match dst.get(at..at + 2) {
+            Some(len) => [len[0], len[1]],
+            None if dst[at] == 0 => break,
+            None => return Err(Error::Truncated),
+        };
+        match usize::from(u16::from_le_bytes(len)) {
             0 => break,
             1..=2 => return Err(Error::Invalid("DST record length")),
             n if at + n + 1 > dst.len() => return Err(Error::Truncated),

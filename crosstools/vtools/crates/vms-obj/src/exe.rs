@@ -760,8 +760,10 @@ impl Image {
         };
         let debug = self.debug.as_ref();
         if let Some(dst) = debug.map(|d| &d.dst).filter(|d| !d.is_empty()) {
-            eihs.dstvbn = append(&mut file, dst);
-            eihs.dstsize = dst.len().next_multiple_of(BLOCK) as u32;
+            // A zero length ends the records.
+            let ended = [&dst[..], &[0, 0]].concat();
+            eihs.dstvbn = append(&mut file, &ended);
+            eihs.dstsize = ended.len().next_multiple_of(BLOCK) as u32;
         }
         if let Some(modules) = debug.map(|d| &d.modules).filter(|m| !m.is_empty()) {
             let mut dmt = Vec::new();
@@ -1310,6 +1312,26 @@ mod tests {
             Err(Error::Invalid("DMT entry")),
             "past the DST"
         );
+
+        // A DST that fills its blocks still ends with a zero length.
+        for len in [510, 511, 512] {
+            let mut image = sample(1);
+            let dst = crate::dst::write(&[crate::dst::Record::Other {
+                kind: 1,
+                body: vec![7; len - 4],
+            }]);
+            image.debug = Some(Debug {
+                dst,
+                ..Debug::default()
+            });
+            let bytes = image.write();
+            let eihs = u32_at(&bytes, 20).unwrap() as usize;
+            let at = (u32_at(&bytes, eihs + 8).unwrap() as usize - 1) * BLOCK;
+            let size = (len + 2).next_multiple_of(BLOCK) as u32;
+            assert_eq!(u32_at(&bytes, eihs + 12), Ok(size), "DSTSIZE");
+            assert_eq!(bytes[at + len..at + len + 2], [0, 0]);
+            assert_eq!(Image::parse(&bytes), Ok(image));
+        }
 
         // /TRACEBACK: no LNKDEBUG. /DEBUG without DST records: no tables.
         let mut image = sample(2);
