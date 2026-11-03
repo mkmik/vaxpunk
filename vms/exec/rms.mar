@@ -55,13 +55,22 @@
 ; as many and as big as the RAB, the process's defaults or the system's
 ; say, which SET RMS_DEFAULT sets (RMS$SETDEF).
 ;
+; Each FAB and RAB service takes an error and a success completion
+; routine after its block, err and suc, as VMS's do: the one its status
+; calls for gets an AST in the caller's mode, with the block as its
+; parameter (RMS$CMPL). A service is done when it returns, RAB$M_ASY or
+; not, as VMS's is when it needn't wait, so $WAIT only gives its status.
+;
 ; ponytail: the services run in kernel mode holding the file system's
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
 ; file; one writer of any other file; no bucket locks, which FIL$LOCK
-; makes needless; no concealed devices, ASTs or completion routines. $SEARCH finds its place again from the resultant
-; string it made last, as VMS's XQP does with FIB$L_WCC, so a wildcard
-; $SEARCH needs one; VMS's RMS keeps its own copy.
+; makes needless; no concealed devices. RAB$M_ASY never gives
+; RMS$_PENDING: a service waits for its disk, holding FIL$LOCK, until
+; RMS can stall one and go on from the disk's completion, as VMS's does
+; (t8y:/rms/async#asynchronous). $SEARCH finds its place again from the
+; resultant string it made last, as VMS's XQP does with FIB$L_WCC, so a
+; wildcard $SEARCH needs one; VMS's RMS keeps its own copy.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -86,7 +95,7 @@
         $JPIDEF
         $PRVDEF
 
-        .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC
+        .EXTERNAL SCH$GL_CURPCB, EXE$ALONONPAGED, EXE$DEANONPGDSIZ, EXE$PROBER_DSC, EXE$DCLAST
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$MATCH, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CHKALLOC, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
@@ -1702,16 +1711,18 @@ SYSDFLT:
         RSB
 
 ; FABDONE: R0 = a FAB service's status, R10 = the FAB. Puts it in
-; FAB$L_STS, unless the FAB isn't one, and returns it. FAB$L_STV is
-; SS$_NOSUCHFILE for RMS$_DNF, as VMS's, else 0.
-        .MACRO  FABDONE ?L
+; FAB$L_STS, unless the FAB isn't one, and returns it, having queued the
+; caller its completion routine (RMS$CMPL). FAB$L_STV is SS$_NOSUCHFILE
+; for RMS$_DNF, as VMS's, else 0.
+        .MACRO  FABDONE ?L, ?M
         CMPL    R0, #RMS$_FAB
         BEQL    L
         MOVL    R0, FAB$L_STS(R10)
         CLRL    FAB$L_STV(R10)
         CMPL    R0, #RMS$_DNF
-        BNEQ    L
+        BNEQ    M
         MOVL    #SS$_NOSUCHFILE, FAB$L_STV(R10)
+M:      BSBW    RMS$CMPL
 L:      BSBW    FIL$UNLOCK
         RET
         .ENDM   FABDONE
@@ -1721,11 +1732,44 @@ L:      BSBW    FIL$UNLOCK
         CMPL    R0, #RMS$_RAB
         BEQL    L
         MOVL    R0, RAB$L_STS(R10)
+        BSBW    RMS$CMPL
 L:      BSBW    FIL$UNLOCK
         RET
         .ENDM   RABDONE
 
-; $PARSE fab: parses the FAB's file specification, with its default one,
+; RMS$CMPL: R0 = a service's status, which its FAB or RAB, R10, holds in
+; STS; AP = the service's arguments, fab or rab, err, suc. Queues the
+; caller an AST to err if the status is an error, to suc if not, in the
+; caller's mode, with the FAB or RAB as its parameter, as VMS's RMS calls
+; its completion routines; none if that argument is 0 or not given. If
+; the AST can't be queued, STS is RMS$_CDA and STV the status. R0 = the
+; status STS holds. Uses R1.
+RMS$CMPL:
+        .JSB_ENTRY
+        MOVZBL  (AP), R1
+        BLBS    R0, 10$
+        CMPL    R1, #2
+        BLSSU   90$
+        MOVL    8(AP), R1
+        BRB     20$
+10$:    CMPL    R1, #3
+        BLSSU   90$
+        MOVL    12(AP), R1
+20$:    BEQL    90$
+        PUSHL   R0
+        PUSHL   #0                      ; the caller's mode
+        PUSHL   R10
+        PUSHL   R1
+        CALLS   #3, G^EXE$DCLAST
+        MOVL    (SP)+, R1
+        BLBS    R0, 80$
+        MOVL    R1, FAB$L_STV(R10)      ; a RAB's STS and STV are there too
+        MOVL    #RMS$_CDA, R1
+        MOVL    R1, FAB$L_STS(R10)
+80$:    MOVL    R1, R0
+90$:    RSB
+
+; $PARSE fab, err, suc: parses the FAB's file specification, with its default one,
 ; into its NAM block: the expanded string, if the NAM block has an area
 ; for it, its parts, its directory's ID, NAM$M_WILDCARD, and
 ; NAM$M_SEARCH_LIST if its device is a search list, whose first string
@@ -1775,7 +1819,7 @@ L:      BSBW    FIL$UNLOCK
 20$:    MOVL    R9, R0
 90$:    FABDONE
 
-; $SEARCH fab: finds the next file the expanded string $PARSE left in the
+; $SEARCH fab, err, suc: finds the next file the expanded string $PARSE left in the
 ; FAB's NAM block names, and puts its resultant string, its parts, its
 ; file ID and its directory's there. RMS$_FNF if there is none at all,
 ; then RMS$_NMF when there are no more, and the next $SEARCH starts
@@ -1850,7 +1894,7 @@ L:      BSBW    FIL$UNLOCK
 85$:    MOVL    #SS$_ACCVIO, R0
 90$:    FABDONE
 
-; $OPEN fab: opens the file the FAB names, for FAB$B_FAC's access, $GET's
+; $OPEN fab, err, suc: opens the file the FAB names, for FAB$B_FAC's access, $GET's
 ; if it gives none: puts its IFI in the FAB, with its organization,
 ; record format and attributes, maximum record size, allocation, bucket
 ; size, VFC header size and default extension, and a relative file's
@@ -2741,7 +2785,7 @@ ORGFLUSH:
 30$:    BSBW    IDX$FLUSH
         RSB
 
-; $CLOSE fab: closes the file $OPEN or $CREATE opened, which first gets
+; $CLOSE fab, err, suc: closes the file $OPEN or $CREATE opened, which first gets
 ; the owner and protection of the FAB's protection XAB, if it has one
 ; (SETPRO). The file is closed even if that fails, with SETPRO's status.
         .ENTRY  EXE$CLOSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -2759,7 +2803,7 @@ ORGFLUSH:
         MOVL    R6, R0
 90$:    FABDONE
 
-; $DISPLAY fab: gives the FAB and its XABs the attributes of the file
+; $DISPLAY fab, err, suc: gives the FAB and its XABs the attributes of the file
 ; it opened, as $OPEN does. R0 = RMS$_NORMAL, RMS$_IFI, or RMS$XABOUT's
 ; error.
         .ENTRY  EXE$DISPLAY, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -2862,7 +2906,7 @@ RABIFAB:
 80$:    MOVL    #RMS$_ISI, R0
 90$:    RSB
 
-; $CONNECT rab: connects the RAB to the file its FAB opened: its stream
+; $CONNECT rab, err, suc: connects the RAB to the file its FAB opened: its stream
 ; starts at the first record, along key RAB$B_KRF in an indexed file, or
 ; with RAB$M_EOF past the last. RMS$_FAB if the RAB's FAB isn't one,
 ; RMS$_IFI if it opened no file, RMS$_CCR if the RAB is connected to it
@@ -2902,7 +2946,7 @@ RABIFAB:
 80$:    MOVL    #RMS$_FAB, R0
 90$:    RABDONE
 
-; $DISCONNECT rab: disconnects the RAB from its file, writing what its
+; $DISCONNECT rab, err, suc: disconnects the RAB from its file, writing what its
 ; buffers hold that the file doesn't; its record locks go.
         .ENTRY  EXE$DISCONNECT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
@@ -2955,56 +2999,67 @@ L4:     RABDONE
 L2:     RABDONE
         .ENDM   BLOCKIO
 
-; $GET rab: reads a record into the RAB's user buffer, RAB$W_USZ bytes
+; $GET rab, err, suc: reads a record into the RAB's user buffer, RAB$W_USZ bytes
 ; at RAB$L_UBF, as much of it as fits: RAB$L_RBF points at it and
 ; RAB$W_RSZ is its size, RMS$_RTB if it didn't all fit. Which record
 ; RAB$B_RAC says: the next, by key or relative record number, or by RFA.
 ; It becomes the current record, and its RFA goes in RAB$W_RFA.
         RECORD  GET, SEQ$GET, REL$GET, IDX$GET
 
-; $FIND rab: finds a record as $GET does, without reading it.
+; $FIND rab, err, suc: finds a record as $GET does, without reading it.
         RECORD  FIND, SEQ$FIND, REL$FIND, IDX$FIND
 
-; $PUT rab: writes the record RAB$L_RBF points at, RAB$W_RSZ bytes: at
+; $PUT rab, err, suc: writes the record RAB$L_RBF points at, RAB$W_RSZ bytes: at
 ; the end of a sequential file, at the relative record number RAB$L_KBF
 ; points at, or in key order in an indexed file.
         RECORD  PUT, SEQ$PUT, REL$PUT, IDX$PUT
 
-; $UPDATE rab: rewrites the current record with the one RAB$L_RBF points
+; $UPDATE rab, err, suc: rewrites the current record with the one RAB$L_RBF points
 ; at.
         RECORD  UPDATE, SEQ$UPDATE, REL$UPDATE, IDX$UPDATE
 
-; $DELETE rab: deletes the current record of a relative or indexed file;
+; $DELETE rab, err, suc: deletes the current record of a relative or indexed file;
 ; RMS$_IOP for a sequential one.
         RECORD  DELETE, IOP, REL$DELETE, IDX$DELETE
 
-; $TRUNCATE rab: ends a sequential file at its current record; RMS$_IOP
+; $TRUNCATE rab, err, suc: ends a sequential file at its current record; RMS$_IOP
 ; for the others.
         RECORD  TRUNCATE, SEQ$TRUNCATE, IOP, IOP
 
-; $REWIND rab: the stream goes back to the first record.
+; $REWIND rab, err, suc: the stream goes back to the first record.
         RECORD  REWIND, SEQ$REWIND, REL$REWIND, IDX$REWIND, BIO=SEQ$REWIND
 
-; $FLUSH rab: writes what RMS's buffers hold that the file doesn't, and
+; $FLUSH rab, err, suc: writes what RMS's buffers hold that the file doesn't, and
 ; the file's header.
         RECORD  FLUSH, FLUSH, FLUSH, FLUSH, BIO=FLUSH
 
-; $FREE rab: gives up every record lock the stream holds; RMS$_RNL if
-; it holds none (RMS$UNLOCKALL). $RELEASE rab: gives up its lock on the
+; $FREE rab, err, suc: gives up every record lock the stream holds; RMS$_RNL if
+; it holds none (RMS$UNLOCKALL). $RELEASE rab, err, suc: gives up its lock on the
 ; record at RAB$W_RFA; RMS$_RNL if it doesn't hold that (RMS$UNLOCKREC).
-; Only an indexed file's records are locked. $WAIT rab: every service is
-; done when it returns.
+; Only an indexed file's records are locked.
         RECORD  FREE, RNL, RNL, RECFREE, BIO=RNL
         RECORD  RELEASE, RNL, RNL, RECRELEASE, BIO=RNL
-        RECORD  WAIT, NORMAL, NORMAL, NORMAL, BIO=NORMAL
 
-; $READ rab, $WRITE rab, $SPACE rab: block I/O (rmsseq.mar).
+; $WAIT rab, err, suc, err, suc: waits for the RAB's last service, which is done,
+; as every service is when it returns, RAB$M_ASY or not. R0 = its
+; status, which RAB$L_STS holds, or RMS$_NORMAL if that is 0, as VMS's
+; $WAIT does when its service ended at once.
+        .ENTRY  EXE$WAIT, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        BSBW    FIL$LOCK
+        BSBW    RABCHK
+        BLBC    R0, 90$
+        MOVL    RAB$L_STS(R10), R0
+        BNEQ    90$
+        MOVL    #RMS$_NORMAL, R0
+90$:    RABDONE
+
+; $READ, $WRITE and $SPACE rab, err, suc: block I/O (rmsseq.mar).
         BLOCKIO READ
         BLOCKIO WRITE
         BLOCKIO SPACE
 
-; IOP, RNL, NORMAL, FLUSH, RECFREE, RECRELEASE: the record services'
-; routines that only return RMS$_IOP, RMS$_RNL or RMS$_NORMAL, or call
+; IOP, RNL, FLUSH, RECFREE, RECRELEASE: the record services' routines
+; that only return RMS$_IOP or RMS$_RNL, or call
 ; ORGFLUSH, RMS$UNLOCKALL or RMS$UNLOCKREC.
 RECFREE:
         .JSB_ENTRY
@@ -3028,11 +3083,6 @@ RNL:
         MOVL    #RMS$_RNL, R0
         RSB
 
-NORMAL:
-        .JSB_ENTRY
-        MOVL    #RMS$_NORMAL, R0
-        RSB
-
 FLUSH:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R9, R11>
         PUSHL   R10
@@ -3040,7 +3090,7 @@ FLUSH:
         MOVL    (SP)+, R10
         RSB
 
-; $CREATE fab: makes a new file, as the FAB names it, with its
+; $CREATE fab, err, suc: makes a new file, as the FAB names it, with its
 ; organization, record format and attributes, maximum record size, VFC
 ; header size, bucket size, default extension and allocation, FAB$L_ALQ
 ; blocks, and opens it for $PUT and the access FAB$B_FAC gives: its IFI
@@ -3331,7 +3381,7 @@ CRENTER:
 90$:    POPR    #^M<R7, R8>
         RSB
 
-; $ERASE fab: deletes the file the FAB names, its highest version unless
+; $ERASE fab, err, suc: deletes the file the FAB names, its highest version unless
 ; the specification gives one: its directory entry, its header and its
 ; blocks. With FAB$M_NAM in FAB$L_FOP, the file its NAM block's resultant
 ; string names, which $SEARCH found, and the NAM block's next $SEARCH

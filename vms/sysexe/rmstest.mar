@@ -41,6 +41,12 @@ LINEDSC:
 HEX:    .ASCII  "0123456789ABCDEF"
 ; What SAY adds.
 T_DONE:  .ASCIC  "RMSTEST done"
+T_ERR:   .ASCIC  " ERR"
+T_SUC:   .ASCIC  " SUC"
+T_BAD:   .ASCIC  " BAD"
+T_WAIT:  .ASCIC  "WAIT"
+T_DISCONNECT:
+        .ASCIC  "DISCONNECT"
 T_IDX:   .ASCIC  "IDX "
 T_PUTS:  .ASCIC  "PUTS"
 T_KEY:   .ASCIC  "KEY "
@@ -140,6 +146,11 @@ MBNAME: .ASCIC  "MB.SEQ"
 MREC:   .ASCII  "multiblock record 000 and some more bytes to fill it out, "
         .ASCII  "as many as its number says"
 MBRFA:  .BLKW   9                       ; the RFAs of records 1, 77 and 150
+ASTNAME:
+        .ASCIC  "AST.SEQ"
+        .ALIGN  LONG
+ASTRAN: .LONG   0                       ; the completion routine that ran: T_ERR or T_SUC
+ASTPRM: .LONG   0                       ; and its parameter
 
 ; The records each sequential file gets, .ASCIC; FIX files' are 21
 ; bytes, the others' as they are.
@@ -218,6 +229,7 @@ RELNUMS:                                ; where REL.REL's records go
         BRB     50$
 60$:    BSBW    VARKEY
         BSBW    MBTEST
+        BSBW    ASTTEST
         SAY     DONE
         BSBW    OUT
         MOVL    #RMS$_NORMAL, R0
@@ -649,6 +661,134 @@ MBTEST:
         CLRB    RAB+RAB$B_MBF
         BICL2   #RAB$M_RAH, RAB+RAB$L_ROP
         RSB
+
+; ASTTEST: completion routines on AST.SEQ: each service's line says which
+; ran, ERR or SUC, after its status, none with no routine for it; then
+; RAB$M_ASY $GETs, each with the status of the $WAIT after it, which the
+; service may have returned RMS$_PENDING before.
+ASTTEST:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        SAY     SEQ
+        MOVZBL  ASTNAME, R1
+        MOVAB   ASTNAME+1, R2
+        BSBW    ADDSTR
+        BSBW    OUT
+        MOVAB   ASTNAME+1, FAB+FAB$L_FNA
+        MOVB    ASTNAME, FAB+FAB$B_FNS
+        MOVB    #FAB$C_SEQ, FAB+FAB$B_ORG
+        MOVB    #FAB$C_VAR, FAB+FAB$B_RFM
+        MOVB    #FAB$M_CR, FAB+FAB$B_RAT
+        CLRW    FAB+FAB$W_MRS
+        CLRB    FAB+FAB$B_FSZ
+        MOVB    #FAB$M_PUT!FAB$M_GET, FAB+FAB$B_FAC
+        $OPEN   FAB=FAB, ERR=ERRAST, SUC=SUCAST ; not there yet
+        SAY     OPEN
+        BSBW    ASTFAB
+        $CREATE FAB=FAB, ERR=ERRAST, SUC=SUCAST
+        SAY     CREATE
+        BSBW    ASTFAB
+        $CONNECT RAB=RAB, SUC=SUCAST
+        SAY     CONNECT
+        BSBW    ASTRAB
+        MOVAB   RECS+1, RAB+RAB$L_RBF
+        MOVZBL  RECS, R0
+        MOVW    R0, RAB+RAB$W_RSZ
+        $PUT    RAB=RAB, ERR=ERRAST     ; no routine for success
+        SAY     PUT
+        BSBW    ASTRAB
+        $PUT    RAB=RAB, SUC=SUCAST
+        SAY     PUT
+        BSBW    ASTRAB
+        $REWIND RAB=RAB, ERR=ERRAST, SUC=SUCAST
+        SAY     REWIND
+        BSBW    ASTRAB
+        BISL2   #RAB$M_ASY, RAB+RAB$L_ROP
+        MOVL    #3, R3                  ; two records, then the end
+10$:    $GET    RAB=RAB, ERR=ERRAST, SUC=SUCAST
+        $WAIT   RAB=RAB
+        SAY     GET
+        MOVAB   RAB, R1
+        BSBW    ASTS
+        BLBC    R0, 20$
+        SAY     SP
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        BSBW    ADDDEC
+        SAY     SP
+        MOVZWL  RAB+RAB$W_RSZ, R1
+        MOVL    RAB+RAB$L_RBF, R2
+        BSBW    ADDREC
+20$:    BSBW    OUT
+        SOBGTR  R3, 10$
+        $WAIT   RAB=RAB                 ; again: the last one's status
+        SAY     WAIT
+        BSBW    ASTRAB
+        BICL2   #RAB$M_ASY, RAB+RAB$L_ROP
+        $DISCONNECT RAB=RAB, ERR=ERRAST, SUC=SUCAST
+        SAY     DISCONNECT
+        BSBW    ASTRAB
+        $CLOSE  FAB=FAB, ERR=ERRAST, SUC=SUCAST
+        SAY     CLOSE
+        BSBW    ASTFAB
+        RSB
+
+; ASTFAB, ASTRAB: R0 = a FAB's or the RAB's service's status. Prints it
+; and what ASTS adds.
+ASTFAB:
+        .JSB_ENTRY
+        MOVAB   FAB, R1
+        BSBW    ASTS
+        BSBW    OUT
+        RSB
+
+ASTRAB:
+        .JSB_ENTRY
+        MOVAB   RAB, R1
+        BSBW    ASTS
+        BSBW    OUT
+        RSB
+
+; ASTS: R0 = a status, R1 = its FAB or RAB. Adds the status, the
+; completion routine that ran, if one did, and BAD if its parameter
+; wasn't the block; then forgets it. Keeps R0. A routine's AST is queued
+; when its service is done, but VMS may deliver it later, so ASTS first
+; hibernates until an AST of its own, queued after it, wakes it.
+ASTS:
+        .JSB_ENTRY  SCRATCH=<R2>
+        PUSHL   R0
+        PUSHL   R1
+        $DCLAST_S ASTADR=WAKEAST
+        $HIBER_S
+        MOVL    4(SP), R0
+        BSBW    ADDSTS
+        MOVL    ASTRAN, R2
+        BEQL    20$
+        MOVZBL  (R2)+, R1
+        BSBW    ADDSTR
+        CMPL    ASTPRM, (SP)
+        BEQL    20$
+        SAY     BAD
+20$:    CLRL    ASTRAN
+        CLRL    ASTPRM
+        MOVL    (SP)+, R1
+        MOVL    (SP)+, R0
+        RSB
+
+; ERRAST, SUCAST: completion routines, called as ASTs with the FAB or
+; RAB. Keep which ran and its parameter.
+        .ENTRY  ERRAST, ^M<>
+        MOVAB   T_ERR, ASTRAN
+        MOVL    4(AP), ASTPRM
+        RET
+
+        .ENTRY  SUCAST, ^M<>
+        MOVAB   T_SUC, ASTRAN
+        MOVL    4(AP), ASTPRM
+        RET
+
+; WAKEAST: ASTS's AST, which wakes the process.
+        .ENTRY  WAKEAST, ^M<>
+        $WAKE_S
+        RET
 
 ; MBGET: R1 = where in MBRFA an RFA is. $GETs the record there, and
 ; prints what GET does.

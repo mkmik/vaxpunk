@@ -208,5 +208,6 @@ checks; it dispatches record services to the organization's module, and
 Alpha and on vaxpunk and must print the same
 ([PRD-0008](../../prd/0008-rms-record-and-indexed-files.md)).
 Missing: executive mode, `$RENAME`, `$ENTER`, `$REMOVE`, `$EXTEND`,
-non-disk devices, concealed devices, ASTs (`t8y:/rms/async`) and sharing
+non-disk devices, concealed devices, asynchronous services
+(`t8y:/rms/async`) and sharing
 (`t8y:/rms/sharing`).
