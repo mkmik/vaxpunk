@@ -60,7 +60,9 @@ $ DEFINE/SYSTEM/NOLOG SYS$DISK SYS$SYSROOT:
 $ ! OPCOM, the operator communication manager, as VMS's STARTUP starts
 $ ! it, at priority 6: a process of its own that writes the operators'
 $ ! messages, from REQUEST and the system, on the console, which it
-$ ! enables as an operator terminal.
+$ ! enables as an operator terminal. To keep the console free of them,
+$ ! as VMS's SYLOGICALS.COM can, define this before it starts:
+$ !   DEFINE/SYSTEM/NOLOG OPC$OPA0_ENABLE FALSE
 $ RUN/DETACHED/PRIORITY=6/PROCESS_NAME=OPCOM SYS$SYSTEM:OPCOM
 $ ! The users, SYSUAF.DAT, which LOGINOUT reads, AUTHORIZE and SET
 $ ! PASSWORD change: a copy on the ramdisk, which they can write, SYSTEM's
@@ -89,8 +91,14 @@ $ ! Last, it mounts the data disk, which nothing at boot needs, if an
 $ ! INITIALIZE DKB0: made a volume there, whatever its label: a
 $ ! MOUNT/OVERRIDE=IDENTIFICATION, STARTUP's own, finds the label, then
 $ ! MOUNT/SYSTEM, which must be given it, mounts it for every process.
-$ ! On a blank disk, MOUNT fails with NOHOMEBLK, and the procedure ends.
+$ ! On a blank disk, MOUNT fails with NOHOMEBLK, and it skips the rest.
 $ MOUNT/OVERRIDE=IDENTIFICATION DKB0:
+$ IF .NOT. $STATUS THEN GOTO READY
 $ LABEL = F$GETDVI("DKB0:", "VOLNAM")
 $ DISMOUNT DKB0:
 $ MOUNT/SYSTEM DKB0: 'LABEL'
+$ READY:
+$ ! The console shows Username: only after a key, as VMS's does, which
+$ ! nothing else on it says.
+$ WRITE SYS$OUTPUT ""
+$ WRITE SYS$OUTPUT "  The system is up. Press RETURN to log in."
