@@ -1437,106 +1437,125 @@ $$N = $$N + 1
         .BLKB   80                      ; RLF to the end
         .ENDM   $NAM
 
-; The RMS services, which take the block's address: $OPEN, $CREATE,
-; $CLOSE, $ERASE, $PARSE, $SEARCH, $DISPLAY FAB=fab, and $CONNECT,
-; $DISCONNECT, $GET, $PUT, $FIND, $UPDATE, $DELETE, $TRUNCATE, $REWIND,
-; $FLUSH, $READ, $WRITE, $SPACE, $FREE, $RELEASE, $WAIT RAB=rab.
-        .MACRO  $RMSCALL NAME, BLOCK
-        PUSHAB  BLOCK
+; The RMS services, which take the block's address and, as VMS's, an
+; error and a success completion routine: $OPEN, $CREATE, $CLOSE,
+; $ERASE, $PARSE, $SEARCH, $DISPLAY FAB=fab, and $CONNECT, $DISCONNECT,
+; $GET, $PUT, $FIND, $UPDATE, $DELETE, $TRUNCATE, $REWIND, $FLUSH,
+; $READ, $WRITE, $SPACE, $FREE, $RELEASE, $WAIT RAB=rab, each with
+; ERR=routine and SUC=routine if it wants them.
+        .MACRO  $RMSCALL NAME, BLOCK, ERR, SUC
         .EXTERNAL SYS$'NAME
+        .IF     NOT_BLANK <SUC>
+        PUSHAB  SUC
+        .IF     BLANK <ERR>
+        PUSHL   #0
+        .IFF
+        PUSHAB  ERR
+        .ENDC
+        PUSHAB  BLOCK
+        CALLS   #3, G^SYS$'NAME
+        .IFF
+        .IF     NOT_BLANK <ERR>
+        PUSHAB  ERR
+        PUSHAB  BLOCK
+        CALLS   #2, G^SYS$'NAME
+        .IFF
+        PUSHAB  BLOCK
         CALLS   #1, G^SYS$'NAME
+        .ENDC
+        .ENDC
         .ENDM   $RMSCALL
 
-        .MACRO  $OPEN    FAB
-        $RMSCALL OPEN, FAB
+        .MACRO  $OPEN FAB, ERR, SUC
+        $RMSCALL OPEN, FAB, <ERR>, <SUC>
         .ENDM   $OPEN
 
-        .MACRO  $CREATE  FAB
-        $RMSCALL CREATE, FAB
+        .MACRO  $CREATE FAB, ERR, SUC
+        $RMSCALL CREATE, FAB, <ERR>, <SUC>
         .ENDM   $CREATE
 
-        .MACRO  $CLOSE   FAB
-        $RMSCALL CLOSE, FAB
+        .MACRO  $CLOSE FAB, ERR, SUC
+        $RMSCALL CLOSE, FAB, <ERR>, <SUC>
         .ENDM   $CLOSE
 
-        .MACRO  $ERASE   FAB
-        $RMSCALL ERASE, FAB
+        .MACRO  $ERASE FAB, ERR, SUC
+        $RMSCALL ERASE, FAB, <ERR>, <SUC>
         .ENDM   $ERASE
 
-        .MACRO  $PARSE   FAB
-        $RMSCALL PARSE, FAB
+        .MACRO  $PARSE FAB, ERR, SUC
+        $RMSCALL PARSE, FAB, <ERR>, <SUC>
         .ENDM   $PARSE
 
-        .MACRO  $SEARCH  FAB
-        $RMSCALL SEARCH, FAB
+        .MACRO  $SEARCH FAB, ERR, SUC
+        $RMSCALL SEARCH, FAB, <ERR>, <SUC>
         .ENDM   $SEARCH
 
-        .MACRO  $DISPLAY FAB
-        $RMSCALL DISPLAY, FAB
+        .MACRO  $DISPLAY FAB, ERR, SUC
+        $RMSCALL DISPLAY, FAB, <ERR>, <SUC>
         .ENDM   $DISPLAY
 
-        .MACRO  $CONNECT RAB
-        $RMSCALL CONNECT, RAB
+        .MACRO  $CONNECT RAB, ERR, SUC
+        $RMSCALL CONNECT, RAB, <ERR>, <SUC>
         .ENDM   $CONNECT
 
-        .MACRO  $DISCONNECT RAB
-        $RMSCALL DISCONNECT, RAB
+        .MACRO  $DISCONNECT RAB, ERR, SUC
+        $RMSCALL DISCONNECT, RAB, <ERR>, <SUC>
         .ENDM   $DISCONNECT
 
-        .MACRO  $GET     RAB
-        $RMSCALL GET, RAB
+        .MACRO  $GET RAB, ERR, SUC
+        $RMSCALL GET, RAB, <ERR>, <SUC>
         .ENDM   $GET
 
-        .MACRO  $PUT     RAB
-        $RMSCALL PUT, RAB
+        .MACRO  $PUT RAB, ERR, SUC
+        $RMSCALL PUT, RAB, <ERR>, <SUC>
         .ENDM   $PUT
 
-        .MACRO  $FIND    RAB
-        $RMSCALL FIND, RAB
+        .MACRO  $FIND RAB, ERR, SUC
+        $RMSCALL FIND, RAB, <ERR>, <SUC>
         .ENDM   $FIND
 
-        .MACRO  $UPDATE  RAB
-        $RMSCALL UPDATE, RAB
+        .MACRO  $UPDATE RAB, ERR, SUC
+        $RMSCALL UPDATE, RAB, <ERR>, <SUC>
         .ENDM   $UPDATE
 
-        .MACRO  $DELETE  RAB
-        $RMSCALL DELETE, RAB
+        .MACRO  $DELETE RAB, ERR, SUC
+        $RMSCALL DELETE, RAB, <ERR>, <SUC>
         .ENDM   $DELETE
 
-        .MACRO  $TRUNCATE RAB
-        $RMSCALL TRUNCATE, RAB
+        .MACRO  $TRUNCATE RAB, ERR, SUC
+        $RMSCALL TRUNCATE, RAB, <ERR>, <SUC>
         .ENDM   $TRUNCATE
 
-        .MACRO  $REWIND  RAB
-        $RMSCALL REWIND, RAB
+        .MACRO  $REWIND RAB, ERR, SUC
+        $RMSCALL REWIND, RAB, <ERR>, <SUC>
         .ENDM   $REWIND
 
-        .MACRO  $FLUSH   RAB
-        $RMSCALL FLUSH, RAB
+        .MACRO  $FLUSH RAB, ERR, SUC
+        $RMSCALL FLUSH, RAB, <ERR>, <SUC>
         .ENDM   $FLUSH
 
-        .MACRO  $READ    RAB
-        $RMSCALL READ, RAB
+        .MACRO  $READ RAB, ERR, SUC
+        $RMSCALL READ, RAB, <ERR>, <SUC>
         .ENDM   $READ
 
-        .MACRO  $WRITE   RAB
-        $RMSCALL WRITE, RAB
+        .MACRO  $WRITE RAB, ERR, SUC
+        $RMSCALL WRITE, RAB, <ERR>, <SUC>
         .ENDM   $WRITE
 
-        .MACRO  $SPACE   RAB
-        $RMSCALL SPACE, RAB
+        .MACRO  $SPACE RAB, ERR, SUC
+        $RMSCALL SPACE, RAB, <ERR>, <SUC>
         .ENDM   $SPACE
 
-        .MACRO  $FREE    RAB
-        $RMSCALL FREE, RAB
+        .MACRO  $FREE RAB, ERR, SUC
+        $RMSCALL FREE, RAB, <ERR>, <SUC>
         .ENDM   $FREE
 
-        .MACRO  $RELEASE RAB
-        $RMSCALL RELEASE, RAB
+        .MACRO  $RELEASE RAB, ERR, SUC
+        $RMSCALL RELEASE, RAB, <ERR>, <SUC>
         .ENDM   $RELEASE
 
-        .MACRO  $WAIT    RAB
-        $RMSCALL WAIT, RAB
+        .MACRO  $WAIT RAB, ERR, SUC
+        $RMSCALL WAIT, RAB, <ERR>, <SUC>
         .ENDM   $WAIT
 
 ; $PSLDEF: the processor status longword's fields and the access modes,
