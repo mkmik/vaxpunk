@@ -144,6 +144,14 @@ impl Drop for Vax {
     }
 }
 
+/// The checkout, with out/ made: each test writes its disk there before
+/// the boot binary, which makes it too, runs.
+fn root() -> &'static Path {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    fs::create_dir_all(root.join("out")).unwrap();
+    root
+}
+
 /// A data disk, DATA, with the fixtures in [000000], each with its FDL's
 /// record attributes.
 fn fixture_disk(path: &Path, fixtures: &Path) {
@@ -173,7 +181,7 @@ fn fixture_disk(path: &Path, fixtures: &Path) {
 
 #[test]
 fn fixtures() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = root();
     let fixtures = root.join("crosstools/ods/fixtures/rms");
     let disk = root.join("out/rms-datadisk.img");
     fixture_disk(&disk, &fixtures);
@@ -252,7 +260,7 @@ fn fdl_text(make: &Path, name: &str) -> Vec<u8> {
 
 #[test]
 fn convert() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = root();
     let fixtures = root.join("crosstools/ods/fixtures/rms");
     let disk = root.join("out/convert-datadisk.img");
     let _ = fs::remove_file(&disk);
@@ -887,7 +895,7 @@ $ CLOSE/NOLOG O
 /// the record options DCL doesn't use.
 #[test]
 fn locking() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = root();
     let fixtures = root.join("crosstools/ods/fixtures/rms");
     let disk = root.join("out/lock-datadisk.img");
     let _ = fs::remove_file(&disk);
@@ -1154,7 +1162,7 @@ fn random_prologue1() {
 /// `prologue` if one is given, and checks what it printed against the
 /// model's, and the file. `name` names the disk and logs in out/.
 fn rmsrand(name: &str, prologue: Option<u8>, seed: u64, ops: usize) {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = root();
     let disk = root.join(format!("out/{name}-datadisk.img"));
     let (mut text, want) = script(seed, ops);
     if let Some(p) = prologue {
@@ -1214,7 +1222,7 @@ fn rmsrand(name: &str, prologue: Option<u8>, seed: u64, ops: usize) {
 /// a slot the index file grows for, and DELETE gives one such back.
 #[test]
 fn big_volume() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = root();
     let disk = root.join("out/big-datadisk.img");
     let _ = fs::remove_file(&disk);
     let params = InitParams {
