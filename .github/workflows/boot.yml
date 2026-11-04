@@ -3,7 +3,7 @@ name: boot
 # Builds the OS with the cross toolchain and boots it in QEMU: cargo test -p
 # boot. The toolchain is a container image, .github/toolchain.Dockerfile,
 # kept on ghcr.io under the Dockerfile's hash and built only when that tag
-# is missing. On main, or when run by hand, it then builds the GitHub Pages
+# is missing. Each test binary boots in its own job, in parallel. On main, or when run by hand, it then builds the GitHub Pages
 # site, web/mksite.sh's: the landing page, the API reference, the map and the demo,
 # the images just booted on QEMU compiled to WebAssembly. Main publishes it.
 on:
@@ -32,7 +32,47 @@ jobs:
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} .github
           docker push "$image"
 
+  # Each tests/*.rs is a test binary that boots its own QEMU: they run as
+  # parallel jobs, each building the OS itself, rather than one after another.
+  qemu:
+    needs: toolchain
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [boot, network, rms]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: cargo test --release -p boot --test ${{ matrix.test }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.test }}
+          path: out/*.log
+
+  # "boot" is the check the "CI must pass" ruleset requires: it passes when
+  # every qemu job does. always() keeps it from being skipped, which the
+  # ruleset would count as passing, when one of them fails.
   boot:
+    if: always()
+    needs: qemu
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.qemu.result }}" = success
+
+  # The browser's QEMU is 32-bit wasm with 2.3 GB: the demo's kernel is
+  # built for 1 GB, web/demo/index.html's -m.
+  demo-images:
+    if: github.event_name != 'pull_request'
     needs: toolchain
     runs-on: ubuntu-latest
     permissions:
@@ -46,24 +86,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - run: cargo test --release -p boot
-      # The browser's QEMU is 32-bit wasm with 2.3 GB: the demo's kernel is
-      # built for 1 GB, web/demo/index.html's -m.
-      - if: github.event_name != 'pull_request'
-        name: Gzip the demo's firmware and disks
+      - name: Gzip the demo's firmware and disks
         run: |
           QEMU_MEM=1024 cargo run --release -p boot -- --images
           web/demo-images.sh out/demo
-      - if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: demo-images
           path: out/demo
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: serial.log
-          path: out/serial.log
 
   # qemu-system-aarch64 for the browser takes the better part of an hour to
   # build: it's cached under web/qemu-wasm.sh's hash, which pins its sources.
@@ -85,7 +115,7 @@ jobs:
           path: qemu-wasm
 
   site:
-    needs: [boot, qemu-wasm]
+    needs: [boot, demo-images, qemu-wasm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
