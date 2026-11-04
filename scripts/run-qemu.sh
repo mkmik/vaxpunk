@@ -1,7 +1,8 @@
 #!/bin/sh
 # Boot out/esp.img: EDK2 -> Limine -> shim -> seL4 -> root task.
 # Usage: run-qemu.sh [--gdb] [--hvf] [--uart1[=PORT]] [--pN=VALUE...] | --firmware.
-# Quit with Ctrl-A x.
+# Quit with Ctrl-A x. On an arm64 Linux host with a usable /dev/kvm it runs
+# under KVM, the guest's code on the CPU itself; elsewhere QEMU emulates it (TCG).
 #   --firmware  print the EDK2 firmware image's path and exit
 #   --gdb    wait for a debugger on localhost:1234 (-s -S)
 #   --hvf    use Hypervisor.framework instead of TCG (best effort, macOS only)
@@ -21,6 +22,7 @@ mem=${QEMU_MEM:-}
 QEMU_MEM=${mem:-$QEMU_MEM} # as the kernel was built: QEMU_MEM overrides qemu.env
 
 cpu="-cpu $QEMU_CPU"
+if [ "$(uname -sm)" = "Linux aarch64" ] && [ -w /dev/kvm ]; then cpu="-accel kvm -cpu host"; fi
 gdb=""
 uart1=null
 firmware=""

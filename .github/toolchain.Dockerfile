@@ -4,9 +4,11 @@
 FROM ubuntu:24.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-		bzip2 ca-certificates git curl build-essential gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake ninja-build \
+		bzip2 ca-certificates git curl build-essential cmake ninja-build \
 		device-tree-compiler libxml2-utils python3 mtools procps \
 		qemu-system-arm qemu-efi-aarch64 ipxe-qemu \
+	&& if [ "$(dpkg --print-architecture)" = amd64 ]; then \
+		DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross; fi \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv

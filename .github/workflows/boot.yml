@@ -13,8 +13,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  # One image per architecture: arm64's, tagged -arm64, for boot-arm.
   toolchain:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, suffix: "" }
+          - { runner: ubuntu-24.04-arm, suffix: -arm64 }
+    runs-on: ${{ matrix.runner }}
     permissions:
       packages: write
     outputs:
@@ -26,7 +32,7 @@ jobs:
       - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Build and push unless already there
         run: |
-          image=${{ steps.tag.outputs.image }}
+          image=${{ steps.tag.outputs.image }}${{ matrix.suffix }}
           docker manifest inspect "$image" >/dev/null 2>&1 && exit 0
           docker build -t "$image" -f .github/toolchain.Dockerfile \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} .github
@@ -64,6 +70,28 @@ jobs:
         with:
           name: serial.log
           path: out/serial.log
+
+  # ponytail: measurement only. The same tests on an arm64 runner, where
+  # QEMU can use KVM if the runner has it. Its timings decide whether boot
+  # moves there; until then a failure here fails nothing.
+  boot-arm:
+    needs: toolchain
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    permissions:
+      packages: read
+    container:
+      image: ${{ needs.toolchain.outputs.image }}-arm64
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --privileged
+    steps:
+      - run: nproc; uname -a; ls -l /dev/kvm || echo "no /dev/kvm, TCG"
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: cargo test --release -p boot
 
   # qemu-system-aarch64 for the browser takes the better part of an hour to
   # build: it's cached under web/qemu-wasm.sh's hash, which pins its sources.
