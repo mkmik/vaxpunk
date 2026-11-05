@@ -58,6 +58,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      # Trial: a warm target/ (not out/: a failed build would boot a stale
+      # image). One cache per test, so the three jobs don't race to save.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+            target
+          key: qemu-${{ matrix.test }}-${{ github.sha }}
+          restore-keys: qemu-${{ matrix.test }}-
       - run: cargo test --release -p boot --test ${{ matrix.test }}
       - if: always()
         uses: actions/upload-artifact@v4

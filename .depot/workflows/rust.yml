@@ -51,6 +51,17 @@ jobs:
         run: |
           brew install --cask macfuse
           brew install aarch64-elf-binutils aarch64-elf-gcc qemu
+      # Trial: does a warm target/ make Depot faster? Saved under the commit,
+      # restored from the newest earlier one.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/vaxpunk/fixtures
+            target
+          key: rust-${{ github.sha }}
+          restore-keys: rust-
       - name: The ods CLI and FUSE daemon use ods-image only
         run: |
           ! grep -rn 'ods-core' crosstools/ods/crates/ods-cli/Cargo.toml crosstools/ods/crates/ods-fuse/Cargo.toml &&
