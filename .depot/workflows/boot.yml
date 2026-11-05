@@ -1,0 +1,162 @@
+# Depot CI Migration
+# Source: .github/workflows/boot.yml
+#
+# Changes made:
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: boot
+
+# Builds the OS with the cross toolchain and boots it in QEMU: cargo test -p
+# boot. The toolchain is a container image, .github/toolchain.Dockerfile,
+# kept on ghcr.io under the Dockerfile's hash and built only when that tag
+# is missing. Each test binary boots in its own job, in parallel. On main, or when run by hand, it then builds the GitHub Pages
+# site, web/mksite.sh's: the landing page, the API reference, the map and the demo,
+# the images just booted on QEMU compiled to WebAssembly. Main publishes it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  toolchain:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    permissions:
+      packages: write
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}-toolchain:${{ hashFiles('.github/toolchain.Dockerfile') }}" >> "$GITHUB_OUTPUT"
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push unless already there
+        run: |
+          image=${{ steps.tag.outputs.image }}
+          docker manifest inspect "$image" >/dev/null 2>&1 && exit 0
+          docker build -t "$image" -f .github/toolchain.Dockerfile \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} .github
+          docker push "$image"
+
+  # Each tests/*.rs is a test binary that boots its own QEMU: they run as
+  # parallel jobs, each building the OS itself, rather than one after another.
+  qemu:
+    needs: toolchain
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [boot, network, rms]
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    permissions:
+      packages: read
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: cargo test --release -p boot --test ${{ matrix.test }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.test }}
+          path: out/*.log
+
+  # "boot" is the check the "CI must pass" ruleset requires: it passes when
+  # every qemu job does. always() keeps it from being skipped, which the
+  # ruleset would count as passing, when one of them fails.
+  boot:
+    if: always()
+    needs: qemu
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - run: test "${{ needs.qemu.result }}" = success
+
+  # The browser's QEMU is 32-bit wasm with 2.3 GB: the demo's kernel is
+  # built for 1 GB, web/demo/index.html's -m.
+  demo-images:
+    if: github.event_name != 'pull_request'
+    needs: toolchain
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    permissions:
+      packages: read
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Gzip the demo's firmware and disks
+        run: |
+          QEMU_MEM=1024 cargo run --release -p boot -- --images
+          web/demo-images.sh out/demo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-images
+          path: out/demo
+
+  # qemu-system-aarch64 for the browser takes the better part of an hour to
+  # build: it's cached under web/qemu-wasm.sh's hash, which pins its sources.
+  qemu-wasm:
+    if: github.event_name != 'pull_request'
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@v4
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: qemu-wasm
+          key: qemu-wasm-${{ hashFiles('web/qemu-wasm.sh') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: web/qemu-wasm.sh qemu-wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-wasm
+          path: qemu-wasm
+
+  site:
+    needs: [boot, demo-images, qemu-wasm]
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: web/tailgate/go.mod
+          cache-dependency-path: web/tailgate/go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: demo-images
+          path: demo-images
+      - uses: actions/download-artifact@v4
+        with:
+          name: qemu-wasm
+          path: qemu-wasm
+      # Lints the map and puts todography on PATH for mksite.sh's build.
+      - uses: mkmik/todography@v0.12.0
+      - run: web/mksite.sh site qemu-wasm demo-images
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # Only main deploys: the github-pages environment rejects other branches,
+  # where running this by hand builds QEMU and the site as a check.
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: site
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency: pages
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

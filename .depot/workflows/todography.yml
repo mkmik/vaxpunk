@@ -1,0 +1,25 @@
+# Depot CI Migration
+# Source: .github/workflows/todography.yml
+#
+# Changes made:
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: todography
+
+# docs/map/ is the map of components: every label must name something, and
+# no change may leave a warning behind (an aspiration something wanted needs,
+# a cycle, an induced component nothing needs). See docs/map/README.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mkmik/todography@v0.12.0
+        with:
+          args: --strict
+      - run: todography build
