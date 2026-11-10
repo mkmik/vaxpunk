@@ -28,7 +28,7 @@ if (!self.crossOriginIsolated) {
   status.textContent = 'Waiting for cross-origin isolation (coi-serviceworker)…';
   throw new Error('not cross-origin isolated yet');
 }
-const xterm = new Terminal({theme: {background: '#0c0904', foreground: '#ffb000'}});
+const xterm = new Terminal({rows: 48, theme: {background: '#0c0904', foreground: '#ffb000'}});
 xterm.open(document.getElementById('terminal'));
 const {master, slave} = openpty();
 xterm.loadAddon(master);
