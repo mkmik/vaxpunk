@@ -1,0 +1,22 @@
+# Depot CI Migration
+# Source: .github/workflows/apidoc.yml
+#
+# Changes made:
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: apidoc
+
+# docs/api/index.html is generated from the sources by cargo run -p apidoc.
+# It isn't committed, so parallel PRs don't conflict on it: every PR checks
+# that it still generates, and boot.yml publishes main's to GitHub Pages.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  current:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo run -p apidoc
