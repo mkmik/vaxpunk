@@ -70,7 +70,7 @@ same commit; `todography lint` checks it.
 | [ADR-0036](adr/0036-file-access-arbitration-locks.md) | Each open of a file holds an access arbitration lock on the lock manager, and an open file that is deleted goes at its last close | Proposed; decision 2's PW for writers that share writing superseded by ADR-0046 for indexed files |
 | [ADR-0037](adr/0037-all-ram-and-address-spaces-filled-on-faults.md) | Every page of RAM is a PFN, address spaces are filled on faults as a TLB is, and a PTE is Alpha's quadword | Accepted |
 | [ADR-0038](adr/0038-io-quotas-charged-with-the-irp.md) | A $QIO's IRP is charged to its process's I/O quotas, and a request past them waits in $QIO and calls the FDT routine again | Proposed |
-| [ADR-0039](adr/0039-xqp-qio-functions.md) | A disk channel takes the XQP's IO$_ACCESS and IO$_MODIFY, which $QIO does in the process once IPL is back down | Proposed |
+| [ADR-0039](adr/0039-xqp-qio-functions.md) | A disk channel takes the XQP's IO$_ACCESS and IO$_MODIFY, which $QIO does in the process once IPL is back down | Proposed; the functions it left out added by ADR-0049 |
 | [ADR-0040](adr/0040-acls-in-file-headers-and-rights-identifiers.md) | Files keep ACLs in their headers, which the file system checks before the protection mask, and identifiers come from RIGHTSLIST.DAT through services that run in their caller's mode | Proposed |
 | [ADR-0041](adr/0041-virtual-terminals-take-the-telnet-line.md) | A virtual terminal, VTAn, takes its TELNET terminal's connection, which moves to another one when the user connects to it | Proposed |
 | [ADR-0042](adr/0042-opcom-reads-the-operators-mailbox.md) | OPCOM is a process that reads the operator's mailbox, MBA2:, which the executive makes at boot and $SNDOPR writes, and it writes on the console with $BRKTHRU | Proposed |
@@ -80,6 +80,7 @@ same commit; `todography lint` checks it.
 | [ADR-0046](adr/0046-shared-indexed-files-and-record-locks.md) | Writers share an indexed file in CW mode, each open keeps the file's header and prologue in step under FIL$LOCK, and record locks are sublocks of the access arbitration lock | Proposed |
 | [ADR-0047](adr/0047-interrupt-driven-disk-io-and-locked-pages.md) | A disk request ends by interrupt, the device reads and writes the requester's pages by PFN, and those pages stay locked until it is done | Proposed |
 | [ADR-0048](adr/0048-asynchronous-rms-stalls-on-a-stack-of-its-own.md) | An asynchronous RMS service runs on a stack of its own, stalls at its disk wait holding FIL$LOCK, and a kernel mode AST goes on with it | Proposed |
+| [ADR-0049](adr/0049-files-open-on-a-channel.md) | A file opened on a disk channel is a WCB in the PCB, read and written by VBN through the XQP in the process, and the XQP creates, deletes and looks up by wildcard | Proposed |
 
 ### PRDs
 

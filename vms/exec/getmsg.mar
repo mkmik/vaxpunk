@@ -1225,6 +1225,34 @@ MESSAGES:
         .ASCIC  "SYSTEM"
         .ASCIC  "FILALRACC"
         .ASCIC  "file already accessed on channel"
+        .LONG   SS$_FILNOTACC
+        .ASCIC  "SYSTEM"
+        .ASCIC  "FILNOTACC"
+        .ASCIC  "file not accessed on channel"
+        .LONG   SS$_BADFILENAME
+        .ASCIC  "SYSTEM"
+        .ASCIC  "BADFILENAME"
+        .ASCIC  "bad file name syntax"
+        .LONG   SS$_DUPFILENAME
+        .ASCIC  "SYSTEM"
+        .ASCIC  "DUPFILENAME"
+        .ASCIC  "duplicate file name"
+        .LONG   SS$_ENDOFFILE
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ENDOFFILE"
+        .ASCIC  "end of file"
+        .LONG   SS$_NOMOREFILES
+        .ASCIC  "SYSTEM"
+        .ASCIC  "NOMOREFILES"
+        .ASCIC  "no more files"
+        .LONG   SS$_ILLIOFUNC
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ILLIOFUNC"
+        .ASCIC  "illegal I/O function code"
+        .LONG   SS$_ILLBLKNUM
+        .ASCIC  "SYSTEM"
+        .ASCIC  "ILLBLKNUM"
+        .ASCIC  "illegal logical block number"
         .LONG   SS$_NOLINKS
         .ASCIC  "SYSTEM"
         .ASCIC  "NOLINKS"

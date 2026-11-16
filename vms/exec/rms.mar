@@ -91,6 +91,7 @@
         $ARMDEF
         $XABPRODEF
         $IFBDEF
+        $WCBDEF
         $XABFHCDEF
         $LCKDEF
         $JPIDEF
@@ -2176,7 +2177,7 @@ FREEIFAB:
         PUSHL   R0
         BSBW    RMS$UNLOCKALL
         MOVL    IFB$L_LKID(R7), R1
-        BSBW    UNLOCKFILE
+        BSBW    RMS$UNLOCKFILE
         MOVL    IFB$L_BUF(R7), R0
         BEQL    10$
         MOVL    IFB$L_BUFSZ(R7), R1
@@ -2233,12 +2234,12 @@ ARBLOCK:
 20$:    BLBC    R2, 30$                 ; shared with a writer: record locks
         BISL2   #1@IFB$V_RLK, IFB$L_FLAGS(R7)
 30$:    MOVAB   IFB$AB_HDR(R7), R2
-        BSBW    LOCKFILE
+        BSBW    RMS$LOCKFILE
         BLBC    R0, 90$
         MOVL    R1, IFB$L_LKID(R7)
 90$:    RSB
 
-; LOCKFILE: R1 = a lock mode, R2 = a file's header, on F11$GL_VCB's
+; RMS$LOCKFILE: R1 = a lock mode, R2 = a file's header, on F11$GL_VCB's
 ; volume. Takes the file's access arbitration lock in that mode, if no
 ; other lock on it blocks that: a kernel mode lock of the system's on
 ; F11B$a, the device's name and the file ID, which is never queued. R0 =
@@ -2246,7 +2247,7 @@ ARBLOCK:
 ; RMS$_DME if the pool has no room. Uses R0-R3.
 ; vaxpunk: VMS's XQP names the lock after the volume, not the device,
 ; under a lock for the volume; no program looks at either.
-LOCKFILE:
+RMS$LOCKFILE::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         SUBL2   #32, SP                 ; the status block, then the name
         MOVL    SP, R3
@@ -2285,9 +2286,9 @@ LOCKFILE:
 90$:    ADDL2   #32, SP
         RSB
 
-; UNLOCKFILE: R1 = an access arbitration lock's ID, or 0. Gives it back.
+; RMS$UNLOCKFILE: R1 = an access arbitration lock's ID, or 0. Gives it back.
 ; Keeps every register.
-UNLOCKFILE:
+RMS$UNLOCKFILE::
         .JSB_ENTRY
         TSTL    R1
         BEQL    90$
@@ -2372,7 +2373,7 @@ RMS$LOCKREC::
         BSBW    EXE$ALONONPAGED
         POPR    #^M<R1, R3>
         BLBS    R0, 35$
-        BSBW    UNLOCKFILE              ; no room: it goes
+        BSBW    RMS$UNLOCKFILE          ; no room: it goes
         TSTL    (SP)+
         MOVL    #RMS$_DME, R0
         BRB     90$
@@ -2393,7 +2394,7 @@ RMS$LOCKREC::
         BSBW    RECENQ
         CMPL    R0, #SS$_SYNCH
         BNEQ    55$
-        BSBW    UNLOCKFILE
+        BSBW    RMS$UNLOCKFILE
         MOVL    #RMS$_NORMAL, R0
         BRB     90$
 55$:    CMPL    R0, #SS$_NOTQUEUED
@@ -2406,10 +2407,10 @@ RMS$LOCKREC::
         BEQL    60$
         CMPL    R0, #SS$_NORMAL
         BNEQ    70$
-        BSBW    UNLOCKFILE
+        BSBW    RMS$UNLOCKFILE
         MOVL    #RMS$_OK_WAT, R0
         BRB     90$
-60$:    BSBW    UNLOCKFILE
+60$:    BSBW    RMS$UNLOCKFILE
         MOVL    #RMS$_OK_RLK, R0
         BRB     90$
 70$:    MOVL    R0, RAB$L_STV(R10)      ; refused
@@ -2501,7 +2502,7 @@ FREERLB:
         PUSHR   #^M<R0, R1, R2, R3>
         MOVL    RLB$L_NEXT(R2), (R3)
         MOVL    RLB$L_LKID(R2), R1
-        BSBW    UNLOCKFILE
+        BSBW    RMS$UNLOCKFILE
         MOVL    R2, R0
         MOVL    #RLB$K_LENGTH, R1
         BSBW    EXE$DEANONPGDSIZ
@@ -2575,22 +2576,24 @@ RMS$RECHELD::
         RSB
 
 ; RMS$FILEBUSY: R2 = a file's header, on F11$GL_VCB's volume. R0 =
-; RMS$_NORMAL if no stream has it open, RMS$_FLK if one has, or RMS$_DME.
+; RMS$_NORMAL if no stream or channel has it open, RMS$_FLK if one has,
+; or RMS$_DME.
 ; Uses R0-R3.
 RMS$FILEBUSY::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         MOVL    #LCK$K_EXMODE, R1
-        BSBW    LOCKFILE
+        BSBW    RMS$LOCKFILE
         BLBC    R0, 90$
-        BSBW    UNLOCKFILE
+        BSBW    RMS$UNLOCKFILE
 90$:    RSB
 
-; MARKDEL: R2 = the header of a file open in some stream, on
-; F11$GL_VCB's volume, its directory entry gone. Marks it for delete, on
-; the disk and in each IFAB that has it open, in every process: the last
-; to close it deletes it (DELLAST). R0 = SS$_NORMAL or the disk's error.
+; RMS$MARKDEL: R2 = the header of a file open in some stream, or on a
+; channel (xqp.mar), on F11$GL_VCB's volume, its directory entry gone.
+; Marks it for delete, on the disk and in each IFAB that has it open, in
+; every process: the last to close it deletes it (DELLAST, and the XQP's
+; CLOSEWCB, which finds the mark on the disk). R0 = SS$_NORMAL or the disk's error.
 ; Uses R0-R5.
-MARKDEL:
+RMS$MARKDEL::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
         BISL2   #1@FCH$V_MARKDEL, FH2$L_FILECHAR(R2)
         MOVL    R2, R1
@@ -2710,7 +2713,7 @@ DELLAST:
         .JSB_ENTRY
         PUSHR   #^M<R0, R1, R2, R3, R4, R5>
         MOVL    IFB$L_LKID(R7), R1
-        BSBW    UNLOCKFILE
+        BSBW    RMS$UNLOCKFILE
         CLRL    IFB$L_LKID(R7)
         MOVL    IFB$L_VCB(R7), F11$GL_VCB
         MOVAB   IFB$AB_HDR(R7), R2
@@ -3668,7 +3671,7 @@ PURGEVER:
         CMPL    R0, #RMS$_FLK
         BNEQ    90$
         MOVAB   HDRBUF, R2
-        BSBW    MARKDEL
+        BSBW    RMS$MARKDEL
         BRB     90$
 40$:    MOVAB   HDRBUF, R1
         BSBW    FIL$DELHDR
@@ -3771,7 +3774,7 @@ CRENTER:
         BLBC    R0, 80$
         BLBS    R1, 30$
         MOVAB   HDRBUF, R2
-        BSBW    MARKDEL
+        BSBW    RMS$MARKDEL
         BLBC    R0, 80$
         BRB     40$
 30$:    MOVAB   HDRBUF, R1
@@ -3795,8 +3798,7 @@ CRENTER:
 ; RMS$PARSE's or the file system's error, with the ones above made. Each is the current process's, with the one
 ; above's protection, but delete (FIL$MKDIR).
 ; ponytail: a service; VMS's LIB$CREATE_DIR asks the XQP with $QIO
-; IO$_CREATE, which the disks' XQP functions haven't yet. No owner,
-; protection or version limit arguments.
+; IO$_CREATE (xqp.mar). No owner, protection or version limit arguments.
         .ENTRY  EXE$CREATE_DIR, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    4(AP), R1
         BSBW    EXE$PROBER_DSC
@@ -3819,8 +3821,9 @@ CRENTER:
 90$:    RET
 
 ; RMS$VOLIDLE: R1 = a VCB. R0 = SS$_NORMAL if no process has a file on
-; its volume open, else SS$_DEVACTIVE. Holding FIL$LOCK, which keeps
-; their files open or closed. Uses R0 and R2-R4.
+; its volume open, by RMS or on a channel (xqp.mar), else SS$_DEVACTIVE.
+; Holding FIL$LOCK, which keeps their files open or closed. Uses R0 and
+; R2-R4.
 RMS$VOLIDLE::
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
         DSBINT  #IPL$_SYNCH             ; their PCBs
@@ -3833,6 +3836,12 @@ RMS$VOLIDLE::
         CMPL    IFB$L_VCB(R0), R1
         BEQL    80$
 30$:    AOBLEQ  #MAXIFI, R4, 20$
+        MOVL    #1, R4                  ; and on its channels
+35$:    MOVL    PCB$AL_WCB(R3)[R4], R0
+        BEQL    38$
+        CMPL    WCB$L_VCB(R0), R1
+        BEQL    80$
+38$:    AOBLEQ  #PCB$C_MAXCHAN, R4, 35$
 40$:    SOBGTR  R2, 10$
         MOVL    #SS$_NORMAL, R0
         BRB     90$

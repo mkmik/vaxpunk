@@ -61,7 +61,7 @@
         .EXTERNAL EXE$PROBER_DSC, EXE$CLREF, EXE$WAITFR
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
         .EXTERNAL LNM$TRNLOG, DK$DDT, MMG$IOLOCK, MMG$UNLOCK, SCH$WAKEPCB, SCH$BOOST
-        .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0, XQP$GL_IRP, XQP$PERFORM, FIL$CHKALLOC
+        .EXTERNAL F11$AB_DKA0, F11$AB_DKB0, F11$AB_MDA0, XQP$GL_IRP, XQP$PERFORM, XQP$RUNDOWN, FIL$CHKALLOC
 
 DISK = DEV$M_FOD!DEV$M_DIR!DEV$M_SHR!DEV$M_AVL!DEV$M_IDV!DEV$M_ODV!DEV$M_RND
 PAGESIZE = 4096                         ; MMG$C_PAGESIZE
@@ -495,7 +495,8 @@ IOC$DELETE_UCB::
         BRW     EXE$DEANONPGDSIZ
 90$:    RSB
 
-; $DASSGN chan: deassigns a channel, and cancels its I/O (IOC$CANCEL).
+; $DASSGN chan: deassigns a channel, and cancels its I/O (IOC$CANCEL),
+; after closing the file open on it, if there is one (XQP$RUNDOWN).
         .ENTRY  EXE$DASSGN, ^M<R2, R3, R4, R5>
         MOVL    SCH$GL_CURPCB, R4
         MOVZWL  4(AP), R5
@@ -503,6 +504,8 @@ IOC$DELETE_UCB::
         CMPL    R5, #PCB$C_MAXCHAN
         BGTRU   80$
         BBC     R5, PCB$L_CHANS(R4), 80$
+        ASHL    R5, #1, R0
+        BSBW    XQP$RUNDOWN
         DSBINT  #IPL$_SYNCH
         ASHL    R5, #1, R0
         CLRL    R1
@@ -547,8 +550,10 @@ IOC$DELETE_UCB::
 ; astprm in the caller's mode. A terminal's driver (TT$FDT) writes p2
 ; bytes at p1, or reads a line into them, after the prompt in p5 and p6
 ; for IO$_READPROMPT; the disks' (DK$FDT) reads or writes them at LBN p3,
-; and for IO$_ACCESS and IO$_MODIFY makes an IRP that XQP$PERFORM does
-; here, once IPL is back where it was, as VMS's XQP does in the process.
+; and for the file system's functions, IO$_ACCESS, IO$_MODIFY and the
+; others, and the virtual ones of the file open on the channel, makes an
+; IRP that XQP$PERFORM does here, once IPL is back where it was, as VMS's
+; XQP does in the process.
 ; The FDT routines read the arguments through AP, so it homes them all.
 ; A request IOC$ALLOCIRP finds past the process's quotas waits for them
 ; in resource wait, SCH$C_MWAIT, until an AST, its I/O done, ends the

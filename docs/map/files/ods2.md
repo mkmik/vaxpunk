@@ -6,7 +6,7 @@ kind = "core"
 intent = "goal"
 research = "done"
 milestone = "m0"
-refs = ["docs/adr/0007-system-disk-files-11-and-rms.md", "docs/adr/0009-ramdisk-writable-files-11.md", "docs/adr/0012-data-disk-writable-files-11.md", "docs/adr/0043-volumes-the-size-of-their-disk.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/exec/f11wrt.mar", "vms/exec/xqp.mar", "docs/adr/0039-xqp-qio-functions.md", "crosstools/ods/docs/", "docs/prd/0003-multi-user-vms.md"]
+refs = ["docs/adr/0007-system-disk-files-11-and-rms.md", "docs/adr/0009-ramdisk-writable-files-11.md", "docs/adr/0012-data-disk-writable-files-11.md", "docs/adr/0043-volumes-the-size-of-their-disk.md", "docs/adr/0015-file-system-io-through-the-disk-driver.md", "docs/adr/0020-file-system-lock-below-ipl-synch.md", "docs/design/0002-executive-processes.md", "vms/exec/f11.mar", "vms/exec/f11wrt.mar", "vms/exec/xqp.mar", "docs/adr/0039-xqp-qio-functions.md", "docs/adr/0049-files-open-on-a-channel.md", "crosstools/ods/docs/", "docs/prd/0003-multi-user-vms.md"]
 
 [[feature]]
 id = "read"
@@ -94,9 +94,9 @@ note = "ADR-0039; xqp.mar, which $QIO calls after DK$FDT. PRD-0003 tier 3 #23: S
 [[feature]]
 id = "qio-interface"
 title = "IO$M_ACCESS, IO$_DEACCESS, IO$_CREATE, IO$_DELETE, IO$_ACPCONTROL; wildcard lookups with FIB$L_WCC"
-status = "todo"
+status = "done"
 needs = ["#acp-attributes"]
-note = "ADR-0007 and ADR-0039 follow-up: a file open on the channel, read and written by VBN"
+note = "ADR-0049: a file open on the channel is a WCB at PCB$AL_WCB, read and written by VBN through xqp.mar; XQPTEST in the boot test's set file phase"
 
 [[feature]]
 id = "queued-io"
@@ -173,8 +173,13 @@ directories, `FIL$INIT`). It writes real ODS-2 that `ods verify` and
 OpenVMS accept ([ADR-0007](../../adr/0007-system-disk-files-11-and-rms.md),
 [ADR-0009](../../adr/0009-ramdisk-writable-files-11.md),
 [ADR-0012](../../adr/0012-data-disk-writable-files-11.md)). RMS calls its
-`FIL$` routines directly instead of through `$QIO`, so there are no XQP
-functions on disk channels yet. Its I/O goes to the disk driver's start
+`FIL$` routines directly instead of through `$QIO`; programs reach them
+with VMS's `$QIO` functions on a disk channel, which `xqp.mar` does in the
+process: `IO$_ACCESS` and `IO$_MODIFY` of attributes
+([ADR-0039](../../adr/0039-xqp-qio-functions.md)), and `IO$_CREATE`,
+`IO$_DELETE`, `IO$_ACPCONTROL`, wildcard lookups and a file open on the
+channel, read and written by VBN
+([ADR-0049](../../adr/0049-files-open-on-a-channel.md)). Its I/O goes to the disk driver's start
 I/O routine in an IRP of its own
 ([ADR-0015](../../adr/0015-file-system-io-through-the-disk-driver.md)).
 The corners cut are in PRD-0003's backlog: a cluster is a block and each

@@ -51,6 +51,7 @@
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ, MMG$CREPAG, MMG$DELPAG
         .EXTERNAL MMG$SETPRT, EXE$RMVTIMQ, EXE$USRSTART, EXE$CLISTART
         .EXTERNAL FIL$OPENFILE, FIL$OPENSHR, FIL$READIMG, RMS$RUNDOWN, LCK$RUNDOWN, FIL$RUNDOWN
+        .EXTERNAL XQP$RUNDOWN
         .EXTERNAL EXE$OUTZSTRING, EXE$OUTCSTRING, EXE$OUTHEX, EXE$OUTCRLF
         .EXTERNAL LNM$CREATE, LNM$CREPRC, LNM$DELPROC, LNM$SPAWN, SCH$QAST, EXE$FLUSHAST, IOC$CANCEL, SYS$EXIT
         .EXTERNAL MB$FINDNUM, MB$SEND, EXE$GQ_SYSTIME, TT$OWNER, IOC$CVT_DEVNAM
@@ -1172,8 +1173,8 @@ EXHLIST:
 ; mode ASTs, its pages in P0 and those it made in P1, below the part
 ; of P1 that outlives it, its common event flag clusters, its user
 ; mode exit handlers, and its channels and files, all but the command interpreter's, PCB$L_CLICHANS
-; and PCB$L_CLIFILES, whose I/O is cancelled first, while P0 is still
-; there, and the privileges it enabled: the current ones are the
+; and PCB$L_CLIFILES, the files open on the channels closed (XQP$RUNDOWN)
+; and their I/O cancelled first, while P0 is still there, and the privileges it enabled: the current ones are the
 ; permanent ones again, and it has no known image's. An image CTRL/Y
 ; stopped can't be continued any more, nor AST routines that ran.
 ; Uses R0-R3.
@@ -1182,6 +1183,8 @@ EXHLIST:
 EXE$IMGRUNDOWN::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         BSBW    RMS$FINISH
+        BICL3   PCB$L_CLICHANS(R4), PCB$L_CHANS(R4), R0
+        BSBW    XQP$RUNDOWN
         DSBINT  #IPL$_SYNCH
         BICL3   PCB$L_CLICHANS(R4), PCB$L_CHANS(R4), R0
         CLRL    R1
@@ -1236,7 +1239,8 @@ DELP1:
 
 ; EXE$RUNDOWN: R4 = the current PCB. Deletes its process's subprocesses,
 ; as $DELPRC deletes another process, then gives back what it holds:
-; what EXE$IMGRUNDOWN does, then its other files, and the volumes its
+; what EXE$IMGRUNDOWN does, then its other files, those open on its
+; channels too (XQP$RUNDOWN), and the volumes its
 ; job mounted privately if it is the master (FIL$RUNDOWN), before its other locks,
 ; among them their access arbitration locks, and ASTs, its logical
 ; names, its pages in P1, its other channels, and its slot, unless
@@ -1265,6 +1269,8 @@ EXE$RUNDOWN::
         BSBW    EXE$IMGRUNDOWN
         CLRL    R0
         BSBW    RMS$RUNDOWN
+        MOVL    PCB$L_CHANS(R4), R0
+        BSBW    XQP$RUNDOWN
         BSBW    FIL$RUNDOWN
         CLRL    R0
         BSBW    LCK$RUNDOWN
