@@ -1869,20 +1869,24 @@ DELFILE:
         MOVL    #SS$_DIRNOTEMPTY, R0
         CMPW    F11$AB_DIRBLK, #^XFFFF
         BNEQ    90$
-50$:    TSTL    ENTLEN
+50$:    MOVL    #RMS$_NORMAL, R0        ; open? asked before anything changes
+        BBC     #IO$V_DELETE, IRP$L_FUNC(R11), 55$
+        MOVAB   HDR, R2
+        BSBW    RMS$FILEBUSY
+        CMPL    R0, #RMS$_DME
+        BEQL    65$
+55$:    PUSHL   R0                      ; RMS$_FLK while it is open
+        TSTL    ENTLEN
         BEQL    60$
         MOVAB   DIRHDR, R3
         MOVAB   ENTNAME, R6
         MOVL    ENTLEN, R7
         MOVL    ENTVER, R8
         BSBW    FIL$REMOVE
-        BLBC    R0, 90$
-60$:    BBC     #IO$V_DELETE, IRP$L_FUNC(R11), 80$
-        MOVAB   HDR, R2
-        BSBW    RMS$FILEBUSY
+        BLBC    R0, 85$
+60$:    MOVL    (SP)+, R0
+        BBC     #IO$V_DELETE, IRP$L_FUNC(R11), 80$
         BLBS    R0, 70$
-        CMPL    R0, #RMS$_FLK
-        BNEQ    65$
         MOVAB   HDR, R2                 ; open: the last to close it
         BSBW    RMS$MARKDEL
         RSB
@@ -1892,6 +1896,8 @@ DELFILE:
         BSBW    FIL$DELHDR
         RSB
 80$:    MOVL    #SS$_NORMAL, R0
+        RSB
+85$:    TSTL    (SP)+
 90$:    RSB
 
 ; ACPCTL: FIB, for IO$_ACPCONTROL. Does FIB$W_CNTRLFUNC: 0, FIB$C_REMAP
