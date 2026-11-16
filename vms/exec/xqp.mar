@@ -202,6 +202,7 @@ SLOT:   .LONG   0                       ; the channel's PCB$AL_WCB slot
 CHANFILE:                               ; 1 if HDR is the file open on the channel
         .LONG   0
 MADE:   .LONG   0                       ; CREATE: bit 0, it made the header; bit 1, it entered the name
+WROTE:  .LONG   0                       ; 1 if WRITEATTR wrote the header
 KEEP:   .LONG   FCH$M_KEEP              ; the characteristics WRITEATTR keeps: a new file's may be a directory
 ACLBUF: .BLKB   ACLMAX                  ; the file's ACL, while the ACL attributes work on it
 ACLBYTES:                               ; its bytes
@@ -413,7 +414,7 @@ GETFIB:
 
 ; PUTFIB: AP = $QIO's arguments. Writes FIB back to p1's, FIBLEN bytes,
 ; and RESULT, if RESLEN says there is one, into p4's string, as much as
-; fits, and its length into p3's word. R0 = SS$_NORMAL or SS$_ACCVIO.
+; fits, and its whole length into p3's word, which says if it was cut. R0 = SS$_NORMAL or SS$_ACCVIO.
 ; Uses R0-R5.
 PUTFIB:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
@@ -434,13 +435,11 @@ PUTFIB:
         MOVL    R3, R1
 20$:    MOVL    4(R2), R2
         IFNOWRT R1, (R2), 85$
-        PUSHL   R1
         MOVC3   R1, RESULT, (R2)
-        MOVL    (SP)+, R1
 30$:    MOVL    36(AP), R2
         BEQL    80$
         IFNOWRT #2, (R2), 85$
-        MOVW    R1, (R2)
+        MOVW    RESLEN, (R2)
 80$:    MOVL    #SS$_NORMAL, R0
         RSB
 85$:    MOVL    #SS$_ACCVIO, R0
@@ -595,7 +594,8 @@ ISWILD:
 ; = the name, R7 = its length, R8 = its version, and R9 = 0 to find the
 ; first match, or, with FIB$L_WCC not 0, the one to go on after: the
 ; result string the caller passes back in p4, its length in p3's word,
-; or with none the last of as many matches as FIB$L_WCC counts. R0 =
+; or with none, or one cut short, the last of as many matches as
+; FIB$L_WCC counts. R0 =
 ; SS$_NORMAL, SS$_NOMOREFILES, SS$_BADPARAM, SS$_ACCVIO, or the disk's
 ; error. Uses R0-R10.
 WILDCC:
@@ -611,13 +611,23 @@ WILDCC:
         BEQL    10$
         IFNORD  #2, (R0), 85$
         CMPW    (R0), R2
-        BGEQU   10$
+        BGTRU   20$                     ; cut short: as many as FIB$L_WCC counts
         MOVZWL  (R0), R2
 10$:    TSTL    R2
         BEQL    20$
         MOVL    4(R1), R3
         IFNORD  R2, (R3), 85$
-        MOVAB   AFTER+3, R6
+        PUSHL   R1
+        LOCC    #59, R2, (R3)           ; its version, a semicolon's, or cut short too
+        MOVL    (SP)+, R1
+        TSTL    R0
+        BEQL    20$
+        MOVL    4(R1), R3
+        MOVZWL  (R1), R2
+        MOVL    36(AP), R0
+        BEQL    12$
+        MOVZWL  (R0), R2
+12$:    MOVAB   AFTER+3, R6
         BSBW    PARSE
         BLBC    R0, 90$
         MOVB    R7, AFTER+2
@@ -810,9 +820,11 @@ READATTR:
 ; the file open (CHKBUSY) and the access the process needs, then gives
 ; the file each of them, marks it revised and writes its header. R0 =
 ; SS$_NORMAL, SS$_BADATTRIB, SS$_ACCVIO, SS$_WRITLCK, SS$_ACCONFLICT,
-; SS$_INSFMEM, SS$_NOPRIV, or the disk's error. Uses R0-R10.
+; SS$_INSFMEM, SS$_NOPRIV, or the disk's error; WROTE = 1 if it wrote
+; the header, else 0. Uses R0-R10.
 WRITEATTR:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
+        CLRL    WROTE
         CLRL    R5                      ; the access it takes
         MOVL    ATRLIST, R6
         BNEQ    5$
@@ -882,7 +894,8 @@ WRITEATTR:
         MOVL    ACLBYTES, R3
         BSBW    FIL$ACLPUT
         BSBW    ACLSTATUS
-70$:    MOVAB   HDR, R1
+70$:    MOVL    #1, WROTE
+        MOVAB   HDR, R1
         BSBW    FIL$WRITEHDR
         RSB
 80$:    MOVL    #SS$_NORMAL, R0
@@ -1516,7 +1529,8 @@ CLOSEWCB:
         BSBW    WRITEATTR
         MOVL    (SP)+, R10
         MOVL    R0, (SP)
-        BRB     40$
+        BLBS    WROTE, 40$              ; it marked it revised
+        BLBC    R0, 40$
 20$:    BBC     #WCB$V_WRITTEN, WCB$L_FLAGS(R10), 40$
         BBS     #WCB$V_NORECORD, WCB$L_FLAGS(R10), 40$
         BSBW    REVISED
