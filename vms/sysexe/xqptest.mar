@@ -11,7 +11,8 @@
 ; for reading. A wildcard looks up XQP1.TMP and XQP2.TMP, made for it, in
 ; turn by FIB$L_WCC, then deletes them the same way. IO$_ACPCONTROL has
 ; no disk quotas; XQP.DAT, deleted while open, goes as it closes, and a
-; file made marked for delete goes with the channel, at $DASSGN.
+; file made marked for delete, its new blocks zeros, goes with the
+; channel, at $DASSGN.
 ; IO$_ACCESS!IO$M_CREATE makes a file that isn't there. It says
 ; "XQPTEST: ok", else exits with 2 * the number of the check that failed
 ; (EXPECT).
@@ -179,12 +180,20 @@ BUF2:   .BLKB   BYTES
         BLBC    R0, 30$
         MOVL    #28*2, R0
         RET
-; A file made marked for delete goes with the channel.
+; A file made marked for delete, whose blocks, XQP.DAT's maybe, read as
+; zeros, goes with the channel.
 30$:    BSBW    CLRFIB
         MOVL    #FIB$M_WRITE, FIB+FIB$L_ACCTL
+        MOVW    #FIB$M_EXTEND, FIB+FIB$W_EXCTL
+        MOVL    #3, FIB+FIB$L_EXSZ
         $QIOW_S CHAN=CHAN, FUNC=#IO$_CREATE!IO$M_CREATE!IO$M_ACCESS!IO$M_DELETE, IOSB=IOSB, P1=FIBDSC
         BSBW    IOS
         EXPECT  #SS$_NORMAL, 29
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF2, P2=#BYTES, P3=#1
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 35
+        SKPC    #0, #BYTES, BUF2
+        EXPECT  #0, 36
         MOVL    FIB+FIB$W_FID, FID
         MOVW    FIB+FIB$W_FID+4, FID+4
         $DASSGN_S CHAN=CHAN
