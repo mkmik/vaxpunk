@@ -694,7 +694,8 @@ LITERAL
     WCB$K_LENGTH = 528,
     WCB$V_WRITE = 0,  ! open for writing
     WCB$V_WRITTEN = 1,  ! written: its revision date changes when it closes
-    WCB$V_NORECORD = 2;  ! FIB$M_NORECORD: its revision date stays
+    WCB$V_NORECORD = 2,  ! FIB$M_NORECORD: its revision date stays
+    WCB$V_READ = 3;  ! the process may read it, as VMS's first IO$_READVBLK checks
 MACRO
     WCB$L_VCB = 0, 0, 32, 0 %,  ! the file's volume
     WCB$L_LKID = 4, 0, 32, 0 %,  ! its access arbitration lock

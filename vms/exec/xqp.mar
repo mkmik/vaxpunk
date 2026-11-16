@@ -1458,7 +1458,9 @@ OPENCHAN:
 
 ; OPENWCB: HDR = a file's header, FIB$L_ACCTL = how it is opened, SLOT =
 ; the channel's slot. Gives the channel the file: a WCB with a copy of
-; the header, and its access arbitration lock, in the mode VMS's XQP
+; the header, whether the process may read it, which IO$_READVBLK takes
+; whatever the file was opened for, and its access arbitration lock, in
+; the mode VMS's XQP
 ; takes: EX for FIB$M_NOREAD, else for writing CW, PW with
 ; FIB$M_NOWRITE, for reading CR, PR with FIB$M_NOWRITE. R0 = SS$_NORMAL,
 ; SS$_ACCONFLICT if another open's lock blocks it, or SS$_INSFMEM. Uses
@@ -1475,8 +1477,13 @@ OPENWCB:
         MOVL    FIB+FIB$L_ACCTL, R3
         BBC     #FIB$V_WRITE, R3, 5$
         BISL2   #1@WCB$V_WRITE, WCB$L_FLAGS(R4)
-5$:     BBC     #FIB$V_NORECORD, R3, 8$
+5$:     BBC     #FIB$V_NORECORD, R3, 6$
         BISL2   #1@WCB$V_NORECORD, WCB$L_FLAGS(R4)
+6$:     MOVL    #ARM$M_READ, R0         ; may it be read, whatever it was opened for?
+        MOVAB   HDR, R1
+        BSBW    FIL$CHKHDR
+        BLBC    R0, 8$
+        BISL2   #1@WCB$V_READ, WCB$L_FLAGS(R4)
 8$:     MOVL    #LCK$K_EXMODE, R1       ; the lock's mode
         BBS     #FIB$V_NOREAD, R3, 20$
         BBC     #FIB$V_WRITE, R3, 10$
@@ -1583,8 +1590,8 @@ CLOSEWCB:
 ; the blocks allocated go: its header's, read again once, if the file is
 ; past them, for another open may have extended it: an RMS writer's
 ; copy, else the disk's. R0 = the status, the bytes done in its high
-; word: SS$_NORMAL, SS$_ACCVIO, SS$_FILNOTACC, SS$_NOPRIV writing a file
-; open only for reading, SS$_WRITLCK, SS$_ILLBLKNUM for VBN 0,
+; word: SS$_NORMAL, SS$_ACCVIO, SS$_FILNOTACC, SS$_NOPRIV reading a file
+; the process may not read, or writing one open only for reading, SS$_WRITLCK, SS$_ILLBLKNUM for VBN 0,
 ; SS$_ENDOFFILE past the allocation, or the disk's error. Uses R0-R10.
 RWVBLK:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
@@ -1597,9 +1604,13 @@ RWVBLK:
         MOVL    36(AP), R6              ; the next VBN
         CLRL    -(SP)                   ; 1 once the header is read again
         BICL3   #^C63, IRP$L_FUNC(R11), R0
+        MOVL    #SS$_NOPRIV, R1
         CMPL    R0, #IO$_WRITEVBLK
-        BNEQ    5$
-        MOVL    #SS$_NOPRIV, R0
+        BEQL    3$
+        MOVL    R1, R0                  ; a read: if the process may read it
+        BBC     #WCB$V_READ, WCB$L_FLAGS(R10), 85$
+        BRB     5$
+3$:     MOVL    R1, R0
         BBC     #WCB$V_WRITE, WCB$L_FLAGS(R10), 85$
         MOVL    WCB$L_VCB(R10), R1
         MOVL    #SS$_WRITLCK, R0
