@@ -726,9 +726,10 @@ READFID:
 
 ; PARSE: R2 = a name's length, R3 = its address, readable, R6 = a buffer
 ; of 80 bytes. Takes the name, NAME.TYPE;VER or NAME.TYPE.VER, the
-; version absent or empty for the highest, * for any: the name, in
-; capitals, in R6's buffer, R7 = its length, R8 = the version, 0 the
-; highest, -1 any. R0 = SS$_NORMAL or SS$_BADPARAM. Uses R0-R5, R7, R8.
+; version absent or empty for the highest, * for any, the type absent
+; for an empty one: NAME.TYPE, in capitals, in R6's buffer, R7 = its
+; length, R8 = the version, 0 the highest, -1 any. R0 = SS$_NORMAL or
+; SS$_BADPARAM. Uses R0-R5, R7, R8.
 PARSE:
         .JSB_ENTRY  OUTPUT=<R7, R8>, SCRATCH=<R2, R3, R4, R5>
         CLRL    R7
@@ -776,7 +777,13 @@ PARSE:
 50$:    CLRL    R8
 60$:    TSTL    R7
         BEQL    80$
-        MOVL    #SS$_NORMAL, R0
+        TSTL    R4                      ; NAME: NAME., its type empty
+        BNEQ    70$
+        CMPL    R7, #80
+        BGEQU   80$
+        MOVB    #^A/./, (R6)[R7]
+        INCL    R7
+70$:    MOVL    #SS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_BADPARAM, R0
         RSB
@@ -1860,11 +1867,10 @@ ENTER:
 ; VALNAME: NAME = p2's name, R7 = its length, R8 = its version, as
 ; PARSE took them. Checks it can be a directory entry's name, as RMS's
 ; CHECK does: letters, digits, $, _ and -, a name and a type of 39 at
-; most, between them a dot, which is added if it has none, and no
-; wildcard. R7 = its length then. R0 = SS$_NORMAL or SS$_BADFILENAME.
-; Uses R0-R3.
+; most, the dot PARSE made sure of between them, and no wildcard. R0 =
+; SS$_NORMAL or SS$_BADFILENAME. Uses R0-R3.
 VALNAME:
-        .JSB_ENTRY  OUTPUT=<R7>, SCRATCH=<R2, R3>
+        .JSB_ENTRY  SCRATCH=<R2, R3>
         TSTL    R8
         BLSS    80$
         CLRL    R1                      ; where
@@ -1899,13 +1905,7 @@ VALNAME:
         BGTRU   80$
 40$:    INCL    R1
         BRB     10$
-50$:    TSTL    R3                      ; NAME: NAME.
-        BNEQ    60$
-        CMPL    R7, #80
-        BGEQU   80$
-        MOVB    #^A/./, NAME[R7]
-        INCL    R7
-60$:    MOVL    #SS$_NORMAL, R0
+50$:    MOVL    #SS$_NORMAL, R0
         RSB
 80$:    MOVL    #SS$_BADFILENAME, R0
         RSB
