@@ -203,6 +203,7 @@ CHANFILE:                               ; 1 if HDR is the file open on the chann
         .LONG   0
 MADE:   .LONG   0                       ; CREATE: bit 0, it made the header; bit 1, it entered the name
 WROTE:  .LONG   0                       ; 1 if WRITEATTR wrote the header
+NOREV:  .LONG   0                       ; 1 if it leaves the revision date: FIB$M_NORECORD's close
 KEEP:   .LONG   FCH$M_KEEP              ; the characteristics WRITEATTR keeps: a new file's may be a directory
 ACLBUF: .BLKB   ACLMAX                  ; the file's ACL, while the ACL attributes work on it
 ACLBYTES:                               ; its bytes
@@ -818,10 +819,10 @@ READATTR:
 ; WRITEATTR: ATRLIST = an attribute list, HDR = the file's header.
 ; Checks the attributes in the list, the volume, that no other stream has
 ; the file open (CHKBUSY) and the access the process needs, then gives
-; the file each of them, marks it revised and writes its header. R0 =
-; SS$_NORMAL, SS$_BADATTRIB, SS$_ACCVIO, SS$_WRITLCK, SS$_ACCONFLICT,
-; SS$_INSFMEM, SS$_NOPRIV, or the disk's error; WROTE = 1 if it wrote
-; the header, else 0. Uses R0-R10.
+; the file each of them, marks it revised, unless NOREV, and writes its
+; header. R0 = SS$_NORMAL, SS$_BADATTRIB, SS$_ACCVIO, SS$_WRITLCK,
+; SS$_ACCONFLICT, SS$_INSFMEM, SS$_NOPRIV, or the disk's error; WROTE = 1
+; if it wrote the header, else 0. Uses R0-R10.
 WRITEATTR:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10>
         CLRL    WROTE
@@ -864,8 +865,9 @@ WRITEATTR:
         BLBC    R0, 90$
         BSBW    CHKBUSY
         BLBC    R0, 90$
+        BLBS    NOREV, 45$
         BSBW    REVISED
-        BSBW    LOADACL
+45$:    BSBW    LOADACL
         PUSHL   HDR+FH2$L_FILECHAR      ; what it keeps
         PUSHL   HDR+FH2$W_RECATTR+FAT$L_HIBLK
         MOVL    ATRLIST, R6
@@ -1525,9 +1527,11 @@ CLOSEWCB:
         TSTL    ATRLIST
         BEQL    20$
         MOVL    #1, CHANFILE            ; no other open may have it: its header would win
+        EXTZV   #WCB$V_NORECORD, #1, WCB$L_FLAGS(R10), NOREV
         PUSHL   R10
         BSBW    WRITEATTR
         MOVL    (SP)+, R10
+        CLRL    NOREV
         MOVL    R0, (SP)
         BLBS    WROTE, 40$              ; it marked it revised
         BLBC    R0, 40$
