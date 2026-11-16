@@ -52,8 +52,9 @@ arbitration lock ([ADR-0036](0036-file-access-arbitration-locks.md)).
    blocks at a time, as `FIL$READIMG` reads an image: `FIL$READVBN` and
    `FIL$WRITEVBN` with the WCB's header, up to the blocks it has
    allocated, then `SS$_ENDOFFILE` with the bytes done in the IOSB. A
-   VBN past them reads the header again from the disk once, for another
-   open may have extended the file. A write's last block is filled with
+   VBN past them reads the header again once, for another open may have
+   extended the file: an RMS stream's copy, newer than the disk's
+   (`RMS$PEERHDR`), else the disk's. A write's last block is filled with
    zeros, as a disk writes a partial block.
 4. **An open takes the access arbitration lock in the mode VMS's XQP
    takes** (`LOCK_MODE`): EX for `FIB$M_NOREAD`, else CW for writing, PW
@@ -64,7 +65,8 @@ arbitration lock ([ADR-0036](0036-file-access-arbitration-locks.md)).
    for delete is there only for `BYPASS`.
 5. **A close works on the header as the disk has it**: `IO$_DEACCESS`
    reads it, writes p5's attributes into it if the file was open for
-   writing, or marks it revised if it was written, unless
+   writing and no other open has it, whose header would win, else
+   `SS$_ACCONFLICT`, or marks it revised if it was written, unless
    `FIB$M_NORECORD`, then gives back the lock, and the last open of a
    file marked for delete deletes it, whether RMS or a channel had it
    last. `$DASSGN`, an image's exit and a process's deletion close the

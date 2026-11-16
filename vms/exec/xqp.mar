@@ -33,8 +33,9 @@
 ;                  which takes delete access, or marks it for delete if
 ;                  it is open, for the last to close it.
 ;   IO$_DEACCESS   closes the file open on the channel, after writing
-;                  p5's attributes if it was open for writing, and marks
-;                  it revised if it was written.
+;                  p5's attributes if it was open for writing, as
+;                  IO$_MODIFY does, and marks it revised if it was
+;                  written.
 ;   IO$_READVBLK   reads p2 bytes into p1 from the open file's VBN p3,
 ;   IO$_WRITEVBLK  writes them there, the last block's rest zeros:
 ;                  SS$_ENDOFFILE past the blocks allocated, with the
@@ -103,7 +104,7 @@
         .EXTERNAL FIL$SEARCHDIR, FIL$CHKHDR, FIL$SETLIMIT, IOC$REQCOM, RMS$FILEBUSY
         .EXTERNAL FIL$ACLGET, FIL$ACLPUT, FIL$READVBN, FIL$WRITEVBN, FIL$CREHDR
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$EXTEND, FIL$SETNAME
-        .EXTERNAL RMS$LOCKFILE, RMS$UNLOCKFILE, RMS$MARKDEL, SCH$GL_CURPCB
+        .EXTERNAL RMS$LOCKFILE, RMS$UNLOCKFILE, RMS$MARKDEL, RMS$PEERHDR, SCH$GL_CURPCB
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
 BLOCK = 512
@@ -194,7 +195,7 @@ ATRLIST:                                ; p5, the attribute list, or 0
         .LONG   0
 IOST2:  .LONG   0                       ; the IOSB's second longword
 SLOT:   .LONG   0                       ; the channel's PCB$AL_WCB slot
-CHANFILE:                               ; 1 if HDR is the file open on the channel; 2 to write it as it closes
+CHANFILE:                               ; 1 if HDR is the file open on the channel
         .LONG   0
 MADE:   .LONG   0                       ; CREATE: bit 0, it made the header; bit 1, it entered the name
 ACLBUF: .BLKB   ACLMAX                  ; the file's ACL, while the ACL attributes work on it
@@ -249,7 +250,8 @@ XQP$PERFORM::
         MOVL    #SS$_FILNOTACC, R0
         MOVL    @SLOT, R10
         BEQL    15$
-        CLRL    CHANFILE
+        CLRL    FIB+FIB$L_ACLCTX        ; no FIB: the ACL attributes start afresh
+        MOVL    #SS$_NORMAL, FIB+FIB$L_ACL_STATUS
         BSBW    CLOSEWCB
 15$:    BRW     80$
 16$:    BSBW    GETFIB
@@ -307,12 +309,14 @@ XQP$PERFORM::
         BLBC    (SP), 75$               ; the first failure
         MOVL    R0, (SP)
 75$:    MOVL    (SP)+, R0
-80$:    BSBW    FIL$UNLOCK
+80$:    PUSHL   IOST2                   ; while it is this request's
+        BSBW    FIL$UNLOCK
         DSBINT  #IPL$_SYNCH
-        MOVL    IOST2, R1
+        MOVL    4(SP), R1
         MOVL    R11, R3
         BSBW    IOC$REQCOM
         ENBINT
+        TSTL    (SP)+
         POPR    #^M<R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         RSB
 
@@ -1342,13 +1346,9 @@ REVISED:
 ; CHKBUSY: HDR = a file's header, CHANFILE = whether it is the one open
 ; on the channel. R0 = SS$_NORMAL if no other open has it: for the
 ; channel's own file, its access arbitration lock is given back for the
-; look and taken again; with CHANFILE 2, as it closes, nothing is
-; looked at. Else SS$_ACCONFLICT, or SS$_INSFMEM. Uses R0-R3.
+; look and taken again. Else SS$_ACCONFLICT, or SS$_INSFMEM. Uses R0-R3.
 CHKBUSY:
         .JSB_ENTRY  SCRATCH=<R2, R3>
-        MOVL    #SS$_NORMAL, R0
-        CMPL    CHANFILE, #2
-        BEQL    90$
         BLBC    CHANFILE, 10$
         MOVL    @SLOT, R1
         MOVL    WCB$L_LKID(R1), R1
@@ -1374,7 +1374,7 @@ CHKBUSY:
 30$:    MOVL    #SS$_INSFMEM, R0
         RSB
 80$:    MOVL    #SS$_NORMAL, R0
-90$:    RSB
+        RSB
 
 ; OPENCHAN: HDR = a file IO$_ACCESS found, FIB$L_ACCTL = how. Opens it
 ; on the channel, if the process may, as OPENWCB does: one marked for
@@ -1461,7 +1461,8 @@ OPENWCB:
 ; CLOSEWCB: R10 = a WCB, SLOT = the channel's slot, ATRLIST = the
 ; attributes to write, or 0. Closes its file, holding FIL$LOCK, as VMS's
 ; XQP deaccesses it: one open for writing gets the attributes, if the
-; process may write them (WRITEATTR), or is marked revised if it was
+; process may write them and no other open has the file (WRITEATTR,
+; which then fails), or is marked revised if it was
 ; written, unless it was opened FIB$M_NORECORD, in its header as the disk
 ; has it, which other opens may have changed. Then its access
 ; arbitration lock goes, and the last to close a file marked for delete
@@ -1482,7 +1483,7 @@ CLOSEWCB:
         BBC     #WCB$V_WRITE, WCB$L_FLAGS(R10), 40$
         TSTL    ATRLIST
         BEQL    20$
-        MOVL    #2, CHANFILE            ; no look for other opens
+        MOVL    #1, CHANFILE            ; no other open may have it: its header would win
         PUSHL   R10
         BSBW    WRITEATTR
         MOVL    (SP)+, R10
@@ -1522,8 +1523,8 @@ CLOSEWCB:
 ; DK$FDT probed, from the file open on the channel, from VBN p3, or
 ; writes them there, the last block's rest zeros, BOUNCES blocks at a
 ; time through BOUNCE, as far as the blocks allocated go: its header's,
-; read again from the disk once, if the file is past them, for another
-; open may have extended it. R0 = the status, the bytes done in its high
+; read again once, if the file is past them, for another open may have
+; extended it: from an RMS stream that has it open, else from the disk. R0 = the status, the bytes done in its high
 ; word: SS$_NORMAL, SS$_FILNOTACC, SS$_NOPRIV writing a file open only for
 ; reading, SS$_WRITLCK, SS$_ILLBLKNUM for VBN 0, SS$_ENDOFFILE past the
 ; allocation, or the disk's error. Uses R0-R10.
@@ -1572,6 +1573,8 @@ RWVBLK:
         MOVAB   WCB$AB_HDR(R10), R1
         BSBW    FIL$READHDR
         BLBC    R0, 85$
+        MOVAB   WCB$AB_HDR(R10), R2     ; or an RMS stream's, newer
+        BSBW    RMS$PEERHDR
         BRB     15$
 20$:    CMPL    R4, R0
         BLEQU   25$
