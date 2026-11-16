@@ -598,7 +598,7 @@ ISWILD:
 ; = the name, R7 = its length, R8 = its version, and R9 = 0 to find the
 ; first match, or, with FIB$L_WCC not 0, the one to go on after: the
 ; result string the caller passes back in p4, its length in p3's word,
-; or with none, or one cut short, the last of as many matches as
+; or without both, or with one cut short, the last of as many matches as
 ; FIB$L_WCC counts. R0 =
 ; SS$_NORMAL, SS$_NOMOREFILES, SS$_BADPARAM, SS$_ACCVIO, or the disk's
 ; error. Uses R0-R10.
@@ -611,13 +611,13 @@ WILDCC:
         BEQL    20$
         IFNORD  #8, (R1), 85$
         MOVZWL  (R1), R2
-        MOVL    36(AP), R0
-        BEQL    10$
+        MOVL    36(AP), R0              ; its length, without which it can't be trusted
+        BEQL    20$
         IFNORD  #2, (R0), 85$
         CMPW    (R0), R2
         BGTRU   20$                     ; cut short: as many as FIB$L_WCC counts
         MOVZWL  (R0), R2
-10$:    TSTL    R2
+        TSTL    R2
         BEQL    20$
         CMPL    R2, #80+6               ; longer is no result string of ours
         BGTRU   20$
@@ -629,11 +629,8 @@ WILDCC:
         TSTL    R0
         BEQL    20$
         MOVL    4(R1), R3
-        MOVZWL  (R1), R2
-        MOVL    36(AP), R0
-        BEQL    12$
-        MOVZWL  (R0), R2
-12$:    MOVAB   AFTER+3, R6
+        MOVZWL  @36(AP), R2
+        MOVAB   AFTER+3, R6
         BSBW    PARSE
         BLBC    R0, 90$
         MOVB    R7, AFTER+2
