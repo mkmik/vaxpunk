@@ -82,7 +82,11 @@ arbitration lock ([ADR-0036](0036-file-access-arbitration-locks.md)).
    `RMS$MARKDEL` for a file open anywhere. `IO$_CREATE` without
    `IO$M_CREATE` enters an existing file, `IO$_DELETE` without
    `IO$M_DELETE` only removes the entry, and `IO$_ACCESS!IO$M_CREATE`
-   makes a file that isn't there, `SS$_CREATED`, as VMS's.
+   makes a file that isn't there, `SS$_CREATED`, as VMS's. A new file
+   takes write access to the volume, and p5's characteristics may make
+   it a directory, as `LIB$CREATE_DIR` asks; `IO$_MODIFY` keeps that bit.
+   A channel's write makes RMS's indexed streams of the file forget
+   their buckets (`RMS$FORGET`), as another stream's block I/O does.
 8. **A wildcard lookup goes on after the result string**, the
    `NAME.TYPE;VER` it gave in p4, which the caller passes back with
    `FIB$L_WCC` not 0, as VMS's `FIND` does; with none, after as many

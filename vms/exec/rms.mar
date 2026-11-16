@@ -2718,6 +2718,35 @@ RMS$PEERHDR::
         POPR    #^M<R0, R1, R2, R3, R4, R5, R6>
         RSB
 
+; RMS$FORGET: R2 = the header of a file a channel wrote blocks of
+; (xqp.mar), on F11$GL_VCB's volume. Its opens by an indexed file's
+; record I/O forget their buckets (IDX$FORGET), as after another
+; stream's block I/O (RMS$SYNC). Holding FIL$LOCK. Keeps every register.
+RMS$FORGET::
+        .JSB_ENTRY
+        PUSHR   #^M<R0, R1, R2, R3, R4, R5>
+        DSBINT  #IPL$_SYNCH             ; their PCBs
+        SUBL3   #1, SCH$GL_MAXPIX, R3
+10$:    MOVL    @SCH$GL_PCBVEC[R3], R4
+        BEQL    40$
+        MOVL    #1, R5
+20$:    BBC     R5, PCB$L_FILES(R4), 30$
+        MOVL    PCB$A_IFAB(R4)[R5], R1
+        TSTL    IFB$L_IDX(R1)
+        BEQL    30$
+        CMPL    IFB$L_VCB(R1), F11$GL_VCB
+        BNEQ    30$
+        CMPL    IFB$AB_HDR+FH2$W_FID(R1), FH2$W_FID(R2)
+        BNEQ    30$
+        CMPW    IFB$AB_HDR+FH2$W_FID+4(R1), FH2$W_FID+4(R2)
+        BNEQ    30$
+        BSBW    IDX$FORGET
+30$:    AOBLEQ  #MAXIFI, R5, 20$
+40$:    SOBGTR  R3, 10$
+        ENBINT
+        POPR    #^M<R0, R1, R2, R3, R4, R5>
+        RSB
+
 ; RMS$TAKEHDR: R7 = an IFAB just opened, with its file's header as the
 ; disk has it. If another stream has the file open, takes its copy
 ; instead, which is newer: a writer writes its header when it closes.

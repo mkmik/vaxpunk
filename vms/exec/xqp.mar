@@ -21,10 +21,11 @@
 ;   IO$_MODIFY     writes attributes; with FIB$W_VERLIMIT not 0 gives
 ;                  the name that version limit, in the directory, which
 ;                  takes write access to it.
-;   IO$_CREATE     with IO$M_CREATE makes a file, with p5's attributes,
-;                  FIB$L_EXSZ blocks for FIB$M_EXTEND, opened on the
-;                  channel with IO$M_ACCESS and marked for delete with
-;                  IO$M_DELETE; with a directory enters it there by p2's
+;   IO$_CREATE     with IO$M_CREATE makes a file, which takes write
+;                  access to the volume, with p5's attributes, which may
+;                  make it a directory, FIB$L_EXSZ blocks for
+;                  FIB$M_EXTEND, opened on the channel with IO$M_ACCESS
+;                  and marked for delete with IO$M_DELETE; with a directory enters it there by p2's
 ;                  name, a version above the highest unless it gives one,
 ;                  which takes write access to the directory. Without
 ;                  IO$M_CREATE it enters FIB$W_FID's file.
@@ -104,7 +105,8 @@
         .EXTERNAL FIL$SEARCHDIR, FIL$CHKHDR, FIL$SETLIMIT, IOC$REQCOM, RMS$FILEBUSY
         .EXTERNAL FIL$ACLGET, FIL$ACLPUT, FIL$READVBN, FIL$WRITEVBN, FIL$CREHDR
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$EXTEND, FIL$SETNAME
-        .EXTERNAL RMS$LOCKFILE, RMS$UNLOCKFILE, RMS$MARKDEL, RMS$PEERHDR, SCH$GL_CURPCB
+        .EXTERNAL RMS$LOCKFILE, RMS$UNLOCKFILE, RMS$MARKDEL, RMS$PEERHDR, RMS$FORGET, SCH$GL_CURPCB
+        .EXTERNAL FIL$CHKPRO
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
 BLOCK = 512
@@ -123,6 +125,7 @@ FH2$W_BACKLINK = 66
 FI2$W_REVISION = 20                     ; in the ident area
 FI2$Q_REVDATE = 30
 FCH$V_MARKDEL = 15
+FCH$M_DIRECTORY = ^X2000
 FCH$M_KEEP = ^X1F080                    ; the characteristics the file system keeps:
                                         ; CONTIG, SPOOL, DIRECTORY, BADBLOCK, MARKDEL, NOCHARGE
 ; An attribute's class, in ATRS.
@@ -198,6 +201,7 @@ SLOT:   .LONG   0                       ; the channel's PCB$AL_WCB slot
 CHANFILE:                               ; 1 if HDR is the file open on the channel
         .LONG   0
 MADE:   .LONG   0                       ; CREATE: bit 0, it made the header; bit 1, it entered the name
+KEEP:   .LONG   FCH$M_KEEP              ; the characteristics WRITEATTR keeps: a new file's may be a directory
 ACLBUF: .BLKB   ACLMAX                  ; the file's ACL, while the ACL attributes work on it
 ACLBYTES:                               ; its bytes
         .LONG   0
@@ -852,8 +856,9 @@ WRITEATTR:
         BRB     50$
 60$:    MOVL    (SP)+, HDR+FH2$W_RECATTR+FAT$L_HIBLK
         MOVL    (SP)+, R0
-        BICL2   #FCH$M_KEEP, HDR+FH2$L_FILECHAR
-        BICL2   #^C<FCH$M_KEEP>, R0
+        BICL2   KEEP, HDR+FH2$L_FILECHAR
+        MCOML   KEEP, R1
+        BICL2   R1, R0
         BISL2   R0, HDR+FH2$L_FILECHAR
         BLBC    ACLDIRTY, 70$           ; the ACL, if it changed
         MOVAB   HDR, R1
@@ -1346,7 +1351,9 @@ REVISED:
 ; CHKBUSY: HDR = a file's header, CHANFILE = whether it is the one open
 ; on the channel. R0 = SS$_NORMAL if no other open has it: for the
 ; channel's own file, its access arbitration lock is given back for the
-; look and taken again. Else SS$_ACCONFLICT, or SS$_INSFMEM. Uses R0-R3.
+; look and taken again, and if it can't be, the file is closed on the
+; channel, its WCB freed. Else SS$_ACCONFLICT, or SS$_INSFMEM. Uses
+; R0-R3.
 CHKBUSY:
         .JSB_ENTRY  SCRATCH=<R2, R3>
         BLBC    CHANFILE, 10$
@@ -1362,9 +1369,14 @@ CHKBUSY:
         MOVAB   WCB$AB_HDR(R3), R2
         BSBW    RMS$LOCKFILE
         MOVL    @SLOT, R3
-        CLRL    WCB$L_LKID(R3)
-        BLBC    R0, 20$
         MOVL    R1, WCB$L_LKID(R3)
+        BLBS    R0, 20$
+        MOVL    R3, R0                  ; no lock: the channel's file closes
+        MOVL    #WCB$K_LENGTH, R1
+        BSBW    EXE$DEANONPGDSIZ
+        CLRL    @SLOT
+        CLRL    CHANFILE
+        MOVL    #SS$_INSFMEM, (SP)
 20$:    MOVL    (SP)+, R0
         BLBS    R0, 80$
         CMPL    R0, #RMS$_FLK
@@ -1495,13 +1507,15 @@ CLOSEWCB:
         MOVAB   HDR, R1
         BSBW    FIL$WRITEHDR
         MOVL    R0, (SP)
-40$:    MOVL    WCB$L_LKID(R10), R1
+40$:    TSTL    @SLOT                   ; WRITEATTR may have closed it
+        BEQL    45$
+        MOVL    WCB$L_LKID(R10), R1
         BSBW    RMS$UNLOCKFILE
         CLRL    @SLOT
         MOVL    R10, R0
         MOVL    #WCB$K_LENGTH, R1
         BSBW    EXE$DEANONPGDSIZ
-        BLBC    4(SP), 80$
+45$:    BLBC    4(SP), 80$
         BBC     #FCH$V_MARKDEL, HDR+FH2$L_FILECHAR, 80$
         MOVZBL  HDR+FH2$B_FID_NMX, R0   ; marked for delete: still there?
         ASHL    #16, R0, R0
@@ -1605,6 +1619,8 @@ RWVBLK:
         BSBW    FIL$WRITEVBN
         BLBC    R0, 70$
         BISL2   #1@WCB$V_WRITTEN, WCB$L_FLAGS(R10)
+        MOVAB   WCB$AB_HDR(R10), R2     ; RMS's indexed streams read it again
+        BSBW    RMS$FORGET
 50$:    POPR    #^M<R3, R4>
         ADDL2   R3, R8
         ADDL2   R3, R9
@@ -1648,6 +1664,12 @@ CREATE:
         BBS     #VCB$V_WRITE, VCB$L_STATUS(R1), 20$
 15$:    RSB
 20$:    BBC     #IO$V_CREATE, R10, 30$
+        MOVL    F11$GL_VCB, R2          ; a new file takes write access to the volume
+        MOVL    VCB$L_OWNER(R2), R1
+        MOVZWL  VCB$W_PROT(R2), R2
+        MOVL    #ARM$M_WRITE, R0
+        BSBW    FIL$CHKPRO
+        BLBC    R0, 15$
         MOVAB   HDR, R1
         BSBW    FIL$CREHDR
         BLBC    R0, 15$
@@ -1680,9 +1702,11 @@ CREATE:
         BSBW    FIL$SETNAME
 50$:    BBC     #IO$V_CREATE, R10, 75$
         CLRL    CHANFILE
+        BICL3   #FCH$M_DIRECTORY, #FCH$M_KEEP, KEEP     ; it may be made a directory
         PUSHL   R10
         BSBW    WRITEATTR
         MOVL    (SP)+, R10
+        MOVL    #FCH$M_KEEP, KEEP
         BLBC    R0, 80$
         BBC     #FIB$V_EXTEND, FIB+FIB$W_EXCTL, 60$
         MOVL    FIB+FIB$L_EXSZ, R1
