@@ -580,7 +580,10 @@ ISWILD:
         BEQL    90$
         IFNORD  #8, (R1), 90$
         MOVZWL  (R1), R2
-        MOVL    4(R1), R3
+        CMPL    R2, #81                 ; past a name PARSE takes: two pages at most
+        BLEQU   10$
+        MOVL    #81, R2
+10$:    MOVL    4(R1), R3
         IFNORD  R2, (R3), 90$
         LOCC    #^A/*/, R2, (R3)
         BNEQ    80$
@@ -616,6 +619,8 @@ WILDCC:
         MOVZWL  (R0), R2
 10$:    TSTL    R2
         BEQL    20$
+        CMPL    R2, #80+6               ; longer is no result string of ours
+        BGTRU   20$
         MOVL    4(R1), R3
         IFNORD  R2, (R3), 85$
         PUSHL   R1
@@ -1940,8 +1945,11 @@ DELFILE:
         MOVAB   F11$AB_DIRBLK, R2
         MOVAB   HDR, R3
         BSBW    FIL$READVBN
-        BLBC    R0, 90$
-        MOVL    #SS$_DIRNOTEMPTY, R0
+        BLBS    R0, 40$
+        CMPL    R0, #SS$_ENDOFFILE      ; no blocks: empty
+        BEQL    50$
+        RSB
+40$:    MOVL    #SS$_DIRNOTEMPTY, R0
         CMPW    F11$AB_DIRBLK, #^XFFFF
         BNEQ    90$
 50$:    MOVL    #RMS$_NORMAL, R0        ; open? asked before anything changes
