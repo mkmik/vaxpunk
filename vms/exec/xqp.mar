@@ -1705,7 +1705,9 @@ CREATE:
 35$:    BSBW    ENTER
         BLBC    R0, 80$
         BRB     50$
-40$:    BBC     #IO$V_CREATE, R10, 75$  ; no: the name it has
+40$:    BBC     #IO$V_CREATE, R10, 75$  ; no: no directory yet, the name it has
+        CLRL    HDR+FH2$W_BACKLINK
+        CLRW    HDR+FH2$W_BACKLINK+4
         MOVL    32(AP), R1
         BEQL    50$
         BSBW    EXE$PROBER_DSC
