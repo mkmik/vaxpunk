@@ -837,7 +837,9 @@ const SHARING: Phase = Phase {
 /// SET FILE/ATTRIBUTE and /EXPIRATION_DATE change its record format and
 /// expiration date, the time through $BINTIM, which refuses 31-FEB.
 /// SET VOLUME/LABEL relabels DKB0:'s volume, on the disk, as MOUNT finds,
-/// and back.
+/// and back. XQPTEST makes, writes, reads, looks up by wildcard and
+/// deletes files there with the XQP's $QIO functions, a file open on its
+/// channel (ADR-0049).
 const SET_FILE: Phase = Phase {
     name: "set file",
     secs: 30,
@@ -889,7 +891,7 @@ const SET_FILE: Phase = Phase {
             1,
             concat!(
                 "SET VOLUME/LABEL=DATA DKB0:\rDISMOUNT DKB0:\rMOUNT/SYSTEM/PROTECTION=(W) DKB0: DATA\r",
-                "WRITE SYS$OUTPUT \"SETFILE: \", \"done\"\r",
+                "RUN XQPTEST\rWRITE SYS$OUTPUT \"SETFILE: \", \"done\"\r",
             ),
         ),
     ],
@@ -902,6 +904,7 @@ const SET_FILE: Phase = Phase {
         "$ SET FILE/EXPIRATION_DATE=31-FEB-2030 DKB0:[VL]A.TXT\n%SYSTEM-F-IVTIME, invalid time",
         "$ SET FILE/ATTRIBUTE=(RFM:ODD) DKB0:[VL]A.TXT\n%SYSTEM-F-BADPARAM, bad parameter value",
         "%MOUNT-I-MOUNTED, SCRATCH mounted on _DKB0:",
+        "XQPTEST: ok",
         "SETFILE: done",
     ],
 };

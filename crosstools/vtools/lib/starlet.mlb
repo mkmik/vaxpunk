@@ -54,7 +54,8 @@ SS$_PARTESCAPE = 508                    ; a terminal read: the buffer filled in 
 SS$_HANGUP = 716                        ; the terminal's line is gone: a TELNET connection closed
 SS$_OPINCOMPL = 724                     ; IOC$LINK_UCB: a unit by that number is there already
 SS$_REJECT = 660                        ; the peer refused the connection
-SS$_FILALRACC = 164                     ; a datagram socket's peer is set already
+SS$_FILALRACC = 164                     ; a file is open on the channel already; a datagram socket's peer is set already
+SS$_FILNOTACC = 172                     ; no file is open on the channel
 SS$_NOLINKS = 636                       ; the socket isn't connected, or a datagram has nowhere to go
 SS$_TOOMUCHDATA = 668                   ; a datagram longer than the socket sends
 SS$_PROTOCOL = 8308                     ; a protocol or address family the network doesn't have
@@ -91,6 +92,7 @@ SS$_NOSUCHSEC = 2424                    ; no global section by that name, or its
 SS$_ACCONFLICT = 2048                   ; the file is open, in a way the request conflicts with
 SS$_BADCHKSUM = 2056
 SS$_BADFILEHDR = 2064
+SS$_BADFILENAME = 2072                  ; a file name's syntax is wrong: a wildcard where there may be none
 SS$_BADFILEVER = 2080                   ; a version above 32767
 SS$_BADIRECTORY = 2088
 SS$_DATAOVERUN = 2104                   ; PTD$WRITE: the type-ahead buffer is full, and took only some
@@ -1708,7 +1710,16 @@ IO$_SETCHAR = 26                        ; a terminal: its permanent characterist
 IO$_SENSECHAR = 27                      ; a terminal: its permanent characteristics; a socket: as IO$_SENSEMODE
 IO$_ACCESS = 50                         ; a disk: looks a file up, reads its attributes; a socket: connects, or accepts
 IO$_MODIFY = 54                         ; a disk: writes a file's attributes
-IO$_DEACCESS = 52                       ; a socket: closes it
+IO$_DEACCESS = 52                       ; a disk: closes the file open on the channel; a socket: closes it
+IO$_CREATE = 51                         ; a disk: makes a file, or a directory entry for one
+IO$_DELETE = 53                         ; a disk: removes a directory entry, or deletes a file
+IO$_ACPCONTROL = 56                     ; a disk: the volume's other functions, FIB$W_CNTRLFUNC
+IO$V_ACCESS = 6                         ; a disk's ACCESS or CREATE: opens the file on the channel
+IO$M_ACCESS = ^X40
+IO$V_CREATE = 7                         ; a disk's CREATE: makes the file; ACCESS: makes it if it isn't there
+IO$M_CREATE = ^X80
+IO$V_DELETE = 8                         ; a disk's DELETE: deletes the file; CREATE: marks it for delete
+IO$M_DELETE = ^X100
 IO$_SENSEMODE = 39                      ; a terminal: its characteristics; a socket: its names, ioctls
 IO$V_ACCEPT = 7                         ; a socket's ACCESS: accepts a connection
 IO$M_ACCEPT = ^X80
@@ -1726,11 +1737,22 @@ IO$V_EXTEND = 15                        ; a socket name written is BSD 4.4's
 IO$M_EXTEND = ^X8000
         .ENDM   $IODEF
 
-; $FIBDEF: the file information block, p1 of a disk's IO$_ACCESS and
-; IO$_MODIFY, which names the file: by its ID, or by a name, p2, in the
-; directory whose ID is FIB$W_DID.
+; $FIBDEF: the file information block, p1 of a disk's IO$_ACCESS,
+; IO$_MODIFY, IO$_CREATE, IO$_DELETE, IO$_DEACCESS and IO$_ACPCONTROL,
+; which names the file: by its ID, or by a name, p2, in the directory
+; whose ID is FIB$W_DID.
         .MACRO  $FIBDEF
 FIB$L_ACCTL = 0                         ; how the file is accessed
+FIB$V_NOWRITE = 0                       ; no other process may write it
+FIB$M_NOWRITE = ^X1
+FIB$V_WRITE = 8                         ; for writing
+FIB$M_WRITE = ^X100
+FIB$V_NOREAD = 10                       ; no other process may read it
+FIB$M_NOREAD = ^X400
+FIB$V_EXECUTE = 16                      ; for executing: execute access, not read
+FIB$M_EXECUTE = ^X10000
+FIB$V_NORECORD = 21                     ; its revision date stays
+FIB$M_NORECORD = ^X200000
 FIB$W_FID = 4                           ; the file's ID, 3 words: number, sequence, RVN and its number's high byte
 FIB$W_FID_NUM = 4
 FIB$W_FID_SEQ = 6
@@ -1741,8 +1763,30 @@ FIB$W_DID_SEQ = 12
 FIB$B_DID_NMX = 15
 FIB$L_WCC = 16                          ; a wildcard lookup's context
 FIB$W_NMCTL = 20                        ; FIB$M_ bits: how the name is looked up
+FIB$V_WILD = 8                          ; the name has wildcards: FIB$L_WCC goes on from the match
+FIB$M_WILD = ^X100
 FIB$V_FINDFID = 11                      ; find the entry for FIB$W_FID in the directory, not p2's name
 FIB$M_FINDFID = ^X800
+FIB$W_EXCTL = 22                        ; FIB$M_ bits: how the file is extended
+FIB$V_EXTEND = 7                        ; allocate it FIB$L_EXSZ blocks more
+FIB$M_EXTEND = ^X80
+FIB$L_EXSZ = 24                         ; the blocks to allocate; then the blocks allocated
+FIB$L_EXVBN = 28                        ; then the first one's VBN
+FIB$W_CNTRLFUNC = 22                    ; IO$_ACPCONTROL's function, FIB$C_
+FIB$L_CNTRLVAL = 24                     ; and its value
+FIB$C_LOCK_VOL = 7                      ; IO$_ACPCONTROL's functions: lock the volume against allocation
+FIB$C_UNLK_VOL = 8
+FIB$C_ENA_QUOTA = 9                     ; the disk quota file's
+FIB$C_DSA_QUOTA = 10
+FIB$C_ADD_QUOTA = 11
+FIB$C_EXA_QUOTA = 12
+FIB$C_MOD_QUOTA = 13
+FIB$C_REM_QUOTA = 14
+FIB$C_REMAP = 16                        ; map the file open on the channel again
+FIB$C_FLUSH_CACHE = 18                  ; empty the cache FIB$L_CNTRLVAL names
+FIB$C_FID_CACHE = 1                     ; FLUSH_CACHE's caches
+FIB$C_EXTENT_CACHE = 2
+FIB$C_QUOTA_CACHE = 3
 FIB$W_VERLIMIT = 44                     ; the name's version limit
 FIB$L_ACLCTX = 48                       ; the ACL attributes' position: an ACE's number, from 1
 FIB$L_ACL_STATUS = 52                   ; and their status, the first failure's

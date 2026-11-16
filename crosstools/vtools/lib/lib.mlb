@@ -356,7 +356,8 @@ PCB$W_RMSPATHTMO = 706                  ; PATH_TIMEOUT, seconds, 0 for the syste
 PCB$B_RMSQUERY = 708                    ; QUERY_LOCK: 0 the system's, 1 enabled, 2 disabled
 PCB$B_RMSCONTEND = 709                  ; CONTENTION_POLICY: 0 the system's, 1 never, 2 sometimes, 3 always
 PCB$L_WAITIME = 712                     ; the second, EXE$GL_ABSTIM, it last became computable (SCH$INSCOM), for SCH$PIXSCAN
-PCB$K_LENGTH = 720
+PCB$AL_WCB = 720                        ; the file open on channel n, at 4*n: its WCB, or 0; VMS's CCB$L_WIND
+PCB$K_LENGTH = 848
 PCB$K_RMSMBF_SDK = 0                    ; in PCB$AB_RMSDFMBF and SGN$AB_RMSDFMBF: sequential files on disks,
 PCB$K_RMSMBF_SMT = 1                    ; magnetic tapes,
 PCB$K_RMSMBF_SUR = 2                    ; and unit record devices,
@@ -845,6 +846,22 @@ RLB$B_MODE = 16                         ; the mode it is held in
 RLB$B_AUTO = 17                         ; 1 if the stream's next operation drops it, not RAB$M_ULK's
 RLB$K_LENGTH = 32                       ; a pool block, in 16-byte units
         .ENDM   $IFBDEF
+
+; $WCBDEF: a WCB, the block of pool the XQP keeps a file open on a
+; channel in (xqp.mar): its volume, its access arbitration lock, and its
+; header, whose map turns VBNs into LBNs.
+        .MACRO  $WCBDEF
+WCB$L_VCB = 0                           ; the file's volume
+WCB$L_LKID = 4                          ; its access arbitration lock
+WCB$L_FLAGS = 8                         ; WCB$V_
+WCB$B_MODE = 12                         ; the lock's mode, LCK$K_
+WCB$AB_HDR = 16                         ; the file's header
+WCB$K_LENGTH = 528
+WCB$V_WRITE = 0                         ; open for writing
+WCB$V_WRITTEN = 1                       ; written: its revision date changes when it closes
+WCB$V_NORECORD = 2                      ; FIB$M_NORECORD: its revision date stays
+WCB$V_READ = 3                          ; the process may read it, as VMS's first IO$_READVBLK checks
+        .ENDM   $WCBDEF
 
 ; $PLGDEF, $KEYDEF, $AREADEF, $BKTDEF, $IRCDEF, $DLCDEF: relative and
 ; prologue 3 indexed files on the disk (crosstools/ods/docs/relative.md, indexed.md).

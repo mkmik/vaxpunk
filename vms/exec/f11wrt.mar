@@ -42,6 +42,7 @@ MFD = 4
 MAXVER = 32767
 MAXRUN = 16384                          ; blocks a format 2 pointer maps
 HEADERS = 16                            ; headers INITIALIZE makes room for, VMS's /HEADERS
+ERASES = 16                             ; blocks FIL$EXTEND erases at a time
 MAXVOL = ^X7F000000                     ; blocks FIL$INIT uses at most
 ; A file header (crosstools/ods/docs/file-header.md).
 FH2$B_IDOFFSET = 0
@@ -97,7 +98,7 @@ BITBLK: .BLKB   BLOCK                   ; a bitmap block, or the home block
 SBNUM:  .LONG   0                       ; the storage bitmap's block in it
 IBNUM:  .LONG   0                       ; or the index file bitmap's
 NEWHDR: .BLKB   BLOCK                   ; a header FIL$INIT makes
-ZEROS:  .BLKB   BLOCK                   ; an index file block not yet used
+ZEROS:  .BLKB   ERASES*BLOCK            ; an index file block not yet used; what FIL$EXTEND writes on a new run
 RECBUF: .BLKB   BLOCK+8                 ; a directory record being made, one entry too long at most
 DU_MODE:                                ; DIRUPD's: 0 enter, 1 remove, 2 set the version limit
         .LONG   0
@@ -611,10 +612,13 @@ ADDMAP:
 
 ; FIL$EXTEND: R1 = a block count, R3 = a file header. Allocates that many
 ; blocks more to the file, in as few runs as the storage bitmap has, and
-; maps them; FIL$WRITEHDR writes the header. R0 = SS$_NORMAL,
+; maps them, erased first, so no one reads a file's blocks that held
+; another's: FIL$WRITEHDR writes the header. R0 = SS$_NORMAL,
 ; SS$_DEVICEFULL, SS$_HEADERFULL, or the disk's error, with the blocks
 ; mapped until then still the file's. Holding FIL$LOCK. Keeps every other
 ; register.
+; ponytail: every new block is written with zeros, where VMS's high-water
+; marking reads zeros past the blocks written.
 FIL$EXTEND::
         .JSB_ENTRY
         PUSHR   #^M<R1, R2, R4, R5, R6>
@@ -629,6 +633,8 @@ FIL$EXTEND::
         BSBW    ALLOCBLK
         MOVL    (SP)+, R3
         BLBC    R0, 90$
+        BSBB    ERASE
+        BLBC    R0, 80$
         BSBW    ADDMAP
         BLBC    R0, 80$
         SUBL2   R1, R6
@@ -642,6 +648,31 @@ FIL$EXTEND::
         BSBW    FREEBLK
         MOVL    (SP)+, R0
 90$:    POPR    #^M<R1, R2, R4, R5, R6>
+        RSB
+
+; ERASE: R1 = a run's block count, R2 = its first LBN. Writes zeros on
+; it, ERASES blocks at a time. R0 = SS$_NORMAL or the disk's error.
+; Keeps every other register.
+ERASE:
+        .JSB_ENTRY
+        PUSHR   #^M<R1, R2, R3>
+        MOVL    R1, R3                  ; the blocks left
+10$:    MOVL    #SS$_NORMAL, R0
+        TSTL    R3
+        BEQL    90$
+        MOVL    R3, R1
+        CMPL    R1, #ERASES
+        BLEQU   20$
+        MOVL    #ERASES, R1
+20$:    SUBL2   R1, R3
+        MOVAB   ZEROS, R0
+        PUSHL   R1
+        BSBW    FIL$WRITELBLK
+        MOVL    (SP)+, R1
+        BLBC    R0, 90$
+        ADDL2   R1, R2
+        BRB     10$
+90$:    POPR    #^M<R1, R2, R3>
         RSB
 
 ; FIL$DELHDR: R1 = a file header. Deletes the file: gives its blocks back

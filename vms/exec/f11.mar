@@ -373,21 +373,65 @@ DISKIO:
 ; makes the IRP, with room for the buffer's PFNs, locks its pages, which
 ; checks the caller may write (read) each, and queues it (EXE$INSIOQ).
 ; The logical functions take LOG_IO or PHY_IO, the physical ones PHY_IO,
-; as on VMS. For the file system's, IO$_ACCESS and IO$_MODIFY, makes the
-; IRP and leaves it in XQP$GL_IRP, for $QIO to hand XQP$PERFORM. R0 =
-; SS$_NORMAL, SS$_ILLIOFUNC, SS$_NOPRIV, SS$_ACCVIO, SS$_BADPARAM, or
+; as on VMS. For the file system's, IO$_ACCESS, IO$_CREATE,
+; IO$_DEACCESS, IO$_DELETE, IO$_MODIFY, IO$_ACPCONTROL, and IO$_READVBLK
+; and IO$_WRITEVBLK of the file open on the channel, makes the IRP and
+; leaves it in XQP$GL_IRP, for $QIO to hand XQP$PERFORM (xqp.mar), after
+; the checks VMS's FDT routines make: IO$_DEACCESS and the virtual
+; functions need a file open on the channel, else SS$_FILNOTACC, and
+; IO$M_ACCESS none, else SS$_FILALRACC; the caller must write (read) the
+; virtual functions' buffer. R0 = SS$_NORMAL, SS$_ILLIOFUNC, SS$_NOPRIV,
+; SS$_ACCVIO, SS$_BADPARAM, SS$_FILNOTACC, SS$_FILALRACC, or
 ; IOC$ALLOCIRP's failure. IPL$_SYNCH. Uses R0-R3.
 DK$FDT::
         .JSB_ENTRY  INPUT=<AP>, SCRATCH=<R2, R3, R4>
         BICL3   #^C63, 12(AP), R0       ; the function, without modifiers
+        CMPL    R0, #IO$_WRITEVBLK
+        BLSSU   2$
+        CMPL    R0, #IO$_ACPCONTROL
+        BGTRU   2$
+        CMPL    R0, #IO$_READPROMPT
+        BEQL    2$
+        MOVZWL  8(AP), R1               ; the file open on the channel, or 0
+        MOVL    PCB$AL_WCB(R4)[R1], R1
+        CMPL    R0, #IO$_READVBLK
+        BEQL    41$
+        CMPL    R0, #IO$_WRITEVBLK
+        BNEQ    40$
+41$:    TSTL    R1                      ; virtual: the file's, the caller's buffer
+        BEQL    84$
+        MOVL    28(AP), R2
+        MOVL    32(AP), R3
+        CMPL    R3, #65535
+        BGTRU   87$
+        CMPL    R0, #IO$_READVBLK
+        BNEQ    45$
+        IFNOWRT R3, (R2), 88$
+        BRB     48$
+45$:    IFNORD  R3, (R2), 88$
+        BRB     48$
+40$:    CMPL    R0, #IO$_DEACCESS
+        BNEQ    46$
+        TSTL    R1
+        BEQL    84$
+        BRB     48$
+46$:    BBC     #IO$V_ACCESS, 12(AP), 48$
         CMPL    R0, #IO$_ACCESS
-        BEQL    1$
-        CMPL    R0, #IO$_MODIFY
-        BNEQ    2$
-1$:     CLRL    R1
+        BEQL    47$
+        CMPL    R0, #IO$_CREATE
+        BNEQ    48$
+47$:    TSTL    R1
+        BNEQ    83$
+48$:    CLRL    R1
         BSBW    IOC$ALLOCIRP
         BLBC    R0, 90$
         MOVL    R3, XQP$GL_IRP
+        RSB
+83$:    MOVZWL  #SS$_FILALRACC, R0
+        RSB
+84$:    MOVZWL  #SS$_FILNOTACC, R0
+        RSB
+88$:    MOVL    #SS$_ACCVIO, R0
         RSB
 2$:     MOVL    28(AP), R2
         MOVL    32(AP), R3

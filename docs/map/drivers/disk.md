@@ -50,8 +50,8 @@ note = "ADR-0044 answers $GETDVI from the disk's UCB, online by GETMAXBLOCK at b
 [[feature]]
 id = "virtual-io"
 title = "IO$_READVBLK and IO$_WRITEVBLK on a file's channel, mapped through the XQP"
-status = "todo"
-note = "ADR-0007 follow-up; the XQP maps the file's VBNs to LBNs (t8y:/files/ods2#qio-interface). Not a need: the XQP sits on this driver, so the link runs from t8y:/files/ods2 down"
+status = "done"
+note = "ADR-0049: DK$FDT hands them to XQP$PERFORM, which maps the file's VBNs to LBNs (t8y:/files/ods2#qio-interface). Not a need: the XQP sits on this driver, so the link runs from t8y:/files/ods2 down"
 
 [[feature]]
 id = "flush"
@@ -124,4 +124,7 @@ system hands its own I/O to the start I/O routine in an IRP of its own
 the device's interrupt ends it, and the others wait on the UCB
 ([ADR-0047](../../adr/0047-interrupt-driven-disk-io-and-locked-pages.md));
 at boot, before the scheduler runs, the file system reads with the
-PAL's polled `READLBLK`.
+PAL's polled `READLBLK`. `DK$FDT` hands the file system's functions, and
+the virtual ones of the file open on the channel, to the XQP, which does
+them in the process (`xqp.mar`,
+[ADR-0049](../../adr/0049-files-open-on-a-channel.md)).

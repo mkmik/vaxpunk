@@ -1,0 +1,287 @@
+        .TITLE  XQPTEST Files open on a channel, through the XQP's $QIOs
+        .IDENT  /V0.1/
+;
+; RUN XQPTEST at the console, with DKB0: mounted, checks the file
+; system's $QIO functions on a channel to it
+; (docs/adr/0049-files-open-on-a-channel.md), in [000000]: IO$_CREATE
+; makes XQP.DAT;1, three blocks long, with fixed records, and opens it
+; for writing; IO$_WRITEVBLK writes its blocks and IO$_READVBLK reads
+; them back, but none past them; a second open, and the virtual functions
+; once IO$_DEACCESS closed it, are refused, and so is a write to it open
+; for reading. A wildcard looks up XQP1.TMP and XQP2.TMP, made for it, in
+; turn by FIB$L_WCC, then deletes them the same way. IO$_ACPCONTROL has
+; no disk quotas; XQP.DAT, deleted while open, goes as it closes, and a
+; file made marked for delete, its new blocks zeros, goes with the
+; channel, at $DASSGN.
+; IO$_ACCESS!IO$M_CREATE makes a file that isn't there. It says
+; "XQPTEST: ok", else exits with 2 * the number of the check that failed
+; (EXPECT).
+;
+        .LIBRARY "starlet.mlb"
+        .LIBRARY "sysexe.mlb"
+        $SSDEF
+        $IODEF
+        $FIBDEF
+        $ATRDEF
+        $FATDEF
+
+MFD = 4                                 ; [000000]'s file number and sequence
+BYTES = 3*512
+
+        .PSECT  DATA, NOEXE, WRT, LONG
+CHAN:   .LONG   0
+IOSB:   .BLKQ   1
+DKB0:   .ASCID  "DKB0:"
+DAT:    .ASCID  "XQP.DAT"
+TMP1:   .ASCID  "XQP1.TMP"
+TMP2:   .ASCID  "XQP2.TMP"
+WILD:   .ASCID  "XQP*.TMP"
+NEW:    .ASCID  "XQPNEW.TMP"
+DATRES: .ASCII  "XQP.DAT;1"
+TMP1RES:
+        .ASCII  "XQP1.TMP;1"
+TMP2RES:
+        .ASCII  "XQP2.TMP;1"
+        .ALIGN  LONG
+FIBDSC: .LONG   FIB$C_LENGTH
+        .ADDRESS FIB
+FIB:    .BLKB   FIB$C_LENGTH
+FID:    .BLKW   3                       ; XQP.DAT's
+        .ALIGN  LONG
+RESDSC: .LONG   80                      ; the result string
+        .ADDRESS RES
+RES:    .BLKB   80
+RESLEN: .WORD   0
+        .ALIGN  LONG
+ATR:    .WORD   ATR$S_RECATTR, ATR$C_RECATTR
+        .ADDRESS RECATTR
+        .LONG   0
+RECATTR:                                ; fixed records of 512 bytes
+        .BYTE   FAT$C_FIXED, 0
+        .WORD   512
+        .BLKB   28
+BUF:    .BLKB   BYTES
+BUF2:   .BLKB   BYTES
+
+        .PSECT  CODE, EXE, LONG
+        .ENTRY  START, ^M<R2, R3, R4, R5>
+        $ASSIGN_S DEVNAM=DKB0, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 1
+; XQP.DAT;1: made, three blocks, open for writing.
+        BSBW    INDIR
+        MOVL    #FIB$M_WRITE, FIB+FIB$L_ACCTL
+        MOVW    #FIB$M_EXTEND, FIB+FIB$W_EXCTL
+        MOVL    #3, FIB+FIB$L_EXSZ
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_CREATE!IO$M_CREATE!IO$M_ACCESS, IOSB=IOSB, P1=FIBDSC, P2=#DAT, P3=#RESLEN, P4=#RESDSC, P5=#ATR
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 2
+        CMPW    RESLEN, #9
+        BNEQ    3$
+        CMPC3   #9, RES, DATRES
+        BEQL    4$
+3$:     MOVL    #6, R0
+        RET
+4$:     MOVL    #1, R0
+        CMPL    FIB+FIB$L_EXSZ, #3
+        BGEQU   5$
+        CLRL    R0
+5$:     EXPECT  #1, 4
+        MOVL    FIB+FIB$W_FID, FID
+        MOVW    FIB+FIB$W_FID+4, FID+4
+; Its blocks written, a byte pattern, and read back.
+        CLRL    R2
+10$:    ADDB3   #7, R2, BUF[R2]
+        AOBLSS  #BYTES, R2, 10$
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=BUF, P2=#BYTES, P3=#1
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 5
+        MOVZWL  IOSB+2, R0
+        EXPECT  #BYTES, 6
+        $QIO_S  CHAN=CHAN, FUNC=#IO$_ACCESS!IO$M_ACCESS, P1=FIBDSC
+        EXPECT  #SS$_FILALRACC, 7
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF2, P2=#BYTES, P3=#1
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 8
+        CLRL    R0
+        CMPC3   #BYTES, BUF, BUF2
+        BNEQ    15$
+        INCL    R0
+15$:    EXPECT  #1, 9
+        ADDL3   #1, FIB+FIB$L_EXSZ, R2  ; past the last block
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF2, P2=#512, P3=R2
+        BSBW    IOS
+        EXPECT  #SS$_ENDOFFILE, 10
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 11
+        $QIO_S  CHAN=CHAN, FUNC=#IO$_READVBLK, P1=BUF2, P2=#512, P3=#1
+        EXPECT  #SS$_FILNOTACC, 12
+; Open for reading by its name: it reads, and can't be written.
+        BSBW    INDIR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS!IO$M_ACCESS, IOSB=IOSB, P1=FIBDSC, P2=#DAT
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 13
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF2, P2=#100, P3=#2
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 14
+        CLRL    R0
+        CMPC3   #100, BUF+512, BUF2
+        BNEQ    20$
+        INCL    R0
+20$:    EXPECT  #1, 15
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_WRITEVBLK, IOSB=IOSB, P1=BUF, P2=#512, P3=#1
+        BSBW    IOS
+        EXPECT  #SS$_NOPRIV, 16
+; Wildcards: XQP1.TMP and XQP2.TMP found in turn, then deleted in turn.
+        BSBW    INDIR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_CREATE!IO$M_CREATE, IOSB=IOSB, P1=FIBDSC, P2=#TMP1
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 17
+        BSBW    INDIR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_CREATE!IO$M_CREATE, IOSB=IOSB, P1=FIBDSC, P2=#TMP2
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 18
+        MOVL    #IO$_ACCESS, R5
+        BSBW    WILDLOOP
+        EXPECT  #SS$_NORMAL, 19
+        MOVL    #IO$_DELETE!IO$M_DELETE, R5
+        BSBW    WILDLOOP
+        EXPECT  #SS$_NORMAL, 20
+        BSBW    INDIR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P1=FIBDSC, P2=#WILD
+        BSBW    IOS
+        EXPECT  #SS$_NOSUCHFILE, 21
+; IO$_ACPCONTROL: no disk quotas; FIB$C_REMAP does nothing.
+        BSBW    CLRFIB
+        MOVW    #FIB$C_EXA_QUOTA, FIB+FIB$W_CNTRLFUNC
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACPCONTROL, IOSB=IOSB, P1=FIBDSC
+        BSBW    IOS
+        EXPECT  #SS$_QFNOTACT, 22
+        MOVW    #FIB$C_REMAP, FIB+FIB$W_CNTRLFUNC
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACPCONTROL, IOSB=IOSB, P1=FIBDSC
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 23
+; XQP.DAT, still open, deleted: its name goes now, the file as it closes.
+        BSBW    INDIR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_DELETE!IO$M_DELETE, IOSB=IOSB, P1=FIBDSC, P2=#DAT
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 24
+        BSBW    INDIR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P1=FIBDSC, P2=#DAT
+        BSBW    IOS
+        EXPECT  #SS$_NOSUCHFILE, 25
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF2, P2=#512, P3=#1
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 26
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_DEACCESS, IOSB=IOSB
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 27
+        BSBW    BYFID
+        BLBC    R0, 30$
+        MOVL    #28*2, R0
+        RET
+; A file made marked for delete, whose blocks, XQP.DAT's maybe, read as
+; zeros, goes with the channel.
+30$:    BSBW    CLRFIB
+        MOVL    #FIB$M_WRITE, FIB+FIB$L_ACCTL
+        MOVW    #FIB$M_EXTEND, FIB+FIB$W_EXCTL
+        MOVL    #3, FIB+FIB$L_EXSZ
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_CREATE!IO$M_CREATE!IO$M_ACCESS!IO$M_DELETE, IOSB=IOSB, P1=FIBDSC
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 29
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_READVBLK, IOSB=IOSB, P1=BUF2, P2=#BYTES, P3=#1
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 35
+        SKPC    #0, #BYTES, BUF2
+        EXPECT  #0, 36
+        MOVL    FIB+FIB$W_FID, FID
+        MOVW    FIB+FIB$W_FID+4, FID+4
+        $DASSGN_S CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 30
+        $ASSIGN_S DEVNAM=DKB0, CHAN=CHAN
+        EXPECT  #SS$_NORMAL, 31
+        BSBW    BYFID
+        BLBC    R0, 40$
+        MOVL    #32*2, R0
+        RET
+; IO$M_CREATE on IO$_ACCESS: made, as it wasn't there.
+40$:    BSBW    INDIR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS!IO$M_CREATE, IOSB=IOSB, P1=FIBDSC, P2=#NEW
+        BSBW    IOS
+        EXPECT  #SS$_CREATED, 33
+        BSBW    INDIR
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_DELETE!IO$M_DELETE, IOSB=IOSB, P1=FIBDSC, P2=#NEW
+        BSBW    IOS
+        EXPECT  #SS$_NORMAL, 34
+        $DASSGN_S CHAN=CHAN
+        PRINT   "XQPTEST: ok"
+        MOVL    #SS$_NORMAL, R0
+        RET
+
+; WILDLOOP: R5 = a function. Does it on XQP*.TMP in [000000], with
+; FIB$L_WCC and the result string, until SS$_NOMOREFILES: it must find
+; XQP1.TMP;1, then XQP2.TMP;1. R0 = SS$_NORMAL, SS$_ABORT if not, or the
+; function's error.
+WILDLOOP:
+        .JSB_ENTRY
+        BSBW    INDIR
+        CLRW    RESLEN
+        $QIOW_S CHAN=CHAN, FUNC=R5, IOSB=IOSB, P1=FIBDSC, P2=#WILD, P3=#RESLEN, P4=#RESDSC
+        BSBW    IOS
+        BLBC    R0, 90$
+        CMPW    RESLEN, #10
+        BNEQ    80$
+        CMPC3   #10, RES, TMP1RES
+        BNEQ    80$
+        TSTL    FIB+FIB$L_WCC
+        BEQL    80$
+        $QIOW_S CHAN=CHAN, FUNC=R5, IOSB=IOSB, P1=FIBDSC, P2=#WILD, P3=#RESLEN, P4=#RESDSC
+        BSBW    IOS
+        BLBC    R0, 90$
+        CMPC3   #10, RES, TMP2RES
+        BNEQ    80$
+        $QIOW_S CHAN=CHAN, FUNC=R5, IOSB=IOSB, P1=FIBDSC, P2=#WILD, P3=#RESLEN, P4=#RESDSC
+        BSBW    IOS
+        CMPL    R0, #SS$_NOMOREFILES
+        BNEQ    80$
+        TSTL    FIB+FIB$L_WCC
+        BNEQ    80$
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ABORT, R0
+90$:    RSB
+
+; BYFID: R0 = IO$_ACCESS's status for the file whose ID is in FID.
+BYFID:
+        .JSB_ENTRY
+        BSBW    CLRFIB
+        MOVL    FID, FIB+FIB$W_FID
+        MOVW    FID+4, FIB+FIB$W_FID+4
+        $QIOW_S CHAN=CHAN, FUNC=#IO$_ACCESS, IOSB=IOSB, P1=FIBDSC
+        BSBW    IOS
+        RSB
+
+; INDIR: makes FIB name a file in [000000], by the name p2 gives.
+INDIR:
+        .JSB_ENTRY
+        BSBB    CLRFIB
+        MOVW    #MFD, FIB+FIB$W_DID_NUM
+        MOVW    #MFD, FIB+FIB$W_DID_SEQ
+        RSB
+
+; CLRFIB: FIB, all 0s.
+CLRFIB:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3, R4, R5>
+        MOVC5   #0, FIB, #0, #FIB$C_LENGTH, FIB
+        POPR    #^M<R2, R3, R4, R5>
+        RSB
+
+; IOS: R0 = a $QIOW's status. R0 = the IOSB's status if that succeeded.
+IOS:
+        .JSB_ENTRY
+        BLBC    R0, 10$
+        MOVZWL  IOSB, R0
+10$:    RSB
+
+        .END    START
