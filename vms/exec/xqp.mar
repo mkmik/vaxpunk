@@ -1777,8 +1777,8 @@ CREATE:
 ; ENTNAME, ENTLEN and ENTVER, NAME.TYPE;VER in RESULT, the name's version
 ; limit in FIB$W_VERLIMIT, and bit 1 is set in MADE. A file without a
 ; directory, as a new one, gets this one, as its back link, and the name.
-; R0 = SS$_NORMAL, SS$_BADPARAM, SS$_BADFILENAME for a wildcard,
-; SS$_NOSUCHFILE, SS$_BADIRECTORY, SS$_NOPRIV, SS$_DUPFILENAME,
+; R0 = SS$_NORMAL, SS$_BADPARAM, SS$_BADFILENAME (VALNAME),
+; SS$_NOSUCHFILE, for one marked for delete too, SS$_BADIRECTORY, SS$_NOPRIV, SS$_DUPFILENAME,
 ; SS$_BADFILEVER, SS$_ACCVIO, or the disk's error. Uses R0-R9.
 ENTER:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
@@ -1796,15 +1796,9 @@ ENTER:
         MOVAB   NAME, R6
         BSBW    PARSE
         BLBC    R0, 90$
-        TSTL    R8
-        BLSS    5$
-        LOCC    #^A/*/, R7, NAME
-        BNEQ    5$
-        LOCC    #^A/%/, R7, NAME
-        BEQL    8$
-5$:     MOVL    #SS$_BADFILENAME, R0
-        RSB
-8$:     BLBS    MADE, 10$               ; another's: its header
+        BSBW    VALNAME
+        BLBC    R0, 90$
+        BLBS    MADE, 10$               ; another's: its header, not one marked for delete
         MOVZBL  FIB+FIB$B_FID_NMX, R0
         ASHL    #16, R0, R0
         MOVW    FIB+FIB$W_FID_NUM, R0
@@ -1812,6 +1806,8 @@ ENTER:
         MOVAB   HDR, R1
         BSBW    READFID
         BLBC    R0, 90$
+        MOVL    #SS$_NOSUCHFILE, R0
+        BBS     #FCH$V_MARKDEL, HDR+FH2$L_FILECHAR, 90$
 10$:    MOVAB   DIRHDR, R3
         MOVAB   FIB+FIB$W_FID, R5
         BSBW    FIL$ENTER
@@ -1840,6 +1836,59 @@ ENTER:
         BLBC    R0, 90$
 80$:    MOVL    #SS$_NORMAL, R0
 90$:    RSB
+
+; VALNAME: NAME = p2's name, R7 = its length, R8 = its version, as
+; PARSE took them. Checks it can be a directory entry's name, as RMS's
+; CHECK does: letters, digits, $, _ and -, a name and a type of 39 at
+; most, between them a dot, which is added if it has none, and no
+; wildcard. R7 = its length then. R0 = SS$_NORMAL or SS$_BADFILENAME.
+; Uses R0-R3.
+VALNAME:
+        .JSB_ENTRY  OUTPUT=<R7>, SCRATCH=<R2, R3>
+        TSTL    R8
+        BLSS    80$
+        CLRL    R1                      ; where
+        CLRL    R2                      ; the part's length
+        CLRL    R3                      ; the dots
+10$:    CMPL    R1, R7
+        BGEQU   50$
+        MOVZBL  NAME[R1], R0
+        CMPB    R0, #^A/./
+        BNEQ    20$
+        INCL    R3
+        CMPL    R3, #1
+        BGTRU   80$
+        CLRL    R2
+        BRB     40$
+20$:    CMPB    R0, #^A/A/
+        BLSSU   25$
+        CMPB    R0, #^A/Z/
+        BLEQU   30$
+25$:    CMPB    R0, #^A/0/
+        BLSSU   27$
+        CMPB    R0, #^A/9/
+        BLEQU   30$
+27$:    CMPB    R0, #^A/$/
+        BEQL    30$
+        CMPB    R0, #^A/_/
+        BEQL    30$
+        CMPB    R0, #^A/-/
+        BNEQ    80$
+30$:    INCL    R2
+        CMPL    R2, #39
+        BGTRU   80$
+40$:    INCL    R1
+        BRB     10$
+50$:    TSTL    R3                      ; NAME: NAME.
+        BNEQ    60$
+        CMPL    R7, #80
+        BGEQU   80$
+        MOVB    #^A/./, NAME[R7]
+        INCL    R7
+60$:    MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_BADFILENAME, R0
+        RSB
 
 ; DELFILE: FIB, AP = $QIO's arguments, R11 = the IRP, for IO$_DELETE. With
 ; a directory, takes the entry FINDFILE finds out of it; with IO$M_DELETE
