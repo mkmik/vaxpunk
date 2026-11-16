@@ -106,7 +106,7 @@
         .EXTERNAL FIL$ACLGET, FIL$ACLPUT, FIL$READVBN, FIL$WRITEVBN, FIL$CREHDR
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$EXTEND, FIL$SETNAME
         .EXTERNAL RMS$LOCKFILE, RMS$UNLOCKFILE, RMS$MARKDEL, RMS$PEERHDR, RMS$FORGET, SCH$GL_CURPCB
-        .EXTERNAL FIL$CHKPRO
+        .EXTERNAL FIL$CHKPRO, FIL$EOF
         .EXTERNAL EXE$ALONONPAGED, EXE$DEANONPGDSIZ
 
 BLOCK = 512
@@ -1937,16 +1937,17 @@ DELFILE:
         MOVAB   HDR, R1                 ; a directory must be empty
         BSBW    FIL$ISDIR
         BLBC    R0, 50$
+        MOVAB   HDR, R1                 ; nothing up to its end of file: empty
+        BSBW    FIL$EOF
+        TSTL    R0
+        BEQL    50$
         MOVL    #1, R0
         MOVL    #1, R1
         MOVAB   F11$AB_DIRBLK, R2
         MOVAB   HDR, R3
         BSBW    FIL$READVBN
-        BLBS    R0, 40$
-        CMPL    R0, #SS$_ENDOFFILE      ; no blocks: empty
-        BEQL    50$
-        RSB
-40$:    MOVL    #SS$_DIRNOTEMPTY, R0
+        BLBC    R0, 90$
+        MOVL    #SS$_DIRNOTEMPTY, R0
         CMPW    F11$AB_DIRBLK, #^XFFFF
         BNEQ    90$
 50$:    MOVL    #RMS$_NORMAL, R0        ; open? asked before anything changes
