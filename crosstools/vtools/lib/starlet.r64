@@ -716,13 +716,17 @@ LITERAL
     NAM$C_BID = 2,
     NAM$C_BLN = 96,
     NAM$M_WILDCARD = 256,  ! the specification has a wildcard
-    NAM$M_SEARCH_LIST = 2048;  ! its device is a search list
+    NAM$M_SEARCH_LIST = 2048,  ! its device is a search list
+    NAM$M_CNCL_DEV = 4096,  ! its device is a concealed logical name
+    NAM$M_ROOT_DIR = 8192,  ! its directory is in a rooted directory
+    NAM$M_NOCONCEAL = 16;  ! NAM$B_NOP's: show a concealed device's equivalence and its root
 MACRO
     NAM$B_BID = 0, 0, 8, 0 %,
     NAM$B_BLN = 1, 0, 8, 0 %,
     NAM$B_RSS = 2, 0, 8, 0 %,  ! the resultant string area: size
     NAM$B_RSL = 3, 0, 8, 0 %,  ! the string's length
     NAM$L_RSA = 4, 0, 32, 1 %,  ! its address
+    NAM$B_NOP = 8, 0, 8, 0 %,  ! NAM$M_ options
     NAM$B_ESS = 10, 0, 8, 0 %,  ! the expanded string area: size
     NAM$B_ESL = 11, 0, 8, 0 %,
     NAM$L_ESA = 12, 0, 32, 1 %,
@@ -1681,6 +1685,7 @@ LITERAL
     LNM$_ATTRIBUTES = 3,  ! its LNM$M_ bits, a longword
     LNM$_TABLE = 4,  ! the name of the table it was found in
     LNM$_LENGTH = 5,  ! the equivalence string's length, a longword
+    LNM$_ACMODE = 6,  ! the name's access mode, a byte, PSL$C_
     LNM$_MAX_INDEX = 7,  ! the last equivalence string's index, a longword
     LNM$C_NAMLENGTH = 255,  ! the longest name or equivalence string
     LNM$C_MAXDEPTH = 10,  ! translations of a device name, at most, and of a table's name
@@ -1688,6 +1693,8 @@ LITERAL
     LNM$M_NO_ALIAS = 1,  ! $CRELNT's attributes: ignored
     LNM$M_CONFINE = 2,
     LNM$M_TABLE = 8,  ! LNM$_ATTRIBUTES': it is a table
+    LNM$M_CONCEALED = 256,  ! an equivalence string's: RMS shows the name, not the string
+    LNM$M_TERMINAL = 512,  ! and: the string isn't translated further
     LNM$M_EXISTS = 1024,  ! and the string at that index is there
     LNM$M_CREATE_IF = 16777216;  ! $CRELNT's: keep a name in the directory already there
 

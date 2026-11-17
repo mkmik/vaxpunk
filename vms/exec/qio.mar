@@ -186,10 +186,10 @@ IOC$ASSIGN::
 ; IOC$TRNDEVNAM: R2 = a device name's length, R3 = its address.
 ; Translates it as $ASSIGN does: as a logical name, without its colon, in
 ; LNM$FILE_DEV, and what it translates to, up to LNM$C_MAXDEPTH times,
-; until a name starts with an underscore, which is dropped, or doesn't
-; translate. R2 and R3 = the name it ends with, in the logical name's
-; block if it is an equivalence. IPL$_SYNCH, which keeps that. Uses R0,
-; R1, R5-R7.
+; until a name starts with an underscore, which is dropped, doesn't
+; translate, or is a terminal equivalence string (LNMX$M_TERMINAL). R2
+; and R3 = the name it ends with, in the logical name's block if it is an
+; equivalence. IPL$_SYNCH, which keeps that. Uses R0, R1, R5-R7.
 IOC$TRNDEVNAM::
         .JSB_ENTRY  OUTPUT=<R2, R3>, SCRATCH=<R5, R6, R7>
         MOVL    #LNM$C_MAXDEPTH, R5
@@ -200,7 +200,9 @@ IOC$TRNDEVNAM::
         INCL    R3
         DECL    R2
         BRB     8$
-4$:     MOVL    R3, R6
+4$:     TSTL    R5                      ; no more translations
+        BEQL    8$
+        MOVL    R3, R6
         MOVL    R2, R7
         ADDL3   R2, R3, R0
         CMPB    -1(R0), #^A/:/
@@ -214,7 +216,11 @@ IOC$TRNDEVNAM::
         MOVZBL  LNMB$T_NAME(R1), R0
         MOVAB   LNMB$T_NAME+1(R1)[R0], R3
         MOVZBL  (R3)+, R2
-        SOBGTR  R5, 2$
+        DECL    R5
+        BITB    #LNMX$M_TERMINAL, (R3)[R2]
+        BEQL    2$
+        CLRL    R5                      ; a terminal one: no further
+        BRB     2$
 8$:     RSB
 
 ; IOC$SEARCHDEV: R1 = a device name's descriptor, which can be read.

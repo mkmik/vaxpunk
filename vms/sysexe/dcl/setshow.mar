@@ -245,7 +245,9 @@ FRAME = F_STR+LINESIZE+1
         .PSECT  CODE, EXE, LONG
 ; DCL$SETDEF, SET DEFAULT spec: $PARSEs spec, which must name no file,
 ; and makes the directory it expands to the default, with $SETDDIR, and
-; its device the process's SYS$DISK. One that doesn't exist is still
+; its device the process's SYS$DISK: a concealed one's logical name and
+; the directory in its root, R:[SUB], but not a root that isn't
+; concealed, DCL-W-DIRECT, as VMS's. One that doesn't exist is still
 ; set, as VMS does: SHOW DEFAULT says so. A device that is a search list,
 ; HOME: for MDA0:[000000],SYS$MANAGER, becomes SYS$DISK as it is, and the
 ; default directory the spec's, or none, so that each string's own
@@ -270,8 +272,14 @@ DCL$SETDEF::
         TSTB    DEFNAM+NAM$B_NAME
         BNEQ    20$
         BITL    #NAM$M_SEARCH_LIST, DEFNAM+NAM$L_FNB
-        BEQL    15$
+        BEQL    12$
         BRW     SEARCHDEF
+12$:    BITL    #NAM$M_ROOT_DIR, DEFNAM+NAM$L_FNB       ; a root not concealed, DKA0:[SYS0.][SYSEXE]
+        BEQL    15$
+        BITL    #NAM$M_CNCL_DEV, DEFNAM+NAM$L_FNB
+        BNEQ    15$
+        PRINT   "%DCL-W-DIRECT, invalid directory syntax - check brackets and other delimiters"
+        BRW     DCL$WARN
 15$:    MOVZBL  DEFNAM+NAM$B_DIR, DIRDSC
         MOVL    DEFNAM+NAM$L_DIR, DIRDSC+4
         $SETDDIR_S NEWDIR=DIRDSC

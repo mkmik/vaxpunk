@@ -336,6 +336,82 @@ const RAMDISK: Phase = Phase {
     ],
 };
 
+/// A concealed rooted directory, RT, MDA0:[RT.], as SYS$SYSROOT is on
+/// OpenVMS: F$TRNLNM's CONCEALED, F$PARSE's NO_CONCEAL, a DIRECTORY in
+/// it, which shows RT:, SET DEFAULT into it, an F$SEARCH there, [-] up
+/// to its root and not past it. A root
+/// that isn't concealed shows as MDA0:[RT.][SUB], and SET DEFAULT
+/// refuses it; a terminal name isn't translated further; a concealed
+/// name that isn't a device and a root is RMS$_DEV; and
+/// /TRANSLATION_ATTRIBUTES takes only its keywords; SHOW LOGICAL/FULL
+/// shows the attributes. What OpenVMS V8.4-2L1 printed.
+const CONCEALED: Phase = Phase {
+    name: "concealed",
+    secs: 20,
+    steps: &[
+        // Once the ramdisk's last command has run: the type-ahead buffer is empty.
+        (
+            "%SYSTEM-W-IVLOGTAB",
+            2,
+            concat!(
+                "CREATE/DIRECTORY MDA0:[RT.SUB]\r",
+                "COPY SYS$SYSDEVICE:[SYSMGR]WELCOME.TXT MDA0:[RT.SUB]A.TXT\r",
+                "DEFINE/TRANSLATION_ATTRIBUTES=CONCEALED RT MDA0:[RT.]\r",
+                "WRITE SYS$OUTPUT \"RT \", F$TRNLNM(\"RT\",,,,,\"CONCEALED\")\r",
+                "WRITE SYS$OUTPUT F$PARSE(\"RT:[SUB]A.TXT\",,,,\"NO_CONCEAL\")\r",
+                "DIR RT:[SUB...]\r",
+            ),
+        ),
+        (
+            "Directory RT:[SUB]",
+            1,
+            concat!(
+                "SET DEFAULT RT:[SUB]\rSHOW DEFAULT\rWRITE SYS$OUTPUT F$SEARCH(\"A.TXT\")\r",
+                "SET DEFAULT [-]\rSET DEFAULT [-]\rSHOW DEFAULT\r",
+            ),
+        ),
+        (
+            "  RT:[000000]",
+            1,
+            concat!(
+                "SET DEFAULT MDA0:[000000]\rDEFINE ROOT MDA0:[RT.]\rDIR ROOT:[SUB]\r",
+                "SET DEFAULT ROOT:[SUB]\rDEFINE/TRANSLATION_ATTRIBUTES=TERMINAL TRM RT\r",
+                "WRITE SYS$OUTPUT \"TRM \", F$TRNLNM(\"TRM\",,,,,\"TERMINAL\"), F$PARSE(\"TRM:[SUB]\")\r",
+            ),
+        ),
+        (
+            "TRM TRUE",
+            1,
+            concat!(
+                "DEFINE/TRANSLATION_ATTRIBUTES=CONCEALED BAD MDA0:[RT]\rDIR BAD:[SUB]\r",
+                "DEFINE/TRANSLATION_ATTRIBUTES=BOGUS BAD MDA0:\r",
+                "SHOW LOGICAL/FULL RT\rSHOW LOGICAL/FULL TRM\r",
+                "DEASSIGN RT\rDEASSIGN ROOT\rDEASSIGN TRM\rDEASSIGN BAD\r",
+                "WRITE SYS$OUTPUT \"CONCEALED: done\"\r",
+            ),
+        ),
+    ],
+    lines: &[
+        "RT TRUE\n",
+        "MDA0:[RT.][SUB]A.TXT;\n",
+        "Directory RT:[SUB]\n\nA.TXT;1\n\nTotal of 1 file.",
+        "$ SHOW DEFAULT\n  RT:[SUB]\n",
+        "RT:[SUB]A.TXT;1",
+        "$ SET DEFAULT [-]\n%RMS-F-DIR, error in directory name\n$ SHOW DEFAULT\n  RT:[000000]\n",
+        "Directory MDA0:[RT.][SUB]\n\nA.TXT;1",
+        "$ SET DEFAULT ROOT:[SUB]\n%DCL-W-DIRECT, invalid directory syntax - check brackets and other delimiters",
+        "TRM TRUE\n",
+        concat!(
+            "%DIRECT-E-OPENIN, error opening BAD:[SUB] as input\n",
+            "-RMS-F-DEV, error in device name or inappropriate device type for operation\n",
+        ),
+        "%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling\n \\BOGUS\\",
+        "   \"RT\" [super] = \"MDA0:[RT.]\" [concealed] (LNM$PROCESS_TABLE)\n",
+        "   \"TRM\" [super] = \"RT\" [terminal] (LNM$PROCESS_TABLE)\n",
+        "CONCEALED: done",
+    ],
+};
+
 /// INITIALIZE/SIZE of DKB0:, which only the ramdisk takes, and of MDA0:,
 /// SYSTARTUP_VMS.COM's, which made it 2,048 blocks, more than it has free;
 /// INITIALIZE of DKB0:'s 64 MB, three blocks a cluster, MOUNT and COPY
@@ -358,10 +434,10 @@ const DATA_DISK: Phase = Phase {
     name: "data disk",
     secs: 20,
     steps: &[
-        // Once the ramdisk's last command has run: the type-ahead buffer is empty.
+        // Once the concealed phase's last command has run: the type-ahead buffer is empty.
         (
-            "no translation for logical name HOME",
-            1,
+            "CONCEALED: done",
+            2,
             concat!(
                 "INIT/SIZE=100 DKB0: DATA\r",
                 "INIT/PROTECTION=(S:RWED,O:RWED,G:RWED,W:RWED) DKB0: DATA\rMOUNT/SYSTEM DKB0: DATA\r",
@@ -1920,6 +1996,7 @@ const PHASES: &[Phase] = &[
     BOOT,
     SYSTEM_DISK,
     RAMDISK,
+    CONCEALED,
     DATA_DISK,
     CONTROL_KEYS,
     STOP_ID,
