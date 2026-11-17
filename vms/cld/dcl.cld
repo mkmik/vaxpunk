@@ -43,6 +43,10 @@ define verb DECK
 	cliroutine DECK
 	qualifier DOLLARS, value
 
+! DEFINE name equivalence[,...]: /TRANSLATION_ATTRIBUTES after the verb
+! is every equivalence's, after one that one's. Its keywords, CONCEALED
+! and TERMINAL, DCL checks itself.
+! ponytail: CDU has no keywords for a qualifier with PLACEMENT=POSITIONAL.
 define verb DEFINE
 	cliroutine DEFINE
 	parameter P1, label=LOGICAL_NAME, prompt="Log_name", value(required)
@@ -51,6 +55,7 @@ define verb DEFINE
 	qualifier PROCESS
 	qualifier SYSTEM
 	qualifier TABLE, value(required)
+	qualifier TRANSLATION_ATTRIBUTES, placement=positional, value(required, list)
 	disallow any2(PROCESS, SYSTEM, TABLE)
 
 define verb ELSE
@@ -394,13 +399,14 @@ define syntax SHOW_DEVICES
 	qualifier FULL
 	qualifier MOUNTED
 
-! SHOW LOGICAL [name] [/PROCESS|/SYSTEM|/TABLE=table]: SHOW.EXE, which
+! SHOW LOGICAL [name] [/PROCESS|/SYSTEM|/TABLE=table] [/FULL]: SHOW.EXE, which
 ! is installed with CMKRNL to list the tables.
 define syntax SHOW_LOGICAL
 	image SHOW
 	parameter P1, label=OPTION, value(required, type=SHOW_OPTIONS)
 	parameter P2, label=LOGICAL_NAME
 	qualifier PROCESS
+	qualifier FULL
 	qualifier SYSTEM
 	qualifier TABLE, value(required)
 	disallow any2(PROCESS, SYSTEM, TABLE)

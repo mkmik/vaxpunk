@@ -22,10 +22,14 @@
 ; under another: under one of the process's, in its directory, else in
 ; the system's, shareable, with an owner and a protection mask that say
 ; who may change it, as on VMS. Deleting a table deletes those under it.
-; ponytail: no access modes, attributes or quotas, and no LNM$JOB or
-; LNM$GROUP tables yet. The names made at boot and with a process, which
-; are in executive mode on VMS, are LNMB$M_NODELETE instead. VMS's hash
-; table and mutex replace the queues and IPL$_SYNCH.
+; Each equivalence string has its attributes, LNM$M_CONCEALED and
+; LNM$M_TERMINAL, which $CRELNM sets and $TRNLNM returns: RMS shows a
+; concealed string's name, not the string, and translates a terminal
+; string no further, nor does $ASSIGN.
+; ponytail: no access modes or quotas, CONFINE and NO_ALIAS are ignored,
+; and no LNM$JOB or LNM$GROUP tables yet. The names made at boot and with
+; a process, which are in executive mode on VMS, are LNMB$M_NODELETE
+; instead. VMS's hash table and mutex replace the queues and IPL$_SYNCH.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -35,6 +39,7 @@
         $LNMBDEF
         $LNMTHDEF
         $LNMDEF
+        $PSLDEF
         $SSDEF
         $ARMDEF
 
@@ -63,30 +68,36 @@ PROCTABNAM:
         .ASCIC  "LNM$PROCESS_TABLE"
 FILE_DEV:
         .ASCIC  "LNM$FILE_DEV"
+; EQV string: an equivalence string as an LNMB holds it, .ASCIC, and its
+; attributes, none.
+        .MACRO  EQV     STRING
+        .ASCIC  STRING
+        .BYTE   0
+        .ENDM   EQV
 ; The names in the system's directory that stand for tables, after the
-; tables: each a name, .ASCIC, its equivalence strings, .ASCIC, and a 0,
-; as in an LNMB, until a 0.
+; tables: each a name, .ASCIC, its equivalence strings, EQV, and a 0, as
+; in an LNMB, until a 0.
 SYSNAMES:
         .ASCIC  "LNM$SYSTEM"
-        .ASCIC  "LNM$SYSTEM_TABLE"
+        EQV     "LNM$SYSTEM_TABLE"
         .BYTE   0
         .ASCIC  "LNM$FILE_DEV"          ; where file and device names are
-        .ASCIC  "LNM$PROCESS"
-        .ASCIC  "LNM$JOB"
-        .ASCIC  "LNM$GROUP"
-        .ASCIC  "LNM$SYSTEM"
+        EQV     "LNM$PROCESS"
+        EQV     "LNM$JOB"
+        EQV     "LNM$GROUP"
+        EQV     "LNM$SYSTEM"
         .BYTE   0
         .ASCIC  "LNM$DCL_LOGICAL"       ; those DCL shows
-        .ASCIC  "LNM$FILE_DEV"
+        EQV     "LNM$FILE_DEV"
         .BYTE   0
         .ASCIC  "LNM$DIRECTORIES"
-        .ASCIC  "LNM$PROCESS_DIRECTORY"
-        .ASCIC  "LNM$SYSTEM_DIRECTORY"
+        EQV     "LNM$PROCESS_DIRECTORY"
+        EQV     "LNM$SYSTEM_DIRECTORY"
         .BYTE   0
         .BYTE   0
 PROCNAMES:                              ; and in each process's
         .ASCIC  "LNM$PROCESS"
-        .ASCIC  "LNM$PROCESS_TABLE"
+        EQV     "LNM$PROCESS_TABLE"
         .BYTE   0
         .BYTE   0
 PPNAMES:                                ; the process-permanent names $CREPRC gives a process
@@ -410,10 +421,13 @@ RESNAM:
 ; $CRELNM attr, tabnam, lognam, acmode, itmlst: makes lognam a logical name
 ; in the first table tabnam names, with the equivalence string of each
 ; LNM$_STRING item in itmlst, in order: more than one makes a search
-; list. One by that name there goes, and the tables under it if it is a
+; list. An LNM$_ATTRIBUTES item's longword, LNM$M_CONCEALED and
+; LNM$M_TERMINAL, gives the strings after it their attributes, until
+; another. One by that name there goes, and the tables under it if it is a
 ; table: SS$_SUPERSEDE, or SS$_DUPLNAM if it can't (LNMB$M_NODELETE).
-; SS$_BADPARAM without such an item, with another, with an empty string
-; or one longer than 255, or with more than 128; SS$_IVLOGNAM for a name
+; SS$_BADPARAM without a string, with another item, with an empty string
+; or one longer than 255, with more than 128, or with other attributes;
+; SS$_IVLOGNAM for a name
 ; longer than 255, or in a directory longer than 31 or with other than
 ; letters, digits, $ and _; SS$_NOLOGTAB if tabnam names no table;
 ; SS$_NOPRIV in a shareable table without write access, or SYSNAM for
@@ -422,13 +436,18 @@ RESNAM:
         MOVL    12(AP), R1
         BSBW    NAME
         BLBC    R0, 90$
-        CLRQ    R8                      ; R8 = the strings, R9 = their bytes, with counts
+        CLRQ    R8                      ; R8 = the strings, R9 = their bytes, with counts and attributes
         MOVL    20(AP), R4
 10$:    IFNORD  #4, (R4), 80$
         TSTL    (R4)
         BEQL    20$
         IFNORD  #12, (R4), 80$
-        CMPW    2(R4), #LNM$_STRING
+        CMPW    2(R4), #LNM$_ATTRIBUTES
+        BNEQ    12$
+        BSBW    ATTRIBUTES
+        BLBC    R0, 90$
+        BRB     15$
+12$:    CMPW    2(R4), #LNM$_STRING
         BNEQ    85$
         MOVZWL  (R4), R0
         BEQL    85$
@@ -437,9 +456,9 @@ RESNAM:
         MOVL    4(R4), R1
         IFNORD  R0, (R1), 80$
         ADDL2   R0, R9
-        INCL    R9
+        ADDL2   #2, R9
         INCL    R8
-        ADDL2   #12, R4
+15$:    ADDL2   #12, R4
         BRB     10$
 20$:    TSTL    R8
         BEQL    85$
@@ -451,13 +470,20 @@ RESNAM:
         BLBC    R0, 90$
         MOVL    R2, R11                 ; the new block
         MOVL    20(AP), R4
+        CLRL    R5                      ; the attributes, LNMX$M_ bits
 30$:    TSTL    (R4)
         BEQL    40$
-        MOVZWL  (R4), R0
+        CMPW    2(R4), #LNM$_ATTRIBUTES
+        BNEQ    35$
+        BSBW    ATTRIBUTES
+        MOVL    R1, R5
+        BRB     38$
+35$:    MOVZWL  (R4), R0
         MOVB    R0, (R3)+
         MOVL    4(R4), R1
         BSBW    COPY
-        ADDL2   #12, R4
+        MOVB    R5, (R3)+
+38$:    ADDL2   #12, R4
         BRB     30$
 40$:    CLRB    (R3)
         MOVL    8(AP), R1
@@ -488,6 +514,26 @@ RESNAM:
         RET
 85$:    MOVL    #SS$_BADPARAM, R0
         RET
+
+; ATTRIBUTES: R4 = a $CRELNM item, LNM$_ATTRIBUTES, from a caller. R1 =
+; its longword's attributes as LNMX$M_ bits. R0 = SS$_NORMAL,
+; SS$_ACCVIO, or SS$_BADPARAM if its buffer is shorter than a longword
+; or it has other attributes than LNM$M_CONCEALED and LNM$M_TERMINAL.
+ATTRIBUTES:
+        .JSB_ENTRY
+        MOVL    #SS$_BADPARAM, R0
+        CMPW    (R4), #4
+        BLSSU   90$
+        MOVL    4(R4), R1
+        IFNORD  #4, (R1), 80$
+        MOVL    (R1), R1
+        BITL    #^C<LNM$M_CONCEALED!LNM$M_TERMINAL>, R1
+        BNEQ    90$
+        ASHL    #-8, R1, R1
+        MOVL    #SS$_NORMAL, R0
+        RSB
+80$:    MOVL    #SS$_ACCVIO, R0
+90$:    RSB
 
 ; $DELLNM tabnam, lognam, acmode: deletes lognam from the first table
 ; tabnam names that has it: a table's name in a directory deletes the
@@ -558,9 +604,14 @@ LNM$DELETE::
 ; of the table it was in; LNM$_LENGTH, the string's length, a longword;
 ; LNM$_MAX_INDEX, the last string's index, a longword, 0 unless it is a
 ; search list, -1 for a table; LNM$_ATTRIBUTES, a longword,
-; LNM$M_EXISTS if there is a string at that index and LNM$M_TABLE for a
-; table. An LNM$_INDEX item's longword says which string the items after
-; it are about, 0 the first: past the last, the string is empty.
+; LNM$M_EXISTS and the string's LNM$M_CONCEALED and LNM$M_TERMINAL if
+; there is a string at that index, and LNM$M_TABLE for a table;
+; LNM$_ACMODE, a byte, the name's access mode. An LNM$_INDEX item's
+; longword says which string the items after it are about, 0 the first:
+; past the last, the string is empty.
+; vaxpunk: names have no access mode yet: LNM$_ACMODE is PSL$C_EXEC for
+; a LNMB$M_NODELETE name, those made at boot and with a process, which
+; are executive mode names on VMS, and PSL$C_SUPER for the others.
 ; SS$_NOLOGNAM if no table has it, SS$_NOLOGTAB if tabnam names no table,
 ; SS$_BADPARAM for another item code. attr and acmode are ignored.
         .ENTRY  EXE$TRNLNM, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
@@ -610,6 +661,8 @@ ITEMS:
         BEQL    45$
         CMPW    2(R4), #LNM$_ATTRIBUTES
         BEQL    46$
+        CMPW    2(R4), #LNM$_ACMODE
+        BEQL    42$
         MOVL    R7, R5
         CMPW    2(R4), #LNM$_STRING
         BEQL    20$
@@ -625,6 +678,14 @@ ITEMS:
         MOVL    R5, R1
         BSBW    COPY
         MOVL    (SP)+, R1
+        BRB     50$
+42$:    TSTL    R2                      ; the access mode: a byte
+        BEQL    85$
+        MOVB    #PSL$C_SUPER, (R3)
+        BITB    #LNMB$M_NODELETE, LNMB$B_FLAGS(R1)
+        BEQL    43$
+        MOVB    #PSL$C_EXEC, (R3)
+43$:    MOVL    #1, R6
         BRB     50$
 40$:    CMPL    R2, #4                  ; the length: a longword
         BLSSU   85$
@@ -646,7 +707,10 @@ ITEMS:
         BLSS    47$
         CMPL    R9, R1
         BGTR    47$
-        MOVL    #LNM$M_EXISTS, R0
+        MOVZBL  (R7), R0                ; the string's attributes, after it
+        MOVZBL  1(R7)[R0], R0
+        ASHL    #8, R0, R0
+        BISL2   #LNM$M_EXISTS, R0
 47$:    MOVL    (SP)+, R1
         TSTL    LNMB$L_LNMTH(R1)
         BEQL    49$
@@ -677,9 +741,10 @@ EQUIV:
         RSB
 
 ; LNM$EQUIV: R1 = a logical name block, R0 = an index, 0 the first. R0 =
-; its index'th equivalence string, .ASCIC, an empty one past the last,
-; R1 = the last's index, more than 0 for a search list, -1 for a table.
-; Keeps every other register.
+; its index'th equivalence string, .ASCIC, with its LNMX$M_ bits in the
+; byte after it, or an empty one past the last, R1 = the last's index,
+; more than 0 for a search list, -1 for a table. Keeps every other
+; register.
 LNM$EQUIV::
         .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4>
@@ -695,7 +760,7 @@ LNM$EQUIV::
         BNEQ    15$
         MOVL    R1, R3
 15$:    ADDL2   R4, R1
-        INCL    R1
+        ADDL2   #2, R1                  ; past its count and attributes
         BRB     10$
 20$:    MOVL    R0, R1
         MOVL    R3, R0
@@ -815,6 +880,7 @@ WALK:
         BSBW    WALK
         BLBS    R0, 90$
         ADDL2   R5, R4
+        INCL    R4                      ; past its attributes
         BRB     20$
 80$:    CLRL    R0
 90$:    RSB
@@ -971,19 +1037,19 @@ NAME:
 ; LNM$CREATE: R5 = a table's header, R6 = a name, R7 = its length, R8
 ; = an equivalence string, R9 = its length, each 1-255 bytes the caller
 ; may read. Makes the name in the table, in place of one by that name
-; there. R0 = SS$_NORMAL, SS$_SUPERSEDE, SS$_DUPLNAM or SS$_INSFMEM. Uses
+; there, its string without attributes. R0 = SS$_NORMAL, SS$_SUPERSEDE, SS$_DUPLNAM or SS$_INSFMEM. Uses
 ; R1-R3.
 LNM$CREATE::
         .JSB_ENTRY  SCRATCH=<R2, R3>
         ADDL3   R7, R9, R1
-        ADDL2   #LNMB$K_LENGTH+3, R1
+        ADDL2   #LNMB$K_LENGTH+4, R1
         BSBB    NEWLNMB
         BLBC    R0, 90$
         MOVB    R9, (R3)+
         MOVL    R9, R0
         MOVL    R8, R1
         BSBW    COPY
-        CLRB    (R3)
+        CLRW    (R3)                    ; no attributes, and the end
         BRB     INSERT
 90$:    RSB
 
@@ -1038,12 +1104,13 @@ NAMES:
         .JSB_ENTRY  SCRATCH=<R2, R3>
 10$:    TSTB    (R6)
         BEQL    80$
-        MOVL    R6, R1                  ; past its strings' 0
-20$:    MOVZBL  (R1)+, R0
-        ADDL2   R0, R1
-        TSTL    R0
-        BNEQ    20$
-        SUBL3   R6, R1, R7              ; the bytes LNMB$T_NAME has
+        MOVZBL  (R6), R1                ; past its name
+        MOVAB   1(R6)[R1], R1
+20$:    MOVZBL  (R1)+, R0               ; and its strings' 0
+        BEQL    25$
+        MOVAB   1(R1)[R0], R1
+        BRB     20$
+25$:    SUBL3   R6, R1, R7              ; the bytes LNMB$T_NAME has
         ADDL3   #LNMB$K_LENGTH, R7, R1
         BSBW    EXE$ALONONPAGED
         BLBC    R0, 90$

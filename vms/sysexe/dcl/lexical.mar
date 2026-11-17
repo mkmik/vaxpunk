@@ -16,13 +16,15 @@
 ;               say how DCL runs
 ;   F$TIME(), F$MESSAGE(status)
 ;               the time, a status's message
-;   F$TRNLNM(name[, table[, index]]), F$SEARCH(spec[, stream]),
-;   F$PARSE(spec[, default[, related[, field]]])
+;   F$TRNLNM(name[, table[, index[, mode[, case[, item]]]]]),
+;   F$SEARCH(spec[, stream]),
+;   F$PARSE(spec[, default[, related[, field[, parse-type]]]])
 ;               translate logical names and file specifications
 ;   F$GETJPI(pid, item), F$GETSYI(item), F$GETDVI(device, item)
 ;               ask $GETJPI, $GETSYI and $GETDVI, an item at a time
 ;
-; ponytail: F$PARSE ignores related and SYNTAX_ONLY; F$FAO takes !AS,
+; ponytail: F$PARSE ignores related and SYNTAX_ONLY; F$TRNLNM ignores
+; mode and case, and its items are VALUE, CONCEALED and TERMINAL; F$FAO takes !AS,
 ; !UL, !SL, !ZL, !XL and !OL with B, W or L, !%S, !/, !_, !!, !n*c and
 ; widths, not !#, !-, !+, !%T or !%D. A process's username, node name and the
 ; F$FILE_ATTRIBUTES, F$CVTIME and F$CONTEXT functions wait for LOGINOUT
@@ -103,7 +105,7 @@ FUNCS:  FUNC    "F$EDIT", 2, 2, EDIT
         FUNC    "F$SEARCH", 1, 2, SEARCH
         FUNC    "F$STRING", 1, 1, STRING
         FUNC    "F$TIME", 0, 0, TIME
-        FUNC    "F$TRNLNM", 1, 3, TRNLNM
+        FUNC    "F$TRNLNM", 1, 6, TRNLNM
         FUNC    "F$TYPE", RAW, 1, TYPE
         FUNC    "F$VERIFY", 0, 2, VERIFY
         .BYTE   0
@@ -126,6 +128,14 @@ FIELDS: .ASCIC  "NODE"                  ; F$PARSE's fields, by their index
         .ASCIC  "NAME"
         .ASCIC  "TYPE"
         .ASCIC  "VERSION"
+        .BYTE   0
+PTYPES: .ASCIC  "NO_CONCEAL"            ; F$PARSE's parse types, by their bits
+        .ASCIC  "SYNTAX_ONLY"
+        .BYTE   0
+TRNITEMSK:                              ; F$TRNLNM's items, by their bits
+        .ASCIC  "VALUE"
+        .ASCIC  "CONCEALED"
+        .ASCIC  "TERMINAL"
         .BYTE   0
 ENVS:   ITEM    "DEPTH", 0, F_SPEC      ; F$ENVIRONMENT's items, by their codes
         ITEM    "MAX_DEPTH", 1, F_SPEC
@@ -249,8 +259,11 @@ TRNITEMS:                               ; and what it asks
         .ADDRESS TRNIDX, 0
         .WORD   255, LNM$_STRING
         .ADDRESS BUF, BUFLEN
+        .WORD   4, LNM$_ATTRIBUTES
+        .ADDRESS TRNATTR, 0
         .LONG   0
 TRNIDX: .LONG   0
+TRNATTR:.LONG   0
 ITEMS:  .WORD   255                     ; $GETJPI's, $GETSYI's or $GETDVI's: an item
 ITEMCODE:
         .WORD   0
@@ -710,9 +723,10 @@ VERIFY: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         BSBW    RESINT
         RSB
 
-; F$TRNLNM(name[, table[, index]]): the logical name's equivalence
-; string, index's, the first 0, in table, LNM$FILE_DEV by default, or ""
-; if it has none.
+; F$TRNLNM(name[, table[, index[, mode[, case[, item]]]]]): the logical
+; name's equivalence string, index's, the first 0, in table,
+; LNM$FILE_DEV by default, or "" if it has none; for item CONCEALED or
+; TERMINAL, "TRUE" if the string has that attribute, else "FALSE".
 TRNLNM: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         CLRL    R0
         BSBW    ARGSTR
@@ -736,12 +750,33 @@ TRNLNM: .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         MOVL    #2, R0
         BSBW    ARGINT
         MOVL    R0, TRNIDX
-20$:    $TRNLNM_S TABNAM=(R6), LOGNAM=NAMDSC, ITMLST=TRNITEMS
+20$:    CLRL    R10                     ; the item: 0 the value
+        MOVL    #5, R0
+        BSBW    ARGGIVEN
+        BLBC    R0, 25$
+        PUSHL   R6
+        MOVL    #5, R0
+        BSBW    ARGSTR
+        MOVAB   TRNITEMSK, R10
+        BSBW    KEYWORDS
+        ASHL    #-1, R0, R10            ; CONCEALED 1, TERMINAL 2
+        MOVL    (SP)+, R6
+25$:    $TRNLNM_S TABNAM=(R6), LOGNAM=NAMDSC, ITMLST=TRNITEMS
         CLRL    R2
         BLBC    R0, 30$
+        TSTL    R10
+        BNEQ    40$
         MOVZWL  BUFLEN, R2
 30$:    MOVAB   BUF, R1
         BSBW    RESSTR
+        RSB
+40$:    ASHL    #-8, TRNATTR, R1        ; LNMX$M_ bits
+        CLRL    R0
+        BITL    R10, R1
+        BEQL    45$
+        INCL    R0
+45$:    BSBW    BOOL
+        BSBW    RESCSTR
         RSB
 
 ; F$SEARCH(spec[, stream]): the next file spec names, or "" past the
@@ -823,9 +858,11 @@ STREAM: .JSB_ENTRY  OUTPUT=<R8>
 70$:    MOVL    R7, S_ID(R8)
 80$:    RSB
 
-; F$PARSE(spec[, default[, related[, field]]]): spec expanded, with
-; default's parts where it has none, as $PARSE does, or only its field:
-; NODE, DEVICE, DIRECTORY, NAME, TYPE or VERSION. "" if it can't be.
+; F$PARSE(spec[, default[, related[, field[, parse-type]]]]): spec
+; expanded, with default's parts where it has none, as $PARSE does, or
+; only its field: NODE, DEVICE, DIRECTORY, NAME, TYPE or VERSION; with
+; parse-type NO_CONCEAL, a concealed device's equivalence and its root,
+; DKA0:[SYS0.][SYSEXE], in place of its name. "" if it can't be.
 PARSE:  .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         MOVL    #3, R0                  ; the field's index, or -1
         BSBW    ARGGIVEN
@@ -838,7 +875,19 @@ PARSE:  .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R8, R10>
         CLRL    R10                     ; its bit's
 3$:     BBS     R10, R0, 5$
         AOBLSS  #6, R10, 3$
-5$:     CLRB    PFAB+FAB$B_DNS
+5$:     CLRB    PNAM+NAM$B_NOP
+        MOVL    #4, R0
+        BSBW    ARGGIVEN
+        BLBC    R0, 7$
+        PUSHL   R10
+        MOVL    #4, R0
+        BSBW    ARGSTR
+        MOVAB   PTYPES, R10
+        BSBW    KEYWORDS
+        MOVL    (SP)+, R10
+        BLBC    R0, 7$
+        MOVB    #NAM$M_NOCONCEAL, PNAM+NAM$B_NOP
+7$:     CLRB    PFAB+FAB$B_DNS
         MOVL    #1, R0
         BSBW    ARGGIVEN
         BLBC    R0, 10$

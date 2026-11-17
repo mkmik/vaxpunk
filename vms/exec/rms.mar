@@ -14,9 +14,14 @@
 ; name with more than one equivalence string, stands for each in turn:
 ; $OPEN, $ERASE and an image's activation take the file from the first
 ; that has it, $SEARCH finds the files in each, and $CREATE makes one in
-; the first. The device is DKA0:, the
-; system disk, or MDA0:, the ramdisk, with a volume mounted on it, which
-; f11.mar reads and f11wrt.mar writes.
+; the first. An equivalence string whose directory ends in a dot,
+; DKA0:[SYS0.], is a rooted directory: the specification's directory is
+; in it, so SYS$SYSROOT:[SYSEXE] is DKA0:[SYS0.SYSEXE] and [000000] the
+; root itself. A concealed one, as SYS$SYSROOT's is on VMS, must be a
+; device and a root, and RMS shows its logical name, SYS$SYSROOT:[SYSEXE],
+; for the device; a root not concealed shows as DKA0:[SYS0.][SYSEXE]. The
+; device is DKA0:, the system disk, or MDA0:, the ramdisk, with a volume
+; mounted on it, which f11.mar reads and f11wrt.mar writes.
 ;
 ; $OPEN reads the file's header into an IFAB, a block of pool, which the
 ; process's PCB holds by IFI, the index $OPEN puts in FAB$W_IFI; $CONNECT
@@ -68,10 +73,11 @@
 ; lock, FIL$LOCK, which keeps its buffers and RMS's to one process; VMS's
 ; RMS runs in executive mode, in the process's own P1. One stream per
 ; file; one writer of any other file; no bucket locks, which FIL$LOCK
-; makes needless; no concealed devices. A stalled service keeps
-; FIL$LOCK until it ends (RECSVC). $SEARCH finds its place again from the
-; resultant string it made last, as VMS's XQP does with FIB$L_WCC, so a
-; wildcard $SEARCH needs one; VMS's RMS keeps its own copy.
+; makes needless; NAM$M_NOCONCEAL only for $PARSE and $SEARCH. A stalled
+; service keeps FIL$LOCK until it ends (RECSVC). $SEARCH finds its place
+; again from the resultant string it made last, as VMS's XQP does with
+; FIB$L_WCC, so a wildcard $SEARCH needs one; VMS's RMS keeps its own
+; copy.
 ;
         .LIBRARY "lib.mlb"
         .LIBRARY "starlet.mlb"
@@ -128,6 +134,9 @@ WCC_V_LIST = 19                         ; the search list string it is in,
 WCC_S_LIST = 12
 WCC_AFTER = 1                           ; and goes on there after the resultant string's
 MAXKEY = 80                             ; NAME.TYPE, at most
+T_ROOT = 40                             ; in a table of parts, after the five: its root directory's names,
+T_CONC = 48                             ; the concealed logical name its device is, with its colon,
+T_LEN = 56                              ; each an address and a length, 0 if it has none
 FAT$B_RTYPE = 20
 FAT$B_RATTRIB = 21
 FAT$W_RSIZE = 22
@@ -171,13 +180,13 @@ RMS$GL_THREAD::                         ; the ASB of the asynchronous service ru
         .LONG   0
 STALL:  .LONG   0                       ; the ASB of the one stalled at a disk wait, its process holding FIL$LOCK, or 0
 ; A specification split into its five parts, device, directory, name,
-; type and version, each an address and a length, 0 if it is absent: the
-; file's, its default's, and the system's, and a logical name's
-; equivalence string's.
-SPECT:  .BLKQ   5
-DEFT:   .BLKQ   5
-SYST:   .BLKQ   5
-EQUT:   .BLKQ   5
+; type and version, each an address and a length, 0 if it is absent, and
+; its root and concealed name, T_ROOT and T_CONC: the file's, its
+; default's, and the system's, and a logical name's equivalence string's.
+SPECT:  .BLKB   T_LEN
+DEFT:   .BLKB   T_LEN
+SYST:   .BLKB   T_LEN
+EQUT:   .BLKB   T_LEN
 DEVBUF: .BLKB   3*256                   ; SPECT's, DEFT's and SYST's device, when NAMEDEV adds its colon
 SYSDIRQ:                                ; SYST's directory, until XLATE has looked for one
         .BLKQ   1
@@ -185,6 +194,17 @@ RMS$T_EXP::                             ; the expanded specification
         .BLKB   256
 EXPLEN: .LONG   0
 FIELDS: .BLKQ   5                       ; its parts
+PDEV:   .BLKB   256                     ; the device it is on, not a concealed name for it, in capitals
+PDEVL:  .LONG   0
+ROOTBUF:                                ; the root directory its directory is in: its names, dots between,
+        .BLKB   256
+ROOTL:  .LONG   0                       ; 0 for none, the MFD
+PDIR:   .LONG   0                       ; its directory in that root, in RMS$T_EXP,
+PDIRL:  .LONG   0                       ; without the root
+CONCEAL:.LONG   0                       ; 1 if its device is a concealed name
+ROOTSHOWN:                              ; 1 if RMS$T_EXP shows the root, [ROOT.][DIR]
+        .LONG   0
+NOCONC: .LONG   0                       ; 1 for NAM$M_NOCONCEAL: show the device and root, for the next parse only
 RMS$L_VERSION::                         ; the version it asks for: -1 any, 0 the highest
         .LONG   0
 WILD:   .LONG   0                       ; 1 if it has a wildcard
@@ -297,6 +317,12 @@ PARSEIDX:
         .JSB_ENTRY
         PUSHR   #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         CLRL    WILD
+        CLRL    EXPLEN                  ; none, if it fails before MERGE
+        CLRQ    FIELDS
+        CLRQ    FIELDS+8
+        CLRQ    FIELDS+16
+        CLRQ    FIELDS+24
+        CLRQ    FIELDS+32
         MOVL    #1, SLON
         CLRL    SLMORE
         DSBINT  #IPL$_SYNCH
@@ -332,6 +358,7 @@ PARSEIDX:
         BLBC    R0, 20$
         BSBW    MERGE
 20$:    ENBINT
+        CLRL    NOCONC
         BLBC    R0, 90$
         BSBW    CHECK
         BLBC    R0, 90$
@@ -348,10 +375,11 @@ PARSEIDX:
 90$:    POPR    #^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         RSB
 
-; SPLIT: R0 = a specification, R1 = its length, R2 = a table of five
-; parts. Splits it: [dev:][[dir]][name][.type][;ver]. A part's punctuation
-; is in it: the colon, the brackets, the dot, the semicolon. R0 =
-; RMS$_NORMAL, RMS$_DIR or RMS$_SYN. Uses R1-R6.
+; SPLIT: R0 = a specification, R1 = its length, R2 = a table of parts.
+; Splits it: [dev:][[root.]][[dir]][name][.type][;ver]. A part's
+; punctuation is in it: the colon, the brackets, the dot, the semicolon;
+; the root's names are without them, and the table has no concealed
+; name. R0 = RMS$_NORMAL, RMS$_DIR or RMS$_SYN. Uses R1-R6.
 SPLIT:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         CLRQ    (R2)
@@ -359,6 +387,8 @@ SPLIT:
         CLRQ    16(R2)
         CLRQ    24(R2)
         CLRQ    32(R2)
+        CLRQ    T_ROOT(R2)
+        CLRQ    T_CONC(R2)
         ADDL3   R0, R1, R6              ; past the end
         MOVL    R0, R3                  ; where the next part starts
         MOVL    R3, R4                  ; the device: up to a colon
@@ -389,7 +419,21 @@ SPLIT:
 35$:    INCL    R4
         MOVL    R3, 8(R2)
         SUBL3   R3, R4, 12(R2)
+        SUBL3   R3, R4, R5              ; a root, [A.B.]: not [.], [A...]
+        CMPL    R5, #4
+        BLSSU   38$
+        CMPB    -2(R4), #^A/./
+        BNEQ    38$
+        CMPB    -3(R4), #^A/./
+        BEQL    38$
+        TSTL    T_ROOT+4(R2)            ; but one
+        BNEQ    85$
+        ADDL3   #1, R3, T_ROOT(R2)
+        SUBL3   #3, R5, T_ROOT+4(R2)
+        CLRQ    8(R2)                   ; the directory in it may follow
         MOVL    R4, R3
+        BRW     20$
+38$:    MOVL    R4, R3
 40$:    MOVL    R3, R4                  ; the name: up to a dot or semicolon
 45$:    CMPL    R4, R6
         BGEQU   50$
@@ -439,8 +483,13 @@ SPLIT:
 ; first string, but in the first table with a device, whose device MERGE
 ; takes: there, the string SLIDX says counting each string of a search
 ; list inside it as VMS does, one after another (PICK), and SLMORE = 1 if
-; there are more. R0 = RMS$_NORMAL, SPLIT's error, or RMS$_NMF past the
-; last. IPL$_SYNCH. Uses R0-R9.
+; there are more. A rooted equivalence, DKA0:[SYS0.], gives the table
+; its root, which the directory is in; a concealed one gives it the
+; name, which RMS shows for the device, and must be a device and a root,
+; else RMS$_DEV, as must a second root. A terminal one isn't translated
+; further, nor is it a device if it is only a name. R0 = RMS$_NORMAL,
+; SPLIT's error, RMS$_DEV, or RMS$_NMF past the last. IPL$_SYNCH. Uses
+; R0-R9.
 XLATE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9>
         MOVL    R2, R8
@@ -461,6 +510,8 @@ XLATE:
         BSBW    LNM$TRNLOG
         TSTL    R1
         BEQL    80$
+        TSTL    T_CONC+4(R8)            ; a concealed one's device is a device
+        BNEQ    87$
         MOVL    R1, R5
         CLRL    R0
         BSBW    LNM$EQUIV               ; R0 = the first string
@@ -470,12 +521,33 @@ XLATE:
         TSTL    R0
         BEQL    85$
 15$:    MOVZBL  (R0)+, R1
+        MOVZBL  (R0)[R1], R4            ; its attributes
+        PUSHL   R4
         MOVAQ   EQUT, R2
         BSBW    SPLIT
+        MOVL    (SP)+, R4
         BLBC    R0, 90$
+        BITB    #LNMX$M_CONCEALED, R4
+        BEQL    17$
+        TSTL    EQUT+4                  ; concealed: a device, and a root
+        BEQL    87$
+        BISL3   EQUT+12, EQUT+20, R0
+        BISL2   EQUT+28, R0
+        BISL2   EQUT+36, R0
+        BNEQ    87$
+        MOVQ    (R8), T_CONC(R8)        ; the name RMS shows
+17$:    TSTL    EQUT+T_ROOT+4
+        BEQL    18$
+        TSTL    T_ROOT+4(R8)
+        BNEQ    87$
+        MOVQ    EQUT+T_ROOT, T_ROOT(R8)
+18$:    BITB    #LNMX$M_TERMINAL, R4
+        BNEQ    19$
+        PUSHL   R4
         MOVAQ   EQUT, R2
         BSBW    NAMEDEV
-        MOVQ    EQUT, (R8)
+        MOVL    (SP)+, R4
+19$:    MOVQ    EQUT, (R8)
         MOVL    #1, R0
 20$:    MOVAQ   (R8)[R0], R1
         TSTL    4(R1)
@@ -483,10 +555,14 @@ XLATE:
         MOVAQ   EQUT[R0], R2
         MOVQ    (R2), (R1)
 30$:    AOBLSS  #5, R0, 20$
+        BITB    #LNMX$M_TERMINAL, R4
+        BNEQ    80$
         SOBGTR  R9, 10$
 80$:    MOVL    #RMS$_NORMAL, R0
         BRB     90$
 85$:    MOVL    #RMS$_NMF, R0
+        BRB     90$
+87$:    MOVL    #RMS$_DEV, R0
 90$:    MOVL    R8, R2
         RSB
 
@@ -516,7 +592,7 @@ NAMEDEV:
         BEQL    90$
         MOVAB   SPECT, R0               ; the table's DEVBUF
         SUBL3   R0, R8, R0
-        DIVL2   #40, R0
+        DIVL2   #T_LEN, R0
         ASHL    #8, R0, R0
         MOVAB   DEVBUF[R0], R0
         PUSHR   #^M<R0, R2>
@@ -590,13 +666,17 @@ LEAVES:
         POPR    #^M<R1, R3, R4>
         RSB
 
-; STRLEAVES: R0 = an equivalence string, .ASCIC, R2 = how many more
-; translations there may be. R0 = how many strings it stands for: those
-; of its device's logical name, if it has one and there may be another
-; translation, else 1. IPL$_SYNCH. Keeps every other register.
+; STRLEAVES: R0 = an equivalence string, .ASCIC, with its attributes
+; after it, R2 = how many more translations there may be. R0 = how many
+; strings it stands for: those of its device's logical name, if it has
+; one, it isn't terminal and there may be another translation, else 1.
+; IPL$_SYNCH. Keeps every other register.
 STRLEAVES:
         .JSB_ENTRY
         PUSHR   #^M<R1, R2, R3, R6, R7>
+        MOVZBL  (R0), R1
+        BITB    #LNMX$M_TERMINAL, 1(R0)[R1]
+        BNEQ    80$
         BSBB    ELDEV
         TSTL    R7
         BEQL    80$
@@ -758,8 +838,11 @@ RELDIR:
 
 ; MERGE: builds RMS$T_EXP from the parts in SPECT, else DEFT, else SYST,
 ; in capitals, and FIELDS from where each part went. An empty type is a
-; dot, an empty version a semicolon. R0 = RMS$_NORMAL, or RMS$_SYN if it
-; is longer than 255 characters. Uses R0-R6.
+; dot, an empty version a semicolon. The table with the device gives the
+; root too (DEVPART); a concealed name shows in place of the device, and
+; a root without one, or with NOCONC, before the directory, [ROOT.][DIR],
+; as VMS's RMS shows them. R0 = RMS$_NORMAL, or RMS$_SYN if it is longer
+; than 255 characters. Uses R0-R6.
 MERGE:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6>
         MOVAB   RMS$T_EXP, R6           ; the next character
@@ -773,7 +856,15 @@ MERGE:
         MOVAQ   SYST[R5], R1
 20$:    MOVAQ   FIELDS[R5], R4
         MOVL    R6, (R4)
-        MOVL    (R1), R2
+        TSTL    R5
+        BNEQ    22$
+        BSBW    DEVPART
+        BRB     25$
+22$:    CMPL    R5, #1
+        BNEQ    25$
+        BSBW    ROOTPART
+        BLBC    R0, 80$
+25$:    MOVL    (R1), R2
         MOVL    4(R1), R3
         BNEQ    30$
         MOVZBL  #^A/./, R0              ; nothing there: the punctuation
@@ -796,7 +887,10 @@ MERGE:
         DECL    R3
         BGTR    30$
 40$:    SUBL3   (R4), R6, 4(R4)
-        AOBLSS  #5, R5, 10$
+        CMPL    R5, #1
+        BNEQ    45$
+        SUBL3   PDIR, R6, PDIRL
+45$:    AOBLSS  #5, R5, 10$
         MOVAB   RMS$T_EXP, R0
         SUBL3   R0, R6, EXPLEN
         MOVL    #RMS$_NORMAL, R0
@@ -804,19 +898,96 @@ MERGE:
 80$:    MOVL    #RMS$_SYN, R0
         RSB
 
-; CHECK: checks the parts in FIELDS: the device is DKA0: or MDA0:, with a
-; volume mounted that isn't another job's private one, which becomes
-; F11$GL_VCB, the directory
-; and the name and type are made of letters, digits, $, _ and -, with
-; dots between the directory's names, wildcards in any of them (WILDDIR
-; checks the directory's dots), and the version is a number up to 32767,
+; DEVPART: R1 = the device of SPECT, DEFT or SYST, the first of the
+; table. Copies it to PDEV and the table's root to ROOTBUF, in capitals,
+; and sets CONCEAL if the table has a concealed name, and ROOTSHOWN if
+; there is a root and no concealed name, or NOCONC. R1 = the part
+; RMS$T_EXP shows: the concealed name, unless NOCONC, else the device.
+; Uses R0.
+DEVPART:
+        .JSB_ENTRY
+        PUSHR   #^M<R2, R3>
+        MOVL    4(R1), R0
+        MOVL    R0, PDEVL
+        MOVL    (R1), R2
+        MOVAB   PDEV, R3
+        BSBW    UPCOPY
+        MOVL    T_ROOT+4(R1), R0
+        MOVL    R0, ROOTL
+        MOVL    T_ROOT(R1), R2
+        MOVAB   ROOTBUF, R3
+        BSBW    UPCOPY
+        CLRL    CONCEAL
+        CLRL    ROOTSHOWN
+        TSTL    T_CONC+4(R1)
+        BEQL    10$
+        MOVL    #1, CONCEAL
+        TSTL    NOCONC
+        BNEQ    10$
+        MOVAQ   T_CONC(R1), R1
+        BRB     90$
+10$:    TSTL    ROOTL
+        BEQL    90$
+        MOVL    #1, ROOTSHOWN
+90$:    POPR    #^M<R2, R3>
+        RSB
+
+; ROOTPART: R6 = where the directory goes in RMS$T_EXP. Writes the root
+; there, [ROOT.], if ROOTSHOWN, with R6 past it, and PDIR = R6. R0 = 1,
+; or 0 if it doesn't fit. Keeps every other register.
+ROOTPART:
+        .JSB_ENTRY  OUTPUT=<R6>
+        TSTL    ROOTSHOWN
+        BEQL    80$
+        PUSHR   #^M<R1, R2>
+        MOVAB   RMS$T_EXP+255-3, R0
+        SUBL2   ROOTL, R0
+        CMPL    R6, R0
+        BGTRU   85$
+        MOVB    #91, (R6)+              ; [
+        CLRL    R0
+10$:    MOVB    ROOTBUF[R0], (R6)+
+        AOBLSS  ROOTL, R0, 10$
+        MOVB    #^A/./, (R6)+
+        MOVB    #93, (R6)+              ; ]
+        POPR    #^M<R1, R2>
+80$:    MOVL    R6, PDIR
+        MOVL    #1, R0
+        RSB
+85$:    POPR    #^M<R1, R2>
+        CLRL    R0
+        RSB
+
+; UPCOPY: copies R0 bytes from R2 to R3, in capitals, with R2 and R3 past
+; them. Uses R0.
+UPCOPY:
+        .JSB_ENTRY  OUTPUT=<R2, R3>
+        PUSHL   R4
+10$:    SOBGEQ  R0, 20$
+        MOVL    (SP)+, R4
+        RSB
+20$:    MOVZBL  (R2)+, R4
+        CMPB    R4, #^A/a/
+        BLSSU   30$
+        CMPB    R4, #^A/z/
+        BGTRU   30$
+        SUBB2   #^A/a/-^A/A/, R4
+30$:    MOVB    R4, (R3)+
+        BRB     10$
+
+; CHECK: checks the parts in FIELDS: the device, PDEV, is DKA0: or MDA0:,
+; with a volume mounted that isn't another job's private one, which
+; becomes F11$GL_VCB, the directory, PDIR, and the name and type are made
+; of letters, digits, $, _ and -, with dots between the directory's
+; names, wildcards in any of them (WILDDIR checks the directory's dots),
+; the root's the same without wildcards, and the version is a number up to 32767,
 ; * or nothing. Sets WILD for a wildcard and RMS$L_VERSION. R0 =
 ; RMS$_NORMAL, RMS$_DEV, RMS$_DNR, RMS$_DIR, RMS$_FNM, RMS$_VER, or
 ; RMS$_SYN for a version that isn't a number, as VMS's. Uses R0-R4.
 CHECK:
         .JSB_ENTRY  SCRATCH=<R2, R3, R4>
-        MOVL    FIELDS, R1              ; the device
-        MOVL    FIELDS+4, R2
+        MOVAB   PDEV, R1                ; the device
+        MOVL    PDEVL, R2
         BSBW    FIL$SELECT
         BLBC    R0, 80$
         MOVL    F11$GL_VCB, R1
@@ -825,10 +996,15 @@ CHECK:
         BLBS    R0, 7$
 6$:     MOVL    #RMS$_DNR, R0
         RSB
-7$:     ADDL3   #1, FIELDS+8, R1        ; the directory, inside its brackets
-        SUBL3   #2, FIELDS+12, R2
+7$:     ADDL3   #1, PDIR, R1            ; the directory, inside its brackets
+        SUBL3   #2, PDIRL, R2
         BLEQ    85$
         MOVL    #3, R3                  ; dots and wildcards
+        BSBW    CHARS
+        BLBC    R0, 85$
+        MOVAB   ROOTBUF, R1             ; the root's: dots
+        MOVL    ROOTL, R2
+        MOVL    #2, R3
         BSBW    CHARS
         BLBC    R0, 85$
         MOVL    FIELDS+16, R1           ; the name
@@ -921,7 +1097,7 @@ CHARS:
 80$:    CLRL    R0
         RSB
 
-; WILDDIR: splits the directory in FIELDS: its names up to the first with
+; WILDDIR: splits the directory, PDIR: its names up to the first with
 ; a wildcard or ..., but 000000, into WPATH, and their length into
 ; WFIXL; the rest into WPAT, ... as !. Sets WILD if there is a rest. R0
 ; = RMS$_NORMAL, or RMS$_DIR if a name is empty or longer than 39
@@ -931,8 +1107,8 @@ WILDDIR:
         CLRL    WPATHL
         CLRL    WPATL
         CLRL    R5                      ; 1 from the first wildcard on
-        ADDL3   #1, FIELDS+8, R1        ; the next name
-        ADDL3   FIELDS+8, FIELDS+12, R2
+        ADDL3   #1, PDIR, R1            ; the next name
+        ADDL3   PDIR, PDIRL, R2
         DECL    R2                      ; at the closing bracket
 10$:    CMPL    R1, R2
         BGEQU   70$
@@ -1028,8 +1204,9 @@ APPNAME:
         RSB
 
 ; DIRWALK: R10 = names, dots between, R11 = past them. Finds the
-; directory they name, from the MFD down, each name
-; NAME.DIR;1 in the one before: 000000 is the MFD itself. Reads its
+; directory they name, from the MFD down, through the root's, ROOTBUF,
+; if there is one, each name
+; NAME.DIR;1 in the one before: 000000 is the one it is in. Reads its
 ; header into RMS$AB_DIRHDR and its file ID into DIRFID. With CREDIR set,
 ; makes each one that isn't there, counting them in CREDIR. R0 =
 ; RMS$_NORMAL, RMS$_DNF, RMS$_DIR if a name isn't a directory, RMS$_WLK
@@ -1042,6 +1219,24 @@ DIRWALK:
         MOVAB   RMS$AB_DIRHDR, R1
         BSBW    FIL$READHDR
         BLBC    R0, 99$
+        TSTL    ROOTL                   ; the root's, never made
+        BEQL    5$
+        PUSHR   #^M<R10, R11>
+        PUSHL   CREDIR
+        CLRL    CREDIR
+        MOVAB   ROOTBUF, R10
+        ADDL3   R10, ROOTL, R11
+        BSBW    WALKDIRS
+        MOVL    (SP)+, CREDIR
+        POPR    #^M<R10, R11>
+        BLBC    R0, 99$
+5$:     BSBW    WALKDIRS
+99$:    RSB
+
+; WALKDIRS: DIRWALK's walk, from the directory RMS$AB_DIRHDR holds down
+; the names R10 points to, R11 past them, the same way. Uses R0-R11.
+WALKDIRS:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
 10$:    CMPL    R10, R11
         BLSSU   15$
         BRW     80$
@@ -1440,7 +1635,15 @@ MKRES:
         TSTL    WPATL                   ; a wildcard directory: the one it is in
         BEQL    18$
         MOVL    RESF+8, R6
+        TSTL    ROOTSHOWN               ; after the root, if shown
+        BEQL    12$
         MOVB    #91, (R6)+
+        MOVAB   ROOTBUF, R1
+        MOVL    ROOTL, R2
+        BSBB    APPEND
+        MOVB    #^A/./, (R6)+
+        MOVB    #93, (R6)+
+12$:    MOVB    #91, (R6)+
         MOVAB   WPATH, R1
         MOVL    WPATHL, R2
         BNEQ    15$
@@ -1654,6 +1857,16 @@ FINDXAB:
 80$:    MOVL    #SS$_ACCVIO, R0
         RSB
 
+; NOPTS: R11 = a NAM block. NOCONC = 1 if its NAM$B_NOP has
+; NAM$M_NOCONCEAL, for the next parse. Keeps every register.
+NOPTS:
+        .JSB_ENTRY
+        CLRL    NOCONC
+        BITB    #NAM$M_NOCONCEAL, NAM$B_NOP(R11)
+        BEQL    10$
+        MOVL    #1, NOCONC
+10$:    RSB
+
 ; FABNAM: AP = a service's arguments, a FAB first. R10 = the FAB, R11 =
 ; its NAM block, or 0. R0 = RMS$_NORMAL; RMS$_FAB if the caller can't
 ; write a FAB there, RMS$_NAM if it can't a NAM block.
@@ -1803,7 +2016,9 @@ RMS$CMPL:
 ; when the directory doesn't exist, still gives the expanded string and
 ; its parts; but not for a search list's first string with more after
 ; it. So do RMS$_DEV, a device there isn't, and RMS$_DNR, one not
-; mounted, as VMS's.
+; mounted, as VMS's. NAM$M_CNCL_DEV says its device is a concealed
+; logical name, which the strings show unless NAM$B_NOP has
+; NAM$M_NOCONCEAL, and NAM$M_ROOT_DIR that its directory is in a root.
         .ENTRY  EXE$PARSE, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         BSBW    FIL$LOCK
         BSBW    FABNAM
@@ -1811,6 +2026,7 @@ RMS$CMPL:
         MOVL    #RMS$_NAM, R0
         TSTL    R11
         BEQL    90$
+        BSBW    NOPTS
         BSBW    PARSEFAB
         MOVL    R0, R9
         CMPL    R0, #RMS$_DNF
@@ -1835,8 +2051,14 @@ RMS$CMPL:
         MOVW    DIRFID+4, NAM$W_DID+4(R11)
         CLRL    NAM$L_FNB(R11)
         TSTL    WILD
-        BEQL    15$
+        BEQL    12$
         BISL2   #NAM$M_WILDCARD, NAM$L_FNB(R11)
+12$:    TSTL    CONCEAL
+        BEQL    13$
+        BISL2   #NAM$M_CNCL_DEV, NAM$L_FNB(R11)
+13$:    TSTL    ROOTL
+        BEQL    15$
+        BISL2   #NAM$M_ROOT_DIR, NAM$L_FNB(R11)
 15$:    TSTL    SLMORE
         BEQL    20$
         BISL2   #NAM$M_SEARCH_LIST, NAM$L_FNB(R11)
@@ -1882,7 +2104,8 @@ RMS$CMPL:
         MOVZBL  NAM$B_ESL(R11), R1
         CLRQ    R2
         BSBW    SYSDFLT
-5$:     BSBW    PARSEIDX
+5$:     BSBW    NOPTS
+        BSBW    PARSEIDX
         BLBS    R0, 7$
         CMPL    R0, #RMS$_NMF           ; the search list is shorter now
         BEQL    10$

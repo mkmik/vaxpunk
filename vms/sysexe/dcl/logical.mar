@@ -19,11 +19,12 @@ MAXEQV = 128                            ; a search list's strings, at most
         .EXTERNAL DCL$ADDNAME, DCL$DONE, DCL$GETVAL, DCL$ISPRES, DCL$NAMDSC
         .EXTERNAL DCL$NAMEVAL, DCL$OK, DCL$PROCESS
         .EXTERNAL DCL$SAY, DCL$SHOWDEF, DCL$SHOWDEV, DCL$SHOWSYM, DCL$TOKEN
-        .EXTERNAL DCL$VERB, DCL$V_LOGNAM
+        .EXTERNAL DCL$VERB, DCL$V_LOGNAM, DCL$ADD, DCL$MSG, DCL$WARN
 
         .PSECT  DATA, NOEXE, WRT, LONG
-CREITEMS:                               ; $CRELNM's: an LNM$_STRING for each equivalence
-        .BLKB   <12*MAXEQV>+4
+CREITEMS:                               ; $CRELNM's: an LNM$_ATTRIBUTES and an LNM$_STRING for each equivalence
+        .BLKB   <24*MAXEQV>+4
+ATTRS:  .BLKL   MAXEQV                  ; their attributes
 EQVS:   .BLKB   512                     ; their strings
 TABVAL: .LONG   0                       ; a table a qualifier names: its length
         .ADDRESS TABBUF
@@ -43,6 +44,7 @@ V_NOALIAS:
         .ASCID  "ATTRIBUTES.NO_ALIAS"
 V_EQUNAM:
         .ASCID  "EQUIVALENCE_NAME"
+V_TRANS:.ASCID  "TRANSLATION_ATTRIBUTES"
 V_OPTION:
         .ASCID  "OPTION"
 V_LOG:  .ASCID  "LOG"
@@ -53,16 +55,25 @@ V_TABLE:
         .ASCID  "TABLE"
 SYSTEM: .ASCID  "LNM$SYSTEM"
 TABDSC: .LONG   0                       ; LNMTAB's table name, a descriptor's address
+K_CONC: .ASCIC  "CONCEALED"             ; /TRANSLATION_ATTRIBUTES's keywords
+K_TERM: .ASCIC  "TERMINAL"
+M_IVKEYW:
+        .ASCIC  "%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling"
+M_NOTNEG:
+        .ASCIC  /%DCL-W-NOTNEG, qualifier or keyword not negatable - remove "NO" or omit/
 V_DEFAULT:
         .ASCIC  "DEFAULT"
 V_DEVICES:
         .ASCIC  "DEVICES"
 
         .PSECT  CODE, EXE, LONG
-; DCL$DEFINE, DEFINE[/PROCESS|/SYSTEM|/TABLE=table][/[NO]LOG] name
-; equivalence[,...]: makes name a logical name in the table, the
-; process's by default, telling if it replaced one, unless /NOLOG. More
-; than one equivalence makes a search list.
+; DCL$DEFINE, DEFINE[/PROCESS|/SYSTEM|/TABLE=table][/[NO]LOG]
+; [/TRANSLATION_ATTRIBUTES=(CONCEALED,TERMINAL)] name
+; equivalence[/TRANSLATION_ATTRIBUTES=(...)][,...]: makes name a logical
+; name in the table, the process's by default, telling if it replaced
+; one, unless /NOLOG. More than one equivalence makes a search list.
+; /TRANSLATION_ATTRIBUTES after the verb gives every equivalence its
+; attributes, after one only that one.
 DCL$DEFINE::
         .EXCEPTION_ENTRY
         MOVAB   DCL$PROCESS, R1
@@ -71,19 +82,29 @@ DCL$DEFINE::
         BSBW    DCL$NAMEVAL
         MOVAB   CREITEMS, R6            ; the next item
         MOVAB   EQVS, R7                ; where its string goes
+        MOVAB   ATTRS, R10              ; and its attributes
 5$:     MOVAB   V_EQUNAM, R1
         BSBW    DCL$GETVAL
         MOVL    R0, R9
-        MOVW    R8, (R6)
-        MOVW    #LNM$_STRING, 2(R6)
-        MOVL    R7, 4(R6)
-        CLRL    8(R6)
+        MOVW    R8, 12(R6)
+        MOVW    #LNM$_STRING, 14(R6)
+        MOVL    R7, 16(R6)
+        CLRL    20(R6)
         MOVC3   R8, DCL$TOKEN, (R7)
         MOVL    R3, R7
-        ADDL2   #12, R6
+        BSBW    TRANSATTR
+        BLBS    R1, 6$
+        BRW     DCL$WARN
+6$:     MOVL    R0, (R10)
+        MOVW    #4, (R6)
+        MOVW    #LNM$_ATTRIBUTES, 2(R6)
+        MOVL    R10, 4(R6)
+        CLRL    8(R6)
+        ADDL2   #4, R10
+        ADDL2   #24, R6
         CMPL    R9, #CLI$_COMMA
         BNEQ    7$
-        MOVAB   CREITEMS+<12*MAXEQV>, R0
+        MOVAB   CREITEMS+<24*MAXEQV>, R0
         CMPL    R6, R0
         BLSSU   5$
 7$:     CLRL    (R6)
@@ -182,6 +203,76 @@ DCL$CRETABLE::
 70$:    BSBW    DCL$SAY
 80$:    BRW     DCL$OK
 90$:    BRW     DCL$DONE
+
+; TRANSATTR: after DCL$GETVAL of an equivalence, R0 = its
+; /TRANSLATION_ATTRIBUTES, LNM$M_CONCEALED and LNM$M_TERMINAL: those
+; given after it, else after the verb. R1 = 1, or 0 for a keyword that
+; isn't one, which it reports, as VMS's DCL does. Uses R0-R5, R8.
+TRANSATTR:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5, R8>
+        PUSHL   #0                      ; the attributes
+        PUSHL   #0                      ; 1 once CLI$GET_VALUE started again
+10$:    MOVAB   V_TRANS, R1
+        BSBW    DCL$GETVAL
+        CMPL    R0, #CLI$_ABSENT
+        BNEQ    20$
+        BLBS    (SP), 80$               ; the verb's, read for the last one:
+        INCL    (SP)                    ; the next call reads them again
+        BRB     10$
+20$:    INCL    (SP)
+        PUSHL   R0
+        MOVAB   K_CONC, R3
+        BSBB    ISKEYW
+        MOVL    #LNM$M_CONCEALED, R1
+        BLBS    R0, 30$
+        MOVAB   K_TERM, R3
+        BSBB    ISKEYW
+        MOVL    #LNM$M_TERMINAL, R1
+        BLBS    R0, 30$
+        MOVAB   M_IVKEYW, R1            ; not a keyword, or one negated
+        CMPL    R8, #2
+        BLEQ    25$
+        CMPW    DCL$TOKEN, #^A/NO/
+        BNEQ    25$
+        MOVAB   M_NOTNEG, R1
+25$:    CLRB    DCL$MSG
+        BSBW    DCL$ADDCSTR
+        BSBW    DCL$SAY
+        ADDTEXT " \"
+        MOVAB   DCL$TOKEN, R1
+        MOVL    R8, R2
+        BSBW    DCL$ADD
+        ADDTEXT "\"
+        BSBW    DCL$SAY
+        ADDL2   #12, SP
+        CLRL    R1
+        RSB
+30$:    BISL2   R1, 8(SP)
+        MOVL    (SP)+, R0
+        CMPL    R0, #CLI$_COMMA
+        BEQL    10$
+80$:    TSTL    (SP)+
+        MOVL    (SP)+, R0
+        MOVL    #1, R1
+        RSB
+
+; ISKEYW: R3 = a keyword, .ASCIC, R8 = the length of a word in
+; DCL$TOKEN. R0 = 1 if the word is the keyword or begins it, else 0.
+; Uses R0-R3.
+ISKEYW:
+        .JSB_ENTRY  SCRATCH=<R2, R3>
+        CLRL    R0
+        TSTL    R8
+        BEQL    90$
+        MOVZBL  (R3)+, R2
+        CMPL    R8, R2
+        BGTRU   90$
+        CLRL    R1
+10$:    CMPB    DCL$TOKEN[R1], (R3)[R1]
+        BNEQ    90$
+        AOBLSS  R8, R1, 10$
+        INCL    R0
+90$:    RSB
 
 ; LNMTAB: R1 = the descriptor of the table name a logical name command
 ; uses by default. Makes TABDSC that, or LNM$PROCESS for /PROCESS,

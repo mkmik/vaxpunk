@@ -326,10 +326,10 @@ those of `DCL$TABLES` (*Commands*); a verb with an image runs it with
 | `RUN image` | `$IMGACT`, with `.EXE` if the name has no type, and no parse |
 | `DIRECTORY [spec]` | `DIRECTORY.EXE` |
 | `TYPE spec` | `TYPE.EXE` |
-| `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one, unless `/NOLOG`; `/SYSTEM`, `/PROCESS` or `/TABLE=table` names the table |
+| `DEFINE name equivalence` | `$CRELNM` in `LNM$PROCESS`, and `%DCL-I-SUPERSEDE` if it replaced one, unless `/NOLOG`; `/SYSTEM`, `/PROCESS` or `/TABLE=table` names the table; `/TRANSLATION_ATTRIBUTES=(CONCEALED,TERMINAL)` after the verb is every equivalence's, after one that one's |
 | `CREATE/NAME_TABLE table` | `$CRELNT` under `LNM$PROCESS_DIRECTORY`, or `/PARENT_TABLE`'s, with `LNM$M_CREATE_IF`: `%DCL-I-TABEXIST` if there is one, unless `/NOLOG`; `/ATTRIBUTES=SUPERSEDE` replaces it, `%DCL-I-TABSUPER`, or tells there was none, `%DCL-I-TABNOTFND` |
 | `DEASSIGN name` | `$DELLNM` from `LNM$PROCESS`, or the table the same qualifiers name |
-| `SHOW LOGICAL name` | `SHOW.EXE`: `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, `"name" [table] = ""` for a table, or `%SHOW-S-NOTRAN` |
+| `SHOW LOGICAL name` | `SHOW.EXE`: `$TRNLNM` in `LNM$FILE_DEV`, or the table the same qualifiers name: `"name" = "equivalence" (table)`, `"name" [table] = ""` for a table, or `%SHOW-S-NOTRAN`; `/FULL` adds the name's mode, `[exec]` or `[super]`, and each string's `[concealed,terminal]` |
 | `SHOW LOGICAL [*]` | `SHOW.EXE`: lists every name, the process's table's and then the system's, or only that table's, sorted, under each table's name; it copies them one at a time from `LNM$NAMES` with `$CMKRNL`, with the CMKRNL it is installed with, as VMS's is, so any user may list them |
 | `SET DEFAULT [dev:][dir]` | `$PARSE`s it, which must name no file, `$SETDDIR` with the directory it expands to, and `$CRELNM` of `SYS$DISK` in `LNM$PROCESS` with its device; one that doesn't exist is still set |
 | `SHOW DEFAULT` | the device and directory `$PARSE` expands an empty specification to, then `%DCL-I-INVDEF` if it doesn't exist; for a search list, each directory it takes that to which exists, after `=` |
@@ -886,8 +886,9 @@ end (`$LNMDEF`).
   tables under it, unless `LNM$M_CREATE_IF` keeps it, `SS$_NORMAL`; a new
   one is `SS$_LNMCREATED`.
 - **`$CRELNM`** makes a name in the first table `tabnam` names, the
-  process's for `LNM$FILE_DEV`, with the equivalence of the
-  `LNM$_STRING` item, the one item it takes. A name already there by
+  process's for `LNM$FILE_DEV`, with the equivalence of each
+  `LNM$_STRING` item; an `LNM$_ATTRIBUTES` item, `LNM$M_CONCEALED` and
+  `LNM$M_TERMINAL`, gives the strings after it their attributes. A name already there by
   that name goes, a table with the tables under it: `SS$_SUPERSEDE`. A
   shareable table takes write access, or `SYSNAM` for the system's.
 - **`$DELLNM`** deletes a name from the first of `tabnam`'s tables that
@@ -897,8 +898,11 @@ end (`$LNMDEF`).
 - **`$TRNLNM`** looks a name up in `tabnam`'s tables, in turn, and fills
   in its items, as much of each as fits: `LNM$_STRING`, the equivalence;
   `LNM$_TABLE`, the table it was found in; `LNM$_LENGTH`, the
-  equivalence's length; `LNM$_ATTRIBUTES`, `LNM$M_TABLE` for a table.
-  `SS$_NOLOGNAM` if no table has it. One level, as on VMS: the
+  equivalence's length; `LNM$_ATTRIBUTES`, `LNM$M_TABLE` for a table,
+  and the string's `LNM$M_CONCEALED` and `LNM$M_TERMINAL`;
+  `LNM$_ACMODE`, the name's mode: names have none yet, so it is
+  `PSL$C_EXEC` for those made at boot, executive mode names on VMS, and
+  `PSL$C_SUPER` for the others. `SS$_NOLOGNAM` if no table has it. One level, as on VMS: the
   equivalence may be a logical name too.
 - **Process-permanent names.** `$CREPRC`'s `input`, `output` and `error`
   are the equivalences of the new process's `SYS$INPUT`, `SYS$OUTPUT` and
@@ -921,7 +925,7 @@ list. `$CRELNM` takes one `LNM$_STRING` item for each, in order, and
 `LNM$_INDEX` item picks the string the items after it are about, and
 `LNM$_MAX_INDEX` gives the last one's index. The block keeps the strings
 one after another, each `.ASCIC`, then a 0 byte, so the first is where
-it always was.
+it always was. Each string's attributes are a byte after it.
 
 ponytail: no access
 modes, so no user-mode names that image rundown deletes and no names an
@@ -929,7 +933,7 @@ outer mode can't delete: the names made at boot and with a process,
 executive mode ones on VMS, are `LNMB$M_NODELETE` instead, which
 `$DELLNM` doesn't find and `$CRELNM` and `$CRELNT` can't replace,
 `SS$_DUPLNAM`. No `LNM$JOB` or `LNM$GROUP`, no table quotas, and no
-attributes. VMS's hash table and mutex replace the queues and IPL.
+`CONFINE` or `NO_ALIAS`. VMS's hash table and mutex replace the queues and IPL.
 
 ### I/O
 
@@ -1380,9 +1384,16 @@ string's own directory winning: `= MDA0:[000000]`, `= MDA0:[SYSMGR]`,
 does. A name that translates to a search list, `SET DEFAULT
 SYS$MANAGER:`, is translated first, as far as the list:
 `SYS$SYSROOT:[SYSMGR]`.
-ponytail: no rooted directories or concealed devices; the expanded
-string has the device a name translates to, as VMS's does without
-them.
+An equivalence string whose directory ends in a dot, `DKA0:[RT.]`, is a
+rooted directory: the specification's directory is in it, `R:[SUB]` is
+`DKA0:[RT.SUB]`, `[000000]` is the root and `[-]` can't go above it. A
+concealed string must be a device and a root, else `RMS$_DEV`; the
+strings RMS returns show the name, `R:[SUB]A.TXT`, unless the NAM
+block's `NAM$M_NOCONCEAL`, and a root that isn't concealed shows as
+`DKA0:[RT.][SUB]A.TXT`, which RMS reads back too. A terminal string
+isn't translated further. `SET DEFAULT R:[SUB]` makes `SYS$DISK` `R:`
+and refuses a root that isn't concealed, `%DCL-W-DIRECT`, as OpenVMS
+does.
 A relative directory is made absolute first, against the default
 specification's directory if it has one, else the process's: `[]` is
 that one, `[-]` its parent, `[--]` the one above, `[.SUB]` and `[-.SUB]`

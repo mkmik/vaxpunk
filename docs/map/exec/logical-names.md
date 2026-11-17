@@ -49,8 +49,15 @@ note = "PRD-0003 tier 3 #25: first, since LOGINOUT's user mode names need it; DC
 
 [[feature]]
 id = "attributes"
-title = "CONCEALED, TERMINAL, CONFINE, NO_ALIAS; rooted directories, SYS$SYSROOT as [SYS0.]"
+title = "Each equivalence string's CONCEALED and TERMINAL: $CRELNM's LNM$_ATTRIBUTES, $TRNLNM's, DEFINE/TRANSLATION_ATTRIBUTES"
+status = "done"
+note = "PRD-0003 tier 3 #25, checked against OpenVMS V8.4-2L1; RMS's use of them is t8y:/rms/core#concealed"
+
+[[feature]]
+id = "name-attributes"
+title = "A name's CONFINE and NO_ALIAS, which SPAWN and outer modes heed"
 status = "todo"
+needs = ["#access-modes"]
 note = "PRD-0003 tier 3 #25"
 
 [[feature]]
@@ -102,7 +109,9 @@ directories, the process's and the system's, which `$CRELNT` and DCL's
 `CREATE/NAME_TABLE` add to; a table's name is translated there into the
 tables it stands for, so a process may have an `LNM$FILE_DEV` of its
 own. Shareable tables have VMS's owner and protection; the system table
-takes `SYSNAM` too (PRD-0003 step 1). `SYS$SYSROOT` is a search list of
-`MDA0:` and `DKA0:`, whole volumes, not rooted directories. Missing:
-`LNM$JOB` and `LNM$GROUP` (tier 1 #1), and access modes, attributes and
-rooted names (tier 3 #25).
+takes `SYSNAM` too (PRD-0003 step 1). Each equivalence string has its
+`CONCEALED` and `TERMINAL` attributes, which RMS and `$ASSIGN` heed.
+`SYS$SYSROOT` is a search list of `MDA0:` and `DKA0:`, whole volumes,
+not rooted directories (`t8y:/exec/system-init#rooted-directories`).
+Missing: `LNM$JOB` and `LNM$GROUP` (tier 1 #1), and access modes,
+`CONFINE` and `NO_ALIAS` (tier 3 #25).

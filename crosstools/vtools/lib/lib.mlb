@@ -412,9 +412,11 @@ LNMB$L_BLINK = 4
 LNMB$W_SIZE = 8                         ; its size, as allocated
 LNMB$B_FLAGS = 10                       ; LNMB$M_
 LNMB$L_LNMTH = 12                       ; a table's header, else 0
-LNMB$T_NAME = 16                        ; the name, .ASCIC, then each equivalence, .ASCIC, then a 0
+LNMB$T_NAME = 16                        ; the name, .ASCIC, then each equivalence, .ASCIC and a byte of LNMX$M_ bits, then a 0
 LNMB$K_LENGTH = 16                      ; past that, the strings
 LNMB$M_NODELETE = 1                     ; $DELLNM can't delete it, $CRELNM and $CRELNT can't replace it
+LNMX$M_CONCEALED = 1                    ; the equivalence's LNM$M_CONCEALED, its attributes shifted right 8 bits
+LNMX$M_TERMINAL = 2                     ; and LNM$M_TERMINAL
         .ENDM   $LNMBDEF
 
 ; $LNMTHDEF: a logical name table's header: the queue of its LNMBs, and

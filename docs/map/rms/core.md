@@ -118,9 +118,9 @@ note = "rms.mar's $PARSE says RMS$_VER; seen on OpenVMS Alpha 8.4-2L1 with DIREC
 [[feature]]
 id = "concealed"
 title = "Concealed devices and rooted directories, SYS$SYSROOT:[SYSEXE] as [SYS0.SYSEXE]"
-status = "todo"
-needs = ["/exec/logical-names"]
-note = "PRD-0003 tier 3 #25; rms.mar ponytail"
+status = "done"
+needs = ["/exec/logical-names#attributes"]
+note = "PRD-0003 tier 3 #25, checked against OpenVMS V8.4-2L1; NAM$M_NOCONCEAL only for $PARSE and $SEARCH. SYS$SYSROOT itself is t8y:/exec/system-init#rooted-directories"
 
 [[feature]]
 id = "xqp-modify"
@@ -207,7 +207,10 @@ checks; it dispatches record services to the organization's module, and
 `rmsxab.mar` fills the XABs. `RMSTEST` runs the same MACRO-32 on OpenVMS
 Alpha and on vaxpunk and must print the same
 ([PRD-0008](../../prd/0008-rms-record-and-indexed-files.md)).
+A rooted logical name, `DKA0:[SYS0.]`, holds the directories a
+specification gives, and a concealed one shows its own name, not the
+device, in the strings RMS returns.
 Missing: executive mode, `$RENAME`, `$ENTER`, `$REMOVE`, `$EXTEND`,
-non-disk devices, concealed devices, asynchronous services
+non-disk devices, asynchronous services
 (`t8y:/rms/async`) and sharing
 (`t8y:/rms/sharing`).

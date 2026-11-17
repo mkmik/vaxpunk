@@ -65,6 +65,7 @@
         $NAMDEF
         $OSSDEF
         $LNMDEF
+        $PSLDEF
 
         .EXTERNAL PUT_LINE, PRV_NAMES, TERM_SENSE, TERM_NAME, TERM_SPEEDS, ID_TEXT
         .EXTERNAL LNM$NAMES
@@ -396,10 +397,14 @@ TRNITEMS:                               ; $TRNLNM's: an equivalence, its table, 
         .ADDRESS EQVMAX, 0
         .WORD   4, LNM$_ATTRIBUTES
         .ADDRESS EQVATTR, 0
+        .WORD   1, LNM$_ACMODE
+        .ADDRESS EQVMODE, 0
         .LONG   0
 EQVIDX: .LONG   0
 EQVMAX: .LONG   0
 EQVATTR:.LONG   0
+EQVMODE:.LONG   0                       ; the name's access mode, a byte
+LNMFULL:.LONG   0                       ; SHOW LOGICAL/FULL: 1 to show modes and attributes
 EQVLEN: .WORD   0
 EQV:    .BLKB   255
 EQVTABLEN:
@@ -1717,8 +1722,11 @@ SECFILE:
 ; the table, LNM$FILE_DEV by default, and shows the equivalence and the
 ; table it is in. With no name, or *, lists the names of each table the
 ; table name names, in turn, sorted, under the table's name, as VMS's
-; does.
+; does. /FULL adds the name's access mode, [super], and each string's
+; attributes, [concealed,terminal], as VMS's does.
         .ENTRY  SHOWLOG, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        PRESENT "FULL"
+        MOVL    R0, LNMFULL
         MOVAB   FILE_DEV, TABDSC
         PRESENT "PROCESS"
         BLBC    R0, 10$
@@ -1874,7 +1882,13 @@ PAIRS:
 10$:    BSBW    QUOTE
         BSBW    ADDLNM
         BSBW    QUOTE
-        BITL    #LNM$M_TABLE, EQVATTR
+        BLBC    LNMFULL, 12$
+        CMPB    EQVMODE, #PSL$C_EXEC
+        BNEQ    11$
+        ADDTEXT " [exec]"
+        BRB     12$
+11$:    ADDTEXT " [super]"
+12$:    BITL    #LNM$M_TABLE, EQVATTR
         BEQL    15$
         ADDTEXT " [table]"
 15$:    ADDTEXT " = "
@@ -1905,14 +1919,28 @@ TRANS:
         $TRNLNM_S TABNAM=(R6), LOGNAM=LNMDSC, ITMLST=TRNITEMS
         RSB
 
-; QUOTEQV: appends "equivalence", EQV's, to LINE. Uses R0-R2.
+; QUOTEQV: appends "equivalence", EQV's, to LINE, and with /FULL its
+; attributes, EQVATTR's, [concealed,terminal]. Uses R0-R2.
 QUOTEQV:
         .JSB_ENTRY  SCRATCH=<R2>
         BSBB    QUOTE
         MOVAB   EQV, R1
         MOVZWL  EQVLEN, R2
         BSBW    ADD
-        BRB     QUOTE                   ; a tail call
+        BSBB    QUOTE
+        BLBC    LNMFULL, 90$
+        BITL    #LNM$M_CONCEALED, EQVATTR
+        BEQL    20$
+        BITL    #LNM$M_TERMINAL, EQVATTR
+        BEQL    10$
+        ADDTEXT " [concealed,terminal]"
+        RSB
+10$:    ADDTEXT " [concealed]"
+        RSB
+20$:    BITL    #LNM$M_TERMINAL, EQVATTR
+        BEQL    90$
+        ADDTEXT " [terminal]"
+90$:    RSB
 
 ; QUOTE: appends a quote to LINE. Uses R0-R2.
 QUOTE:

@@ -45,10 +45,10 @@ note = "dcl/setshow.mar, dcl/logical.mar; VMS's SHOW DEVICES is SHOW.EXE's. SHOW
 
 [[feature]]
 id = "logical-modes"
-title = "ASSIGN, DEFINE/USER_MODE, /EXECUTIVE_MODE, /TRANSLATION_ATTRIBUTES, /JOB, /GROUP"
+title = "ASSIGN, DEFINE/USER_MODE, /EXECUTIVE_MODE, /NAME_ATTRIBUTES, /JOB, /GROUP"
 status = "todo"
 needs = ["/exec/logical-names"]
-note = "PRD-0003 tier 3 #25: access modes first; LNM$JOB and LNM$GROUP are tier 1"
+note = "PRD-0003 tier 3 #25: access modes first; LNM$JOB and LNM$GROUP are tier 1. DEFINE/TRANSLATION_ATTRIBUTES is done, logical.mar"
 
 [[feature]]
 id = "show-devices-full"

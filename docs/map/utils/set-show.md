@@ -154,10 +154,17 @@ status = "todo"
 needs = ["#show-logical"]
 
 [[feature]]
+id = "show-logical-attributes"
+title = "SHOW LOGICAL/FULL: each string's attributes, [concealed,terminal], and the name's mode"
+status = "done"
+needs = ["#show-logical", "/exec/logical-names#attributes"]
+note = "show.mar, $TRNLNM's LNM$_ATTRIBUTES and LNM$_ACMODE, as OpenVMS V8.4-2L1 prints them. Until #show-logical-modes the mode is [exec] for the names made at boot and [super] for the others: SYS$INPUT and SYS$LOGIN show [super], [exec] on VMS"
+
+[[feature]]
 id = "show-logical-modes"
-title = "SHOW LOGICAL's access modes and attributes, [super], [exec], [concealed,terminal]; /ACCESS_MODE"
+title = "SHOW LOGICAL's real access modes, [exec] for a process's permanent names, [user]; /ACCESS_MODE"
 status = "todo"
-needs = ["#show-logical", "/exec/logical-names#access-modes", "/exec/logical-names#attributes"]
+needs = ["#show-logical-attributes", "/exec/logical-names#access-modes"]
 
 [[feature]]
 id = "show-logical-tables"
