@@ -117,6 +117,7 @@
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, LNM$EQUIV
         .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX, LCK$ENQ, LCK$DEQ, LCK$ENQWK
         .EXTERNAL EXE$GQ_SYSTIME, RMS$XABOUT, RMS$FINDXAB
+        .EXTERNAL SEQ$AHEAD
         .EXTERNAL SEQ$OPEN, SEQ$CONNECT, SEQ$GET, SEQ$FIND, SEQ$PUT, SEQ$UPDATE
         .EXTERNAL SEQ$TRUNCATE, SEQ$REWIND, SEQ$FLUSH
         .EXTERNAL BIO$READ, BIO$WRITE, BIO$SPACE
@@ -3388,7 +3389,9 @@ L2:     RABDONE
 ; FIL$LOCK meanwhile (RMS$STALL). A stream that locks records, whose waits
 ; let go of FIL$LOCK, and one there is no pool for, run synchronously,
 ; RAB$M_ASY or not. RMS$_RSA, and nothing else, if the RAB's stream has a
-; service stalled, as VMS's. R0 = the service's status. Uses R0-R11.
+; service stalled, as VMS's. One that ran synchronously then starts its
+; stream's read-ahead and write-behind (AHEAD). R0 = the service's
+; status. Uses R0-R11.
 ; ponytail: one stalled service at a time, its process holding FIL$LOCK,
 ; which every other process's file system work waits for; the RAB and its
 ; buffers aren't probed again when it goes on, VMS's are.
@@ -3409,18 +3412,31 @@ RECSVC:
         BSBW    FIL$LOCK
         BSBW    RABIFAB
         BLBC    R0, 20$
-        BBC     #RAB$V_ASY, RAB$L_ROP(R10), 20$
-        BBS     #IFB$V_RLK, IFB$L_FLAGS(R7), 20$
+        BBC     #RAB$V_ASY, RAB$L_ROP(R10), 10$
+        BBS     #IFB$V_RLK, IFB$L_FLAGS(R7), 10$
         MOVL    #ASB$K_LENGTH, R1
         BSBW    EXE$ALONONPAGED
         BLBS    R0, 30$
+10$:    CALLG   (AP), (R6)              ; keeps R7 and R10
+        BSBW    AHEAD
+        RSB
 20$:    CALLG   (AP), (R6)
         RSB
-30$:    MOVL    SCH$GL_CURPCB, R4
-        MOVL    R4, ASB$L_PCB(R2)
-        MOVL    R6, ASB$L_ROUTINE(R2)
+30$:    MOVL    R6, ASB$L_ROUTINE(R2)
         MOVQ    (AP), ASB$L_ARGS(R2)
         MOVQ    8(AP), ASB$L_ARGS+8(R2)
+        BSBW    STARTTHREAD
+        RSB
+
+; STARTTHREAD: R2 = an ASB from pool, its ASB$L_ROUTINE and ASB$L_ARGS
+; given; FIL$LOCK held. Runs its routine on the ASB's stack (RUNTHREAD)
+; until it ends or stalls at a disk wait, then puts back the IPL its
+; FIL$LOCK's caller had. R0 = its status, or RMS$_PENDING while it is
+; stalled. Uses R0-R5.
+STARTTHREAD:
+        .JSB_ENTRY  SCRATCH=<R2, R3, R4, R5>
+        MOVL    SCH$GL_CURPCB, R4
+        MOVL    R4, ASB$L_PCB(R2)
         CALL_PAL #PAL$_RD_PS
         EXTZV   #PSL$V_PRVMOD, #2, R0, R0
         MOVB    R0, ASB$B_MODE(R2)
@@ -3445,6 +3461,50 @@ RECSVC:
         BSBW    RUNTHREAD
         MTPR    (SP)+, #PR$_IPL
         RSB
+
+; AHEAD: R0 = a record service's status, R7 = its stream's IFAB, R10 =
+; its RAB; the service has ended and given back FIL$LOCK. With RAB$M_RAH
+; or RAB$M_WBH, starts the stream's read-ahead and write-behind, if it
+; has any (SEQ$AHEAD), on a stack of its own holding FIL$LOCK (RMS$AHEAD),
+; and returns while the disk works: it stalls at the disk wait as an
+; asynchronous service does, and its AST, or the process's next file
+; system work (RMS$FINISH), goes on with it. Not after an error, nor if
+; there is no pool for it. Keeps R0. Uses R1-R6.
+AHEAD:
+        .JSB_ENTRY  SCRATCH=<R1, R2, R3, R4, R5, R6>
+        BLBC    R0, 90$
+        BICL3   #^C<RAB$M_RAH!RAB$M_WBH>, RAB$L_ROP(R10), R6
+        BEQL    90$
+        PUSHL   R0
+        MOVL    R6, R1
+        CLRL    R2                      ; asks
+        BSBW    SEQ$AHEAD
+        BLBC    R0, 80$
+        MOVL    #ASB$K_LENGTH, R1
+        BSBW    EXE$ALONONPAGED
+        BLBC    R0, 80$
+        MOVAB   RMS$AHEAD, ASB$L_ROUTINE(R2)
+        MOVL    #3, ASB$L_ARGS(R2)
+        CLRL    ASB$L_ARGS+4(R2)        ; no RAB: its next service gets no RMS$_RSA
+        MOVL    R7, ASB$L_ARGS+8(R2)
+        MOVL    R6, ASB$L_ARGS+12(R2)
+        BSBW    FIL$LOCK
+        MOVL    IFB$L_VCB(R7), F11$GL_VCB
+        BSBW    STARTTHREAD
+80$:    MOVL    (SP)+, R0
+90$:    RSB
+
+; RMS$AHEAD: a stream's read-ahead and write-behind (SEQ$AHEAD), on a
+; stack of its own (AHEAD), holding FIL$LOCK, which it gives back. AP =
+; 3, 0, its IFAB, its RAB$M_RAH and RAB$M_WBH. R0 = SS$_NORMAL.
+        .ENTRY  RMS$AHEAD, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
+        MOVL    8(AP), R7
+        MOVL    12(AP), R1
+        MOVL    #1, R2                  ; does
+        BSBW    SEQ$AHEAD
+        BSBW    FIL$UNLOCK
+        MOVL    #SS$_NORMAL, R0
+        RET
 
 ; RUNTHREAD: R1 = an ASB. Runs its service on its stack (SWITCH) until it
 ; ends or stalls at a disk wait: in kernel mode at IPL$_ASTDEL, to which

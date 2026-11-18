@@ -31,10 +31,13 @@
 ; file of any organization: $READ and $WRITE at RAB$L_BKT's VBN, or the
 ; next, and $SPACE moves by RAB$L_BKT blocks. $WRITE writes its blocks
 ; to the file before it returns.
-; ponytail: every transfer is done before a service returns, so
-; RAB$M_RAH and RAB$M_WBH only give a stream a second buffer: reading
-; ahead and writing behind would need RMS to wait for its own $QIOs,
-; t8y:/rms/async. With no default extension anywhere, a file grows by
+; RAB$M_RAH and RAB$M_WBH give a stream a second buffer, and after each
+; record service rms.mar's AHEAD reads the next buffer's blocks ahead and
+; writes behind the blocks that changed in the others (SEQ$AHEAD), on a
+; stack of its own that stalls at the disk wait, while the program goes
+; on, as an asynchronous service does (ADR-0048).
+; ponytail: the stream's process holds FIL$LOCK while that transfer
+; goes on, as for a stalled asynchronous service. With no default extension anywhere, a file grows by
 ; EXTEND blocks; VMS's grows by twice a buffer, at most 256, and gives
 ; back what it didn't use at $CLOSE, which the file system can't yet.
 ;
@@ -809,6 +812,72 @@ SEQ$FLUSH::
 80$:    MOVL    R0, R1
         MOVL    #RMS$_WER, R0
         RSB
+
+; SEQ$AHEAD: R7 = an IFAB, R1 = its stream's RAB$M_RAH and RAB$M_WBH,
+; R2 = 0 to ask, 1 to do. A sequential file's stream's write-behind and
+; read-ahead, between its record services: with RAB$M_WBH, writes the
+; blocks that changed in its buffers other than the current one (WRBDB);
+; with RAB$M_RAH, fills the one used least recently other than the
+; current one, its blocks that changed written first, with the blocks
+; after the current one's (FILL), unless they are past the end of file or
+; a buffer holds them. An error is left for the service that needs that
+; buffer: its blocks that changed stay so, one not filled holds none. R0
+; = 1 if asked and there is something to do, else 0. Uses R0-R5.
+SEQ$AHEAD::
+        .JSB_ENTRY  SCRATCH=<R1, R2, R3, R4, R5>
+        CLRL    R0
+        CMPB    IFB$B_ORG(R7), #FAB$C_SEQ
+        BNEQ    90$
+        BITL    #<1@IFB$V_BIO>!<1@IFB$V_BRO>, IFB$L_FLAGS(R7)
+        BNEQ    90$
+        MOVL    IFB$L_BDB(R7), R3       ; the current one
+        BEQL    90$
+        MOVL    R2, R5
+        BBC     #RAB$V_WBH, R1, 30$
+        MOVL    IFB$L_BUF(R7), R2
+        MOVZBL  IFB$B_MBF(R7), R4
+10$:    CMPL    R2, R3
+        BEQL    20$
+        CMPB    BDB$B_LO(R2), BDB$B_HI(R2)
+        BGTRU   20$                     ; none changed
+        BLBC    R5, 85$
+        BSBW    WRBDB
+20$:    ADDL2   #BDB$K_LENGTH, R2
+        SOBGTR  R4, 10$
+30$:    BBC     #RAB$V_RAH, R1, 80$
+        MOVZBL  IFB$B_MBC(R7), R4
+        ADDL2   BDB$L_VBN(R3), R4       ; R4 = the next buffer's first VBN
+        EXTZV   #9, #23, IFB$L_EOF(R7), R0      ; the blocks to the end of file
+        BITW    #BLOCK-1, IFB$L_EOF(R7)
+        BEQL    35$
+        INCL    R0
+35$:    CMPL    R4, R0
+        BGTRU   80$
+        MOVL    IFB$L_BUF(R7), R2
+        MOVZBL  IFB$B_MBF(R7), R0
+        CLRL    R1                      ; R1 = the one used least recently
+40$:    CMPL    BDB$L_VBN(R2), R4
+        BEQL    80$                     ; it holds them
+        CMPL    R2, R3
+        BEQL    50$
+        TSTL    R1
+        BEQL    45$
+        CMPL    BDB$L_USE(R2), BDB$L_USE(R1)
+        BGEQU   50$
+45$:    MOVL    R2, R1
+50$:    ADDL2   #BDB$K_LENGTH, R2
+        SOBGTR  R0, 40$
+        TSTL    R1
+        BEQL    80$                     ; the stream has one buffer
+        BLBC    R5, 85$
+        MOVL    R1, R2
+        BSBW    WRBDB
+        BLBC    R0, 80$
+        BSBW    FILL
+80$:    CLRL    R0
+        RSB
+85$:    MOVL    #1, R0
+90$:    RSB
 
 ; SEQ$WRBUF: R7 = an IFAB. Writes the blocks that changed in its
 ; buffers (WRBDB); an indexed file's, by block I/O, its other opens'

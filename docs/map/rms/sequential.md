@@ -43,9 +43,9 @@ note = "RAB$B_MBC blocks a buffer, RAB$B_MBF buffers, or SET RMS_DEFAULT's; the 
 [[feature]]
 id = "read-ahead"
 title = "Read-ahead and write-behind, RAB$V_RAH and RAB$V_WBH: a buffer's transfer while the program goes on"
-status = "todo"
+status = "done"
 needs = ["/rms/async#asynchronous"]
-note = "They only give the stream a second buffer: rmsseq.mar waits for every transfer"
+note = "rms.mar AHEAD runs rmsseq.mar SEQ$AHEAD after a synchronous record service on an ASB's stack, which stalls at the disk wait as ADR-0048's; RMSTEST's MB.SEQ"
 
 [[feature]]
 id = "default-extension"
@@ -84,6 +84,10 @@ the process's or the system's defaults, which `SET RMS_DEFAULT` sets, and
 each is read and written in one transfer; the system's are VMS's, one
 buffer of 32 blocks. A file grows by `FAB$W_DEQ`, the header's default
 extension or `SET RMS_DEFAULT`'s. `COPY` keeps a `STMLF` file's format,
-and the C library's stdio reads records through it. Every transfer is
-done before a service returns, so read-ahead and write-behind only give
-a stream a second buffer.
+and the C library's stdio reads records through it. With `RAB$V_RAH` or
+`RAB$V_WBH` a stream gets a second buffer, and after each record service
+RMS reads the next buffer ahead and writes behind the ones that changed,
+while the program goes on: the transfer runs on a stack of its own and
+stalls at the disk wait, as an asynchronous service does
+([ADR-0048](../../adr/0048-asynchronous-rms-stalls-on-a-stack-of-its-own.md)),
+its process holding `FIL$LOCK` until the disk is done.
