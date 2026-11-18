@@ -213,6 +213,29 @@ FIL$LOCK::
         POPR    #^M<R0, R1, R4>
         RSB
 
+; FIL$TRYLOCK: takes the file system's lock as FIL$LOCK does if no
+; process holds it, without waiting: for work that can be skipped, as
+; RMS's read-ahead. R0 = 1 if it took it, else 0. Keeps every other
+; register.
+; vaxpunk: VMS's XQP has no such routine.
+FIL$TRYLOCK::
+        .JSB_ENTRY
+        PUSHL   R1
+        MFPR    #PR$_IPL, R1
+        SETIPL  #IPL$_SYNCH
+        CLRL    R0
+        TSTL    OWNER
+        BNEQ    20$
+        MOVL    SCH$GL_CURPCB, OWNER
+        MOVL    R1, F11$GL_LOCKIPL
+        INCL    R0
+        CMPL    R1, #IPL$_ASTDEL
+        BGEQ    20$
+        MOVL    #IPL$_ASTDEL, R1
+20$:    MTPR    R1, #PR$_IPL
+        MOVL    (SP)+, R1
+        RSB
+
 ; FIL$UNLOCK: gives back the lock FIL$LOCK took, to the first process in
 ; line, which takes it when it runs, as VMS's XQP hands its queue to the
 ; first waiter, with a boost, PRI$_RESAVL (SCH$BOOST): a process its disk

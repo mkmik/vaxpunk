@@ -112,7 +112,7 @@
         .EXTERNAL FIL$READHDR, FIL$READVBN, FIL$SEARCHDIR, FIL$MATCH, FIL$EOF, FIL$ISDIR
         .EXTERNAL FIL$SELECT, FIL$CHKALLOC, FIL$CREHDR, FIL$WRITEHDR, FIL$SETNAME, FIL$EXTEND
         .EXTERNAL FIL$ENTER, FIL$REMOVE, FIL$DELHDR, FIL$WRITEVBN, FIL$MKDIR
-        .EXTERNAL FIL$LOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO, FIL$ACLINHERIT
+        .EXTERNAL FIL$LOCK, FIL$TRYLOCK, FIL$UNLOCK, FIL$CHKHDR, FIL$CHKPRO, FIL$ACLINHERIT
         .EXTERNAL F11$GL_LOCKIPL, F11$AB_IRP, FIL$IOWAIT, SCH$QAST, SCH$ASTBITS, SCH$BOOST
         .EXTERNAL F11$GW_FID, F11$GL_VCB, F11$AB_DIRBLK, LNM$TRNLOG, LNM$EQUIV
         .EXTERNAL SCH$GL_PCBVEC, SCH$GL_MAXPIX, LCK$ENQ, LCK$DEQ, LCK$ENQWK
@@ -3403,6 +3403,8 @@ RECSVC:
         BEQL    5$
         CMPL    ASB$L_PCB(R0), SCH$GL_CURPCB
         BNEQ    5$
+        TSTL    ASB$L_ARGS+4(R0)
+        BEQL    5$                      ; read-ahead, no service (AHEAD)
         CMPL    ASB$L_ARGS+4(R0), 4(AP)
         BNEQ    5$
         ENBINT
@@ -3469,6 +3471,7 @@ STARTTHREAD:
 ; and returns while the disk works: it stalls at the disk wait as an
 ; asynchronous service does, and its AST, or the process's next file
 ; system work (RMS$FINISH), goes on with it. Not after an error, nor if
+; another process holds FIL$LOCK or waits for it (FIL$TRYLOCK), nor if
 ; there is no pool for it. Keeps R0. Uses R1-R6.
 AHEAD:
         .JSB_ENTRY  SCRATCH=<R1, R2, R3, R4, R5, R6>
@@ -3480,23 +3483,27 @@ AHEAD:
         CLRL    R2                      ; asks
         BSBW    SEQ$AHEAD
         BLBC    R0, 80$
+        BSBW    FIL$TRYLOCK             ; no kernel AST from here: the ASB isn't lost
+        BLBC    R0, 80$
         MOVL    #ASB$K_LENGTH, R1
         BSBW    EXE$ALONONPAGED
-        BLBC    R0, 80$
+        BLBC    R0, 70$
         MOVAB   RMS$AHEAD, ASB$L_ROUTINE(R2)
         MOVL    #3, ASB$L_ARGS(R2)
         CLRL    ASB$L_ARGS+4(R2)        ; no RAB: its next service gets no RMS$_RSA
         MOVL    R7, ASB$L_ARGS+8(R2)
         MOVL    R6, ASB$L_ARGS+12(R2)
-        BSBW    FIL$LOCK
         MOVL    IFB$L_VCB(R7), F11$GL_VCB
         BSBW    STARTTHREAD
+        BRB     80$
+70$:    BSBW    FIL$UNLOCK
 80$:    MOVL    (SP)+, R0
 90$:    RSB
 
 ; RMS$AHEAD: a stream's read-ahead and write-behind (SEQ$AHEAD), on a
 ; stack of its own (AHEAD), holding FIL$LOCK, which it gives back. AP =
 ; 3, 0, its IFAB, its RAB$M_RAH and RAB$M_WBH. R0 = SS$_NORMAL.
+; IPL$_ASTDEL, which RUNTHREAD gives it. Uses R0 and R1.
         .ENTRY  RMS$AHEAD, ^M<R2, R3, R4, R5, R6, R7, R8, R9, R10, R11>
         MOVL    8(AP), R7
         MOVL    12(AP), R1
