@@ -3,9 +3,11 @@ name: boot
 # Builds the OS with the cross toolchain and boots it in QEMU: cargo test -p
 # boot. The toolchain is a container image, .github/toolchain.Dockerfile,
 # kept on ghcr.io under the Dockerfile's hash and built only when that tag
-# is missing. Each test binary boots in its own job, in parallel. On main, or when run by hand, it then builds the GitHub Pages
-# site, web/mksite.sh's: the landing page, the API reference, the map and the demo,
-# the images just booted on QEMU compiled to WebAssembly. Main publishes it.
+# is missing. Each test binary boots in its own job, in parallel. Then it
+# builds the GitHub Pages site, web/mksite.sh's: the landing page, the API
+# reference, the map and the demo, the images just booted on QEMU compiled
+# to WebAssembly. Every PR builds it, so a PR that breaks it isn't green;
+# only main publishes it.
 on:
   push:
     branches: [main]
@@ -72,7 +74,6 @@ jobs:
   # The browser's QEMU is 32-bit wasm with 2.3 GB: the demo's kernel is
   # built for 1 GB, web/demo/index.html's -m.
   demo-images:
-    if: github.event_name != 'pull_request'
     needs: toolchain
     runs-on: ubuntu-latest
     permissions:
@@ -97,8 +98,8 @@ jobs:
 
   # qemu-system-aarch64 for the browser takes the better part of an hour to
   # build: it's cached under web/qemu-wasm.sh's hash, which pins its sources.
+  # PRs read main's cache, so only a PR that changes qemu-wasm.sh builds it.
   qemu-wasm:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
