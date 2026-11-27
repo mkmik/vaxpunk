@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mkmik/todography@v0.12.0
+      - uses: mkmik/todography@37dc4190b405fdb95f20f4d96f68679a4aeb4710 # v0.24.0
         with:
           args: --strict
       - run: todography build
