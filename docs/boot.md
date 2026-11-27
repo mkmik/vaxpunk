@@ -116,7 +116,10 @@ compiles.
 `EXEC$START` ([vms/exec/exec.mar](../vms/exec/exec.mar)):
 
 - fills in the system control block (handlers for traps, mode changes and
-  software interrupts, plus the timer and the console receive interrupt,
+  software interrupts, page faults, `MMG$PAGEFAULT`, which makes a page
+  of `$CRETVA` or `$EXPREG` when it is first touched
+  ([ADR-0050](adr/0050-page-faults-make-demand-zero-pages.md)), plus the
+  timer and the console receive interrupt,
   and the disks' interrupt, at IPL 21, and the software interrupt at IPL 8
   it requests, `DK$INTERRUPT` and `DK$FORK`)
 - starts memory management (`MMG$INIT`): the PFN database, in S0 past

@@ -82,8 +82,9 @@ share of the page files, which `SYSGEN CREATE` and `AUTOGEN` make.
 
 vaxpunk has no paging: memory is allocated and kept, a non-goal of
 PRD-0003. Image sections are read in whole when the image is activated
-(PRD-0003 tier 3 #21). The PAL owns the page tables and a touch of a page
-that isn't mapped is an access violation
-([DESIGN-0001](../../design/0001-pal-interface.md)), so faulting
-pages in needs a PAL change first (`t8y:/exec/memory#page-faults`). With
+(PRD-0003 tier 3 #21). A touch of a page whose PTE isn't valid but
+allows it is a translation not valid fault the executive takes, which
+makes demand zero pages so far (`t8y:/exec/memory#page-faults`,
+[ADR-0050](../../adr/0050-page-faults-make-demand-zero-pages.md)); a
+page from a file or the page file is another kind of invalid PTE for it. With
 4 MB of memory (tier 1 #39) the first need is more memory, not paging.

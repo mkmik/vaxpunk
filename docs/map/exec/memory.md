@@ -76,9 +76,9 @@ note = "ADR-0037: all of RAM but the PAL's share, the PFN database sized at boot
 [[feature]]
 id = "page-faults"
 title = "Page faults: a page mapped when it is first touched, not an access violation"
-status = "todo"
-needs = ["/platform/pal"]
-note = "PRD-0003 tier 3 #21; DESIGN-0001: a page fault is an access violation today"
+status = "done"
+needs = ["/platform/pal#page-faults"]
+note = "ADR-0050: $CRETVA and $EXPREG make demand zero pages, MMG$PAGEFAULT makes them on a translation not valid fault, up to IPL$_SYNCH"
 
 [[needs]]
 on = "/platform/pal"
@@ -114,6 +114,8 @@ PAL to map, unmap or protect a page and returns the old PTE
 mode's seL4 thread, kernel mode's too, has an address space that caches
 what that mode may read, filled on faults. Pages are allocated and kept: no paging, swapping or sharing.
 The PAL gives it all the RAM but a share of its own
-([ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)),
-and a page fault is an access violation, so image sections are read in
-whole (PRD-0003 tier 3 #21).
+([ADR-0037](../../adr/0037-all-ram-and-address-spaces-filled-on-faults.md)).
+`$CRETVA` and `$EXPREG` make demand zero pages, which a translation not
+valid fault makes when they are first touched
+([ADR-0050](../../adr/0050-page-faults-make-demand-zero-pages.md)); image
+sections are still read in whole (PRD-0003 tier 3 #21).

@@ -20,6 +20,12 @@
 ;   ^X60000000  P1: the process's $CRETVA pages
 ;   ^X7FF00000  its command interpreter, if it has one, then its mode stacks
 ;
+; $CRETVA and $EXPREG make demand zero pages, as VMS's do: each PTE has
+; the page's protection but isn't valid, and a free PFN is kept for it
+; (MMG$GL_DZROCNT). The first access to the page is a translation not
+; valid fault, and MMG$PAGEFAULT makes it then, zeroed
+; (docs/adr/0050-page-faults-make-demand-zero-pages.md).
+;
 ; A global section is pages any process may map by the section's name
 ; with $CRMPSC or $MGBLSC, so that processes share them: its GSD, from
 ; pool, names its PFNs and counts the PTEs that map them, and a PFN of
@@ -58,8 +64,11 @@
         $GSDDEF
         $ARMDEF
         $PRVDEF
+        $PSLDEF
+        $INTSTKDEF
 
         .EXTERNAL EXE$GL_RPB, SCH$GL_CURPCB, EXE$PROBER_DSC, EXE$MATCHNAME, FIL$CHKPRO
+        .EXTERNAL EXE$ACVIOLAT
 
 POOL_END = ^X4FF00000                   ; past pool: the port's pages
 PFNDB_MAX = 128*1024*1024               ; the PFN database's most bytes: some 51 GB of RAM
@@ -71,6 +80,9 @@ GSDNAMMAX = 43                          ; a global section name's characters, at
 KW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_KW
 UW = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UW
 UR = PTE$M_VALID ! PTE$M_FOE ! PTE$C_UR
+DZRO = ^X10000                          ; in a PTE that isn't valid: a demand zero page, whatever its protection
+DZ = DZRO ! PTE$M_FOE ! PTE$C_UW        ; $CRETVA's and $EXPREG's: user writable once it is made
+CLUSTER = 16                            ; demand zero pages a fault makes at most
 
         .PSECT  EXEC$DATA, NOEXE, WRT, QUAD
 MMG$GL_FREECNT::                        ; free PFNs: on the free stack, and from MMG$GL_HIGHPFN up
@@ -80,6 +92,8 @@ EXE$GL_NONPAGED::                       ; free pool blocks by address:
 MMG$GL_MAXPFN::                         ; PFNs 0 to this one less are the executive's
         .LONG   0
 MMG$GL_HIGHPFN::                        ; PFNs from this one to MMG$GL_MAXPFN were never used: free
+        .LONG   0
+MMG$GL_DZROCNT::                        ; demand zero pages not made yet: free PFNs kept for them
         .LONG   0
 MMG$GL_FREEPFN::                        ; S0: the free stack, PFNs freed, a longword each
         .LONG   0
@@ -178,14 +192,14 @@ GROWPOOL:
 90$:    MOVL    #SS$_INSFMEM, R0
         BRB     80$
 
-; MMG$ALLOCPFN: R0 = a free PFN, or 0 if there is none: PFN 0 is the
-; boot's. One freed before, from the free stack, else one never used.
-; IPL$_SYNCH.
+; MMG$ALLOCPFN: R0 = a free PFN, or 0 if there is none but those kept
+; for demand zero pages, MMG$GL_DZROCNT: PFN 0 is the boot's. One freed
+; before, from the free stack, else one never used. IPL$_SYNCH.
 MMG$ALLOCPFN::
         .JSB_ENTRY
         CLRL    R0
-        TSTL    MMG$GL_FREECNT
-        BEQL    20$
+        CMPL    MMG$GL_FREECNT, MMG$GL_DZROCNT
+        BLEQU   20$
         DECL    MMG$GL_FREECNT
         MOVL    FREESP, R0
         BEQL    10$
@@ -225,8 +239,25 @@ MMG$CREPAG::
         MOVL    R0, R3
         MOVL    R1, R4
         MOVL    R2, R5
-10$:    TSTL    R4
-        BEQL    40$
+        MOVL    #SS$_NORMAL, R0
+        BRB     20$
+10$:    BSBB    MAKEPAG
+        BLBC    R0, 30$
+        ADDL2   #MMG$C_PAGESIZE, R3
+        DECL    R4
+20$:    TSTL    R4
+        BNEQ    10$
+30$:    ENBINT
+        POPR    #^M<R3, R4, R5, R6>
+        RSB
+
+; MAKEPAG: R3 = a page's address, R5 = the PTE's low longword: its valid
+; bit, enables and fault on execute bit. Makes the page, zeroed, with
+; that protection, replacing any there. R0 = SS$_NORMAL, or SS$_INSFMEM
+; when the PFNs run out or the PAL has no room for another mapping
+; (WRPTE returns -1). IPL$_SYNCH. Uses R0-R2 and R6.
+MAKEPAG:
+        .JSB_ENTRY  SCRATCH=<R2, R6>
         BSBW    MMG$ALLOCPFN
         TSTL    R0
         BEQL    50$
@@ -239,7 +270,7 @@ MMG$CREPAG::
         CALL_PAL #PAL$_WRPTE
         EVAX_ADDQ R0, #1, R1            ; -1: the PAL has no room for it
         EVAX_BEQ R1, 55$
-        BSBB    FREEOLD
+        BSBW    FREEOLD
         MOVL    R3, R1
         MOVL    #MMG$C_PAGESIZE/8, R2
 20$:    CLRQ    (R1)+
@@ -251,28 +282,138 @@ MMG$CREPAG::
         CALL_PAL #PAL$_WRPTE
         EVAX_ADDQ R0, #1, R1            ; no room: the page stays kernel write
         EVAX_BEQ R1, 50$
-30$:    ADDL2   #MMG$C_PAGESIZE, R3
-        DECL    R4
-        BRB     10$
-40$:    MOVL    #SS$_NORMAL, R0
-45$:    ENBINT
-        POPR    #^M<R3, R4, R5, R6>
+30$:    MOVL    #SS$_NORMAL, R0
         RSB
 55$:    EVAX_SRL R6, #PTE$V_PFN, R0     ; the PFN goes back
         BSBW    MMG$DEALLOCPFN
 50$:    MOVL    #SS$_INSFMEM, R0
-        BRB     45$
+        RSB
+
+; MAKEDZ: R3 = a demand zero page's address, R5 = its PTE's low
+; longword. Makes it as MAKEPAG does, valid with that protection, with
+; the PFN kept for it. R0 = SS$_NORMAL, or SS$_INSFMEM if the PAL has no
+; room, with the page as it was. IPL$_SYNCH. Uses R0-R2, R5 and R6.
+MAKEDZ:
+        .JSB_ENTRY  SCRATCH=<R2, R5, R6>
+        PUSHL   R5
+        BICL2   #DZRO, R5
+        BISL2   #PTE$M_VALID, R5
+        DECL    MMG$GL_DZROCNT          ; its PFN, free to take;
+        BSBB    MAKEPAG                 ; FREEOLD gives it back again, for the old PTE,
+        INCL    MMG$GL_DZROCNT          ; once only
+        BLBS    R0, 10$
+        MOVL    R3, R0                  ; made, but left kernel write: as it was
+        CALL_PAL #PAL$_RDPTE
+        BLBC    R0, 5$
+        MOVL    R3, R0
+        MOVL    (SP), R1
+        CALL_PAL #PAL$_WRPTE
+        BSBW    FREEOLD
+        INCL    MMG$GL_DZROCNT
+5$:     MOVL    #SS$_INSFMEM, R0
+10$:    ADDL2   #4, SP
+        RSB
+
+; DZROPAG: R0 = a page's address, R1 = a page count, R2 = a PTE's low
+; longword without its valid bit: its enables and fault on execute bit.
+; Makes those pages demand zero, replacing any there: their PTEs say the
+; protection, not valid, and MMG$PAGEFAULT makes each page when it is
+; first touched. Each keeps a free PFN for itself, counted in
+; MMG$GL_DZROCNT, as VMS charges a demand zero page to the page file, so
+; that its fault always finds one. R0 = SS$_NORMAL, or SS$_INSFMEM when
+; no PFN is left to keep, or the PAL has no room for a table of PTEs
+; (WRPTE returns -1), with the pages made so far left. R1 = the pages
+; made. Uses R0-R2.
+DZROPAG:
+        .JSB_ENTRY  OUTPUT=<R1>, SCRATCH=<R2>
+        PUSHR   #^M<R3, R4, R5>
+        DSBINT  #IPL$_SYNCH
+        MOVL    R0, R3
+        MOVL    R1, R4
+        MOVL    R1, R5
+        BEQL    20$
+10$:    CMPL    MMG$GL_FREECNT, MMG$GL_DZROCNT
+        BLEQU   30$                     ; no PFN to keep for it
+        MOVL    R3, R0
+        MOVL    R2, R1
+        CALL_PAL #PAL$_WRPTE
+        EVAX_ADDQ R0, #1, R1            ; -1: the PAL has no room
+        EVAX_BEQ R1, 30$
+        BSBB    FREEOLD
+        INCL    MMG$GL_DZROCNT
+        ADDL2   #MMG$C_PAGESIZE, R3
+        SOBGTR  R4, 10$
+20$:    MOVL    #SS$_NORMAL, R0
+25$:    ENBINT
+        SUBL3   R4, R5, R1
+        POPR    #^M<R3, R4, R5>
+        RSB
+30$:    MOVL    #SS$_INSFMEM, R0
+        BRB     25$
+
+; MMG$PAGEFAULT: the translation not valid handler, through SCB$L_TNV.
+; Below the PAL's frame, the VAX's parameters: a mask, bit 2 for a write,
+; and the address, whose PTE isn't valid but lets the mode that faulted
+; make the access: a demand zero page (DZROPAG). Makes the page, zeroed,
+; valid with the PTE's protection, and the demand zero pages that follow
+; it, up to CLUSTER in all, and REIs to the instruction that faulted,
+; which runs again. Each page has a PFN kept for it (DZROPAG); if the
+; PAL has no room to map it, its share used up by page tables and
+; threads, which it doesn't give back, an outer mode's fault is an
+; access violation (EXE$ACVIOLAT), and kernel mode's halts, as does a fault
+; above IPL$_SYNCH, where the PFN database may be half changed, VMS's
+; PGFIPLHI bugcheck: R0 = the address, R1 = the PC that faulted. Keeps every register: REI puts
+; back the ones the instruction that faulted had.
+; vaxpunk: VMS takes page faults at IPL$_APCDEL and below only, since a
+; fault may wait for a read; one of a demand zero page never waits, and
+; the executive touches its callers' pages up to IPL$_SYNCH.
+; ponytail: a fixed cluster, not the process's PFCDEFAULT.
+MMG$PAGEFAULT::
+        .EXCEPTION_ENTRY
+        EXTZV   #PSL$V_IPL, #5, 16+INTSTK$Q_PS(SP), R0
+        CMPL    R0, #IPL$_SYNCH
+        BGTRU   90$
+        BICL3   #MMG$C_PAGESIZE-1, 8(SP), R3
+        SETIPL  #IPL$_SYNCH             ; REI puts it back
+        MOVL    #CLUSTER, R4
+10$:    MOVL    R3, R0
+        CALL_PAL #PAL$_RDPTE
+        BLBS    R0, 70$                 ; valid: made since, or not demand zero
+        BITL    #DZRO, R0
+        BEQL    70$                     ; no page: deleted since, it faults again
+        BITL    #PTE$M_KRE, R0
+        BEQL    70$                     ; one no mode may touch, past the first
+        MOVL    R0, R5
+        BSBW    MAKEDZ
+        BLBC    R0, 60$
+        ADDL2   #MMG$C_PAGESIZE, R3
+        SOBGTR  R4, 10$
+70$:    ADDL2   #16, SP                 ; the parameters
+        REI
+60$:    CMPL    R4, #CLUSTER
+        BNEQ    70$                     ; the page that faulted is there
+        EXTZV   #PSL$V_CURMOD, #2, 16+INTSTK$Q_PS(SP), R0
+        BEQL    90$
+        EXTZV   #PSL$V_IPL, #5, 16+INTSTK$Q_PS(SP), R0
+        SETIPL  R0                      ; the fault's
+        JMP     G^EXE$ACVIOLAT
+90$:    MOVL    8(SP), R0
+        MOVL    16+INTSTK$Q_PC(SP), R1
+        HALT
 
 ; FREEOLD: R0 = a PTE WRPTE replaced. Frees its PFN if it had one, or
-; if that is a global section's, counts the section's PTEs down.
-; IPL$_SYNCH.
+; if that is a global section's, counts the section's PTEs down; a
+; demand zero page's gives back the PFN kept for it. IPL$_SYNCH.
 FREEOLD:
         .JSB_ENTRY
         EVAX_ADDQ R0, #1, R1            ; -1: WRPTE made no change
         EVAX_BEQ R1, 10$
-        EVAX_AND R0, #PTE$M_VALID, R1
-        EVAX_BEQ R1, 10$
-        EVAX_SRL R0, #PTE$V_PFN, R0
+        BLBS    R0, 5$
+        BITL    #DZRO, R0
+        BEQL    10$                     ; no page
+        DECL    MMG$GL_DZROCNT          ; a demand zero page
+        RSB
+5$:     EVAX_SRL R0, #PTE$V_PFN, R0
         MOVL    MMG$GL_PFNGSD, R1
         MOVL    (R1)[R0], R1
         BNEQ    20$
@@ -332,10 +473,10 @@ FREEPFN:
 ; list, for the device. R0 = SS$_NORMAL and R1 = the pages locked, or,
 ; with none locked, SS$_ACCVIO if a page isn't there or the mode may not
 ; read (write) it, or SS$_EXQUOTA if a page has as many locks as its
-; count holds, 32,767. IPL$_SYNCH. Uses R0-R3.
+; count holds, 32,767, or SS$_INSFMEM. A demand zero page is made first,
+; as a fault would make it. IPL$_SYNCH. Uses R0-R3.
 ; vaxpunk: it lists the PFNs, where VMS's returns the address of the
-; first page's PTE, SVAPTE, and it faults no page in, as there is no
-; paging.
+; first page's PTE, SVAPTE.
 MMG$IOLOCK::
         .JSB_ENTRY  OUTPUT=<R1>, SCRATCH=<R2, R3>
         PUSHR   #^M<R4, R5, R6, R7>
@@ -356,10 +497,20 @@ MMG$IOLOCK::
         BEQL    80$
         MOVL    R5, R0
         CALL_PAL #PAL$_RDPTE
-        BLBC    R0, 70$                 ; not valid
         EXTZV   R6, #1, R0, R1
-        BLBC    R1, 70$
-        EVAX_SRL R0, #PTE$V_PFN, R0
+        BLBC    R1, 70$                 ; the mode may not
+        BLBS    R0, 20$
+        BITL    #DZRO, R0
+        BEQL    70$                     ; not valid, and not demand zero
+        PUSHR   #^M<R2, R5, R6>         ; a demand zero page, made now
+        MOVL    R5, R3
+        MOVL    R0, R5
+        BSBW    MAKEDZ
+        POPR    #^M<R2, R5, R6>
+        BLBS    R0, 10$
+        MOVL    R0, -(SP)
+        BRB     78$
+20$:    EVAX_SRL R0, #PTE$V_PFN, R0
         CMPL    R0, MMG$GL_MAXPFN
         BGEQU   70$
         MOVL    MMG$GL_PFNREFCNT, R1
@@ -446,7 +597,8 @@ MMG$DELPAG::
 
 ; MMG$SETPRT: R0 = a page's address, R1 = a page count, R2 = the PTE's
 ; new low longword: its valid bit, enables and fault on execute bit. Changes the protection of
-; pages that exist. Uses R0-R2.
+; pages that exist; a demand zero page stays one, with the new protection.
+; Uses R0-R2.
 MMG$SETPRT::
         .JSB_ENTRY  SCRATCH=<R2>
         PUSHR   #^M<R3, R4>
@@ -457,12 +609,14 @@ MMG$SETPRT::
 10$:    MOVL    R3, R0
         CLRL    R1
         CALL_PAL #PAL$_WRPTE            ; R0 = the PTE, with the PFN
-        EVAX_AND R0, #PTE$M_VALID, R1
-        EVAX_BEQ R1, 15$
+        EVAX_BEQ R0, 15$                ; no page
+        BICL3   #PTE$M_VALID, R2, R1    ; a demand zero page's
+        BISL2   #DZRO, R1
+        BLBC    R0, 12$
         EVAX_SRL R0, #PTE$V_PFN, R1
         EVAX_SLL R1, #PTE$V_PFN, R1     ; the PFN alone
         EVAX_OR R1, R2, R1
-        MOVL    R3, R0
+12$:    MOVL    R3, R0
         CALL_PAL #PAL$_WRPTE
 15$:    ADDL2   #MMG$C_PAGESIZE, R3
         SOBGTR  R4, 10$
@@ -619,18 +773,22 @@ GROW:
 30$:    RSB
 
 ; $CRETVA inadr, retadr, acmode: makes the pages of a range of the
-; process's P0 or P1, zeroed and writable, replacing any there.
+; process's P0 or P1, demand zero and writable, replacing any there.
         .ENTRY  EXE$CRETVA, ^M<R2, R3, R4>
         BSBB    INADR
         BLBC    R0, 90$
         MOVL    R2, R4
         MOVL    R2, R0
         MOVL    R3, R1
-        MOVL    #UW, R2
-        BSBW    MMG$CREPAG
-        BLBC    R0, 90$
-        MOVL    R4, R2
+        MOVL    #DZ, R2
+        BSBW    DZROPAG
+        PUSHL   R0
+        MOVL    R4, R2                  ; the region takes what it made, for rundown
+        MOVL    R1, R3
+        BEQL    10$
         BSBB    GROW
+10$:    MOVL    (SP)+, R0
+        BLBC    R0, 90$
         MOVL    R4, R0
         MOVL    R3, R1
         MOVL    8(AP), R2
@@ -654,8 +812,8 @@ GROW:
         MOVL    #SS$_NORMAL, R0
 90$:    RET
 
-; $EXPREG pagcnt, retadr, acmode, region: makes pagcnt pages, zeroed and
-; writable, past the end of the process's P0 for region 0, or, for region
+; $EXPREG pagcnt, retadr, acmode, region: makes pagcnt pages, demand zero
+; and writable, past the end of the process's P0 for region 0, or, for region
 ; 1, below the start of its P1, which grows down, as VMS's control region
 ; does. retadr gets the range's first and last bytes in the order the
 ; pages are made: for P1, the highest first.
@@ -677,8 +835,8 @@ GROW:
         MOVL    R1, PCB$L_FREP0VA(R4)
         MOVL    R0, R4
         MOVL    R3, R1
-        MOVL    #UW, R2
-        BSBW    MMG$CREPAG
+        MOVL    #DZ, R2
+        BSBW    DZROPAG
         BLBC    R0, 70$
         MOVL    R4, R0
         MOVL    R3, R1
@@ -696,8 +854,8 @@ GROW:
         MOVL    R0, PCB$L_FREP1VA(R4)
         MOVL    R0, R4
         MOVL    R3, R1
-        MOVL    #UW, R2
-        BSBW    MMG$CREPAG
+        MOVL    #DZ, R2
+        BSBW    DZROPAG
         BLBC    R0, 70$
         MOVL    8(AP), R2
         BEQL    60$

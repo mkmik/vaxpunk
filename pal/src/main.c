@@ -1017,6 +1017,24 @@ static void cache(struct ctx *c, int m, seL4_Word va, uint64_t pte)
 	map(p->cap, c->vspace[m], va, can_write(pte, m) ? seL4_ReadWrite : seL4_CanRead, attr);
 }
 
+/* Whether pte's enables let mode m read, or write, or execute. */
+static int allows(uint64_t pte, int m, int write, int exec)
+{
+	return can_read(pte, m) && (!write || can_write(pte, m)) && !(exec && pte & PTE_FOE);
+}
+
+/*
+ * Whether a fault of mode m at va is translation not valid: its PTE isn't
+ * valid, but its enables let m make the access, as a demand zero page's
+ * do. The executive makes the page and the access runs again. Any other
+ * fault is an access violation: the VAX checked the protection first.
+ */
+static int not_valid(int m, seL4_Word va, int write, int exec)
+{
+	uint64_t *pte = va < SPACE_END ? pte_at(va, 0) : 0;
+	return pte && !(*pte & PTE_VALID) && allows(*pte, m, write, exec);
+}
+
 /*
  * A fault of mode m of the current context at va: if its PTE lets m make
  * the access, and the page isn't in m's address space already, it is now,
@@ -1027,8 +1045,7 @@ static int fill(int m, seL4_Word va, int write, int exec)
 {
 	va &= ~(PAGE_SIZE - 1);
 	uint64_t *pte = va < SPACE_END ? pte_at(va, 0) : 0;
-	if (!pte || !mapped(*pte) || !can_read(*pte, m) || (write && !can_write(*pte, m)) ||
-	    (exec && *pte & PTE_FOE))
+	if (!pte || !mapped(*pte) || !allows(*pte, m, write, exec))
 		return 0;
 	for (struct pmap *p = *pfn_maps(pte_pfn(*pte)); p; p = p->next)
 		if (p->va == (va | m) && p->c == cur)
@@ -1041,7 +1058,8 @@ static int fill(int m, seL4_Word va, int write, int exec)
 
 /*
  * WRPTE: makes va's page what pte says, mapped, unmapped or with a new
- * protection, and puts the PTE it had in *old. A page in P0 or P1 is the
+ * protection, and puts the PTE it had in *old. A PTE that isn't valid is
+ * kept as it is, for RDPTE, PROBE and a translation not valid fault. A page in P0 or P1 is the
  * current process's. A PFN may be mapped at any number of addresses, in
  * any number of processes: a global section's pages are. The old page
  * leaves every address space that has it, as TBIS took it out of the TLB;
@@ -1049,7 +1067,8 @@ static int fill(int m, seL4_Word va, int write, int exec)
  * may read it and has run, since it is about to be used. Fails, returning
  * 0, for an address outside the executive's space, enables no protection
  * code gives or a PFN out of range, and -1, changing nothing, if the PAL's
- * share has no room for the mapping.
+ * share has no room for the mapping, or for the table a PTE that isn't
+ * valid needs.
  */
 static int wrpte(seL4_Word va, uint64_t pte, uint64_t *old)
 {
@@ -1057,11 +1076,11 @@ static int wrpte(seL4_Word va, uint64_t pte, uint64_t *old)
 	int s0 = is_s0(va);
 	if (va % PAGE_SIZE || va < PAGE_SIZE || va >= SPACE_END || (!s0 && !cur))
 		return 0;
-	if (mapped(pte) && (!well_formed(pte) || pfn >= pfn_count))
+	if (!well_formed(pte) || (mapped(pte) && pfn >= pfn_count))
 		return 0;
-	if (mapped(pte) && !room())
-		return -1;
-	uint64_t none = 0, *slot = pte_at(va, mapped(pte));
+	if ((mapped(pte) || (pte && !pte_at(va, 0))) && !room())
+		return -1; /* no room for the mapping, or for a table of PTEs */
+	uint64_t none = 0, *slot = pte_at(va, pte != 0);
 	if (!slot)
 		slot = &none; /* unmapping a page in no table: nothing there */
 	*old = *slot;
@@ -1274,7 +1293,7 @@ static seL4_Word getentropy(seL4_Word va, seL4_Word len)
 /*
  * PROBER and PROBEW: whether mode m, or the PSL's previous mode if it is an
  * outer one, may read (write) the first and the last of len bytes at base,
- * as the VAX's PROBE checks.
+ * as the VAX's PROBE checks: by the enables, valid or not.
  */
 static int probe(seL4_Word base, seL4_Word len, int m, int write)
 {
@@ -1283,7 +1302,7 @@ static int probe(seL4_Word base, seL4_Word len, int m, int write)
 	seL4_Word at[2] = { base, base + (len ? len - 1 : 0) };
 	for (int i = 0; i < 2; i++) {
 		uint64_t *pte = at[i] < SPACE_END ? pte_at(at[i], 0) : 0;
-		if (!pte || !mapped(*pte) || !(write ? can_write : can_read)(*pte, m))
+		if (!pte || !(write ? can_write : can_read)(*pte, m))
 			return 0;
 	}
 	return 1;
@@ -1643,7 +1662,7 @@ enum {
  * address, and naturally aligned, else a reserved operand, which is a
  * reserved instruction. Either leaves the queue as it was.
  */
-enum { Q_DONE, Q_ROPRAND, Q_ACCVIO };
+enum { Q_DONE, Q_ROPRAND, Q_ACCVIO, Q_TNV };
 static int q_why;
 static seL4_Word q_va; /* the link a queue call couldn't write */
 
@@ -1654,7 +1673,7 @@ static void *q_link(seL4_Word va, unsigned w)
 	if (va % w)
 		q_why = Q_ROPRAND;
 	else if (!pte || !mapped(*pte) || !can_write(*pte, cur->mode))
-		q_why = Q_ACCVIO, q_va = va;
+		q_why = not_valid(cur->mode, va, 1, 0) ? Q_TNV : Q_ACCVIO, q_va = va;
 	else
 		return (void *)(PHYS + (seL4_Word)pte_pfn(*pte) * PAGE_SIZE + va % PAGE_SIZE);
 	return 0;
@@ -1773,7 +1792,7 @@ static int queue(seL4_Word code, seL4_Word a0, seL4_Word a1, seL4_Word *v0, seL4
  * interval timer's and console's IPLs, the VAX's. CHMx's is SCB_CHMK + 4 * x,
  * x the mode. The port's completion and the disks' share IPL_PORT, each
  * through its own vector. */
-enum { SCB_OPCDEC = 0x10, SCB_ACCVIO = 0x20, SCB_CHMK = 0x40, SCB_SOFTINT = 0x80,
+enum { SCB_OPCDEC = 0x10, SCB_ACCVIO = 0x20, SCB_TNV = 0x24, SCB_CHMK = 0x40, SCB_SOFTINT = 0x80,
        SCB_TIMER = 0xc0, SCB_CONSRCV = 0xf8, SCB_PORT = 0x100, SCB_DISK = 0x104, IPL_ASTDEL = 2,
        IPL_CONSOLE = 20, IPL_PORT = 21, IPL_HWCLK = 24 };
 
@@ -2086,12 +2105,13 @@ static int swpctx(seL4_Word hwpcb)
 /*
  * An exception of the current context's: delivered in kernel mode at the
  * same IPL, with the PC of the instruction that took it, if it came from an
- * outer mode. In kernel mode the PAL stops the executive instead, as a
- * bugcheck, and returns 0.
+ * outer mode, or if it is translation not valid, which kernel mode takes
+ * too. In kernel mode the PAL stops the executive instead, as a bugcheck,
+ * and returns 0.
  */
 static int exception(seL4_Word off, seL4_Word pc, const seL4_Word *param, unsigned n)
 {
-	if (!cur->mode)
+	if (!cur->mode && off != SCB_TNV)
 		return 0;
 	read_regs();
 	regs.pc = pc;
@@ -2157,9 +2177,9 @@ static int serve_one(seL4_MessageInfo_t msg)
 		break;
 	case seL4_Fault_VMFault: {
 		/* A page the address space hasn't cached yet goes in, and the
-		 * thread goes on. Else the VAX's access violation parameters: a
-		 * mask, bit 2 for a write, then the address. ESR's WnR, bit 6, is a
-		 * data abort's. */
+		 * thread goes on. Else translation not valid or an access
+		 * violation, with the VAX's parameters: a mask, bit 2 for a write,
+		 * then the address. ESR's WnR, bit 6, is a data abort's. */
 		seL4_Word addr = seL4_GetMR(seL4_VMFault_Addr), pc = seL4_GetMR(seL4_VMFault_IP);
 		seL4_Word exec = seL4_GetMR(seL4_VMFault_PrefetchFault);
 		seL4_Word write = !exec && seL4_GetMR(seL4_VMFault_FSR) >> 6 & 1;
@@ -2168,7 +2188,8 @@ static int serve_one(seL4_MessageInfo_t msg)
 			return 1;
 		}
 		seL4_Word param[2] = { write << 2, addr };
-		if (exception(SCB_ACCVIO, pc, param, 2))
+		if (exception(not_valid(cur->mode, addr, write, exec) ? SCB_TNV : SCB_ACCVIO, pc,
+			      param, 2))
 			return 1;
 		print("%%PAL-F-ACCVIO, access violation at 0x%lx, PC 0x%lx, HWPCB 0x%lx\n", addr,
 		      pc, cur->hwpcb);
@@ -2204,7 +2225,8 @@ static int serve_one(seL4_MessageInfo_t msg)
 		return exception(SCB_OPCDEC, pc, 0, 0);
 	switch (code) {
 	case HALT:
-		print("%%PAL-I-HALT, halted at PC 0x%lx, R0 %lu\n", pc, a0 & 0xffffffff);
+		print("%%PAL-I-HALT, halted at PC 0x%lx, R0 %lu, R1 0x%lx\n", pc, a0 & 0xffffffff,
+		      a1 & 0xffffffff);
 		halted = 1;
 		return 0;
 	case SWPCTX:
@@ -2328,9 +2350,9 @@ static int serve_one(seL4_MessageInfo_t msg)
 	case INSQHILR ... REMQTIQR: {
 		seL4_Word r1 = a1;
 		int why = queue(code, a0, a1, &v0, &r1);
-		if (why == Q_ACCVIO) {
+		if (why == Q_ACCVIO || why == Q_TNV) {
 			seL4_Word param[2] = { 4, q_va }; /* a write */
-			if (exception(SCB_ACCVIO, pc, param, 2))
+			if (exception(why == Q_TNV ? SCB_TNV : SCB_ACCVIO, pc, param, 2))
 				return 1;
 			print("%%PAL-F-ACCVIO, access violation at 0x%lx, PC 0x%lx, HWPCB 0x%lx\n",
 			      q_va, pc, cur->hwpcb);

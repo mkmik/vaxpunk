@@ -117,6 +117,7 @@ IPL$_POWER = 31                         ; everything blocked
         .MACRO  $SCBDEF
 SCB$L_OPCDEC = ^X10                     ; reserved or privileged instruction
 SCB$L_ACCVIO = ^X20                     ; access violation: a mask and the address
+SCB$L_TNV = ^X24                        ; translation not valid: a mask and the address, of a demand zero page
 SCB$L_CHMK = ^X40                       ; change mode to kernel
 SCB$L_CHME = ^X44                       ; to executive
 SCB$L_CHMS = ^X48                       ; to supervisor
@@ -198,7 +199,10 @@ HWPCB$K_LENGTH = 128
 ; PFN in the high longword (ADR-0037). Each mode's read and write enable
 ; is a bit; PTE$C_ codes are the VAX's protection codes ($PRTDEF) as
 ; enables. Build one with EVAX_SLL and EVAX_OR, which keep all 64 bits.
-; Pages are 4 KB.
+; One whose valid bit is clear but whose enables aren't 0 is a page the
+; executive makes when it is touched, a demand zero page's, its other
+; bits the executive's: the first access a mode's enables allow is
+; translation not valid (SCB$L_TNV). Pages are 4 KB.
         .MACRO  $PTEDEF
 PTE$V_VALID = 0
 PTE$M_VALID = ^X1

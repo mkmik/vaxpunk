@@ -109,8 +109,8 @@ note = "ADR-0037 decisions 4 and 5: fill() on a fault the PTE allows; WRPTE unma
 [[feature]]
 id = "page-faults"
 title = "A translation-not-valid fault sent to the executive so it can page, not an access violation"
-status = "todo"
-note = "Needed by paging; DESIGN-0001 Exceptions: a page fault is an access violation today; PRD-0003 tier 3 #21"
+status = "done"
+note = "ADR-0050: SCB$L_TNV, 0x24, for a PTE that isn't valid but allows the access, from kernel mode too; PROBE goes by the enables"
 
 [[feature]]
 id = "device-interrupts"
