@@ -68,6 +68,7 @@ LITERAL
 MACRO
     SCB$L_OPCDEC = 16, 0, 32, 0 %,  ! reserved or privileged instruction
     SCB$L_ACCVIO = 32, 0, 32, 0 %,  ! access violation: a mask and the address
+    SCB$L_TNV = 36, 0, 32, 0 %,  ! translation not valid: a mask and the address, of a demand zero page
     SCB$L_CHMK = 64, 0, 32, 0 %,  ! change mode to kernel
     SCB$L_CHME = 68, 0, 32, 0 %,  ! to executive
     SCB$L_CHMS = 72, 0, 32, 0 %,  ! to supervisor

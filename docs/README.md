@@ -81,6 +81,7 @@ same commit; `todography lint` checks it.
 | [ADR-0047](adr/0047-interrupt-driven-disk-io-and-locked-pages.md) | A disk request ends by interrupt, the device reads and writes the requester's pages by PFN, and those pages stay locked until it is done | Proposed |
 | [ADR-0048](adr/0048-asynchronous-rms-stalls-on-a-stack-of-its-own.md) | An asynchronous RMS service runs on a stack of its own, stalls at its disk wait holding FIL$LOCK, and a kernel mode AST goes on with it | Proposed |
 | [ADR-0049](adr/0049-files-open-on-a-channel.md) | A file opened on a disk channel is a WCB in the PCB, read and written by VBN through the XQP in the process, and the XQP creates, deletes and looks up by wildcard | Proposed |
+| [ADR-0050](adr/0050-page-faults-make-demand-zero-pages.md) | A fault on a page whose PTE isn't valid but allows the access is translation not valid, which the executive takes in any mode, and $CRETVA and $EXPREG make demand zero pages | Proposed |
 
 ### PRDs
 

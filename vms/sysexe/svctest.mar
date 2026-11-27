@@ -91,6 +91,7 @@ STATE:  .LONG   0
 PRI:    .LONG   0
 CHAN:   .LONG   0
 INADR:  .LONG   ^X60000000, ^X60001FFF  ; in P1
+PAGE0:  .LONG   1, ^X60000000           ; ISVALID's arguments: its first page
 INADR3: .LONG   ^X60000000, ^X60002FFF  ; three pages there,
 MIDDLE: .LONG   ^X60001000, ^X60001FFF  ; and the second of them
 CMPRIVS:                                ; privileges $SETPRV takes away and gives back
@@ -266,14 +267,37 @@ BINBUF: .BLKQ   1
         CALLS   #1, G^SYS$DLCEFC
         EXPECT  #SS$_ILLSER, 13
 
-; Pages.
+; Pages. $CRETVA's are demand zero: each is made, zeroed, when it is
+; first touched, by the program or by the executive for it, and PROBE
+; goes by their protection before. A fault makes the pages that follow,
+; not the ones before.
         $CRETVA_S INADR=INADR
         EXPECT  #SS$_NORMAL, 14
+        $CMKRNL_S ROUTIN=ISVALID, ARGLST=PAGE0
+        EXPECT  #0, 140
+        PROBEW  #0, #4, @#^X60000000
+        BEQL    90$
+        TSTL    @#^X60001FF8            ; the second page: user mode's fault
+        BNEQ    90$
+        $CMKRNL_S ROUTIN=ISVALID, ARGLST=PAGE0
+        EXPECT  #0, 141
+        $GETTIM_S TIMADR=@INADR         ; the first: kernel mode's
+        EXPECT  #SS$_NORMAL, 136
+        $CMKRNL_S ROUTIN=ISVALID, ARGLST=PAGE0
+        EXPECT  #1, 142
+        TSTL    @#^X60000004
+        BEQL    90$
         MOVL    #^X12345678, @#^X60001FFC
         CMPL    @#^X60001FFC, #^X12345678
         BNEQ    90$
         $DELTVA_S INADR=INADR
         EXPECT  #SS$_NORMAL, 15
+        $CRETVA_S INADR=MIDDLE          ; one the PAL writes: made before
+        EXPECT  #SS$_NORMAL, 137
+        $GET_ENTROPY_S BUFFER=@MIDDLE, BUFLEN=#16
+        EXPECT  #SS$_NORMAL, 138
+        $DELTVA_S INADR=MIDDLE
+        EXPECT  #SS$_NORMAL, 139
         $CRETVA_S INADR=SYSTEM
         EXPECT  #SS$_PAGOWNVIO, 16
 
@@ -732,6 +756,13 @@ BINBUF: .BLKQ   1
         .ENTRY  ANSWER, ^M<>
         MFPR    #18, R0                 ; PR$_IPL
         MOVL    #42, R0
+        RET
+
+; ISVALID va: in kernel mode, R0 = 1 if va's PTE is valid, else 0.
+        .ENTRY  ISVALID, ^M<>
+        MOVL    4(AP), R0
+        CALL_PAL #^X4B                  ; PAL$_RDPTE
+        BICL2   #^C1, R0
         RET
 
 ; EXEC_ANSWER: in executive mode, on the executive stack.

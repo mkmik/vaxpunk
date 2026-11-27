@@ -205,11 +205,16 @@ A PTE is Alpha's quadword (`$PTEDEF`,
 | 15:12 | `KWE`, `EWE`, `SWE`, `UWE` | and write |
 | 63:32 | `PFN` | the page frame |
 
-The other bits are 0. The enables are those of a VAX protection code
+In a valid PTE the other bits are 0. The enables are those of a VAX protection code
 (`$PRTDEF`): a mode may read and write what an outer one may, and write
 only what it may read. `$PTEDEF`'s `PTE$C_` names them after the codes,
 `PTE$C_UW` for `PRT$C_UW`. A valid PTE no mode may read maps nothing; one
-whose enables no code gives is refused. MACRO-32 builds a PTE with
+whose enables no code gives is refused. A PTE that isn't valid but has
+enables is a page the executive will make when it is touched, a demand
+zero page's: the PAL keeps it as it is, its other bits the executive's,
+and an access its enables allow is translation not valid
+([ADR-0050](../adr/0050-page-faults-make-demand-zero-pages.md),
+*Exceptions*). MACRO-32 builds a PTE with
 `EVAX_SLL` and `EVAX_OR`, since a longword instruction would sign-extend
 over the PFN. `WRPTE` maps, unmaps or
 changes protection at once, and returns the PTE the page had, so the
@@ -217,7 +222,8 @@ executive learns which PFN it freed. A PFN may map at any number of
 addresses, in any number of processes, as a global section's pages do.
 seL4 maps a frame capability at one address, so the PAL keeps a copy for
 each address space a page is mapped in (*Filled on faults*). A `WRPTE`
-that maps a page when the PAL's share has no room returns -1 and changes
+that maps a page when the PAL's share has no room, or writes a PTE that
+isn't valid where it has no room for the table, returns -1 and changes
 nothing; `MMG$CREPAG` then returns `SS$_INSFMEM`.
 
 What each mode sees of a page is what its enables let it, as on the VAX
@@ -228,8 +234,10 @@ which caches that, as Alpha's TLB cached the page tables
 - **Filled on faults.** A thread that faults on a page whose PTE lets its
   mode make the access gets the page in its address space, writable if
   the mode may write it, and goes on; the executive sees nothing, as
-  PALcode's TLB misses went unseen. Any other fault is an access
-  violation (*Exceptions*).
+  PALcode's TLB misses went unseen. A fault on a page whose PTE isn't
+  valid but lets the mode make the access is translation not valid; any
+  other is an access violation (*Exceptions*), as the VAX checked the
+  protection before the valid bit.
 - **Emptied by `WRPTE`.** `WRPTE` unmaps the page it changes from every
   address space that has it, as `TBIS` did from the TLB: an S0 page from
   every process's, a P0 or P1 page from the current process's. It maps
@@ -249,6 +257,10 @@ which caches that, as Alpha's TLB cached the page tables
 The PAL sees every PFN at an address of its own, the way Alpha PALcode read
 memory physically. It reads and writes the executive's memory there to push
 and pop interrupt frames and to read HWPCBs and the SCB.
+
+`PROBER` and `PROBEW` go by the enables, whether the PTE is valid or
+not, as the VAX's `PROBE` went by the protection code: a service may
+write a demand zero page its caller may, and its own fault makes it.
 
 `RDPTE` reads a page's PTE without changing it, as Alpha's executive read
 its page tables in memory. The executive locks a direct I/O's pages by
@@ -421,16 +433,21 @@ starts as `REI` from the frame at its KSP, with R0 the HWPCB the CPU left.
 A fault or a reserved instruction in an outer mode is an exception: the
 PAL delivers it through the SCB in kernel mode, at the same IPL, with the
 mode that took it as the previous mode and the PC of the instruction that
-took it.
+took it. Translation not valid is one in kernel mode too, so that the
+executive makes a demand zero page it touches for its caller; it takes
+it at `IPL$_SYNCH` or below
+([ADR-0050](../adr/0050-page-faults-make-demand-zero-pages.md)).
 
 | Event | Vector | Parameters, below the frame |
 | --- | --- | --- |
 | Undefined instruction, `brk`, a privileged or unimplemented PAL call, a `CHMx` with no vector, a bad `REI`, a queue call's misaligned link, a floating point instruction without FEN | 0x10, reserved instruction | none |
 | Page fault the PTE doesn't allow (*Memory*), a queue call's link the mode may not write | 0x20, access violation | a mask, bit 2 set for a write, then the address |
+| Page fault, or a queue call's link, whose PTE isn't valid but allows the access, in any mode | 0x24, translation not valid | the same |
 
 ### Faults and HALT
 
-A fault or reserved instruction in kernel mode stops the executive, as
+A fault or reserved instruction in kernel mode, but translation not
+valid, stops the executive, as
 `HALT` does, and the PAL prints it, a page fault and an undefined
 instruction naming the HWPCB of the process that took it:
 
@@ -441,7 +458,7 @@ instruction naming the HWPCB of the process that took it:
 | Reserved PAL call, bad `WRPTE`, a queue call's misaligned link | `%PAL-F-OPCDEC` with the code, PC, R0 and R1 |
 | Delivery with no vector or stack | `%PAL-F-NOVEC` |
 | `REI` without a frame | `%PAL-F-REI` |
-| `HALT` | `%PAL-I-HALT` with the PC and R0 |
+| `HALT` | `%PAL-I-HALT` with the PC, R0 and R1 |
 
 The root task then prints `root task done` and suspends itself.
 

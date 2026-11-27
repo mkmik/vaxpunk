@@ -311,8 +311,9 @@ ABSTIM:
         .ENTRY  EXE$GETTIM, ^M<>
         IFNOWRT #8, @4(AP), 90$
         DSBINT  #IPL$_HWCLK
-        MOVQ    EXE$GQ_SYSTIME, @4(AP)
+        MOVQ    EXE$GQ_SYSTIME, R0
         ENBINT
+        MOVQ    R0, @4(AP)              ; below IPL$_SYNCH: a demand zero page faults
         MOVL    #SS$_NORMAL, R0
         RET
 90$:    MOVL    #SS$_ACCVIO, R0

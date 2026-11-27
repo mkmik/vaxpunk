@@ -77,7 +77,7 @@ blocks and `$OPEN`... calls, `$MNTDEF`).
 
 1. Saves the RPB address from R11.
 2. Fills the SCB: reserved instructions to `EXE$OPCDEC`, access violations
-   to `EXE$ACVIOLAT`, `CHMK` to `EXE$CMODKRNL`, `CHME` to `EXE$CMODEXEC`,
+   to `EXE$ACVIOLAT`, translation not valid to `MMG$PAGEFAULT`, `CHMK` to `EXE$CMODKRNL`, `CHME` to `EXE$CMODEXEC`,
    software interrupt level 2 to `SCH$ASTDEL`, level 3 to `SCH$RESCHED`, level 4 to `TTY$IOPOST`,
    level 7 to `EXE$SWTIMINT`, the interval timer to `EXE$HWCLKINT`, the
    console receiver to `TTY$RCVINT`. `MTPR #PR$_SCBB`.
@@ -157,7 +157,16 @@ P1 are each process's own, S0 every process's:
   of the process's own: all in P0, or all in P1 below `VA$C_CLI`;
   anything else is `SS$_PAGOWNVIO`. `$EXPREG` makes pages past the end of
   P0, or, for region 1, below the start of P1, which grows down. Pages
-  they make are user writable. The PCB keeps how far P0 and P1 reach
+  they make are user writable and demand zero: the PTE has the
+  protection but isn't valid, and the first touch, the program's or the
+  executive's for it, is a translation not valid fault, where
+  `MMG$PAGEFAULT` makes the page, and the 15 demand zero pages after it,
+  and the instruction runs again. Each keeps a free PFN for itself
+  until then (`MMG$GL_DZROCNT`), so `$CRETVA` and `$EXPREG` fail with
+  `SS$_INSFMEM` as before, and a fault never runs out. Kernel mode touches a caller's pages at `IPL$_SYNCH` or
+  below; above, the fault halts, VMS's `PGFIPLHI`. `MMG$IOLOCK` makes a
+  demand zero page before it locks it
+  ([ADR-0050](../adr/0050-page-faults-make-demand-zero-pages.md)). The PCB keeps how far P0 and P1 reach
   (`PCB$L_FREP0VA`, `PCB$L_FREP1VA`) and where P1's part that outlives an
   image starts (`PCB$L_CTLBASVA`, VMS's `CTL$GL_CTLBASVA`): the mode
   stacks, and the command interpreter, if the process has one. Image
@@ -1547,7 +1556,7 @@ condition handling routines, with the symbol vector `librtl.opt` gives
 | `STARTUP` | makes 4 pages with `$EXPREG`, checks and deletes them; creates `SLEEPER` at a higher priority, which runs at once, and `PING` and `PONG`; waits until `PONG` sets flag 66 of their cluster; deletes `SLEEPER`; creates `SVCTEST`, `HOG`, `TIMETEST`, `ASTTEST`, `MBXTEST`, `LOCKTEST`, `FSTEST1` and `FSTEST2` and `CHFTEST` |
 | `SLEEPER` | hibernates until it is deleted |
 | `PING`, `PONG` | take three turns through common event flags 64 and 65 of the cluster `PINGPONG`; `PONG` then sets flag 66, which `STARTUP` waits for |
-| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, `$CMKRNL` and `$CMEXEC`, with privileges and without; a process in another UIC group, which takes `DETACH` and, to touch it, `WORLD`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; `$GET_ENTROPY`, twice, whose bytes differ; `$DCLEXH` and `$CANEXH`, and a `$FORCEX` of itself, whose `$EXIT` calls its exit handler, which says it is ok; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
+| `SVCTEST` | checks the statuses of the services the others don't use, and of errors: local event flags, the dispatcher's checks and a stub, `$CRETVA` and `$DELTVA`, and that their pages are made when the program, a service or the PAL's `GETENTROPY` first touches them, `$CMKRNL` and `$CMEXEC`, with privileges and without; a process in another UIC group, which takes `DETACH` and, to touch it, `WORLD`; what user mode may `PROBE`, and that services refuse it the executive's data; the console's channels; logical names in both tables, `$ASSIGN` through two of them, and the errors; `$SETPRI`, and `$SUSPND`, `$WAKE`, `$RESUME` and `$DELPRC` on a process of its own, and `$FORCEX` on another, which exits with `SS$_FORCEDEXIT` before its image runs; `$GET_ENTROPY`, twice, whose bytes differ; `$DCLEXH` and `$CANEXH`, and a `$FORCEX` of itself, whose `$EXIT` calls its exit handler, which says it is ok; then creates one whose image doesn't exist, which exits with `RMS$_FNF`, and `SNOOP` and `USURP` |
 | `SNOOP` | reads S0 from user mode, which no handler takes: exits with `SS$_ACCVIO`, its message written |
 | `USURP` | raises IPL from user mode, and exits the same way with `SS$_OPCDEC` |
 | `HOG` | associates a common event flag cluster, creates `NUDGE` at its own priority and loops reading flag 64 until `NUDGE` sets it, with no wait: only quantum end lets `NUDGE` run |
